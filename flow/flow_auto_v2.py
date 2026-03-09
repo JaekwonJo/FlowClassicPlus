@@ -2188,7 +2188,7 @@ class FlowVisionApp:
             )
         if hasattr(self, "lbl_asset_baseline_ready"):
             self.lbl_asset_baseline_ready.config(
-                text="기본값 이미지 확인됨" if self.asset_image_baseline_ready else "기본값 이미지 확인 필요",
+                text="기본값 동영상 확인됨" if self.asset_image_baseline_ready else "기본값 동영상 확인 필요",
                 fg=self.color_success if self.asset_image_baseline_ready else self.color_error,
             )
 
@@ -2205,14 +2205,14 @@ class FlowVisionApp:
 
     def on_mark_asset_image_baseline_ready(self):
         self.asset_image_baseline_ready = True
-        self.current_media_state = "image"
+        self.current_media_state = "video"
         self._refresh_manual_baseline_labels()
-        self.log("✅ S자동화 기본값 이미지 확인 완료")
+        self.log("✅ S자동화 기본값 동영상 확인 완료")
 
     def on_reset_asset_image_baseline_ready(self):
         self.asset_image_baseline_ready = False
         self._refresh_manual_baseline_labels()
-        self.log("ℹ️ S자동화 기본값 이미지 확인 해제")
+        self.log("ℹ️ S자동화 기본값 동영상 확인 해제")
 
     def _build_ui(self):
         # 1. Header (High Visibility)
@@ -2454,36 +2454,9 @@ class FlowVisionApp:
         self.combo_prompt_media_mode.pack(side="left", padx=(6, 12))
         self.combo_prompt_media_mode.bind("<<ComboboxSelected>>", self.on_option_toggle)
 
-        tk.Label(preset_row, text="방향", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
-        orientation_label = PROMPT_ORIENTATION_LABELS.get(self.cfg.get("prompt_orientation", "landscape"), "가로")
-        self.prompt_orientation_var = tk.StringVar(value=orientation_label)
-        self.combo_prompt_orientation = ttk.Combobox(
-            preset_row,
-            textvariable=self.prompt_orientation_var,
-            state="readonly",
-            width=8,
-            values=tuple(PROMPT_ORIENTATION_VALUES.keys()),
-            font=("Malgun Gothic", 9),
-        )
-        self.combo_prompt_orientation.pack(side="left", padx=(6, 12))
-        self.combo_prompt_orientation.bind("<<ComboboxSelected>>", self.on_option_toggle)
-
-        tk.Label(preset_row, text="개수", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
-        self.prompt_variant_count_var = tk.StringVar(value=str(self.cfg.get("prompt_variant_count", "x1")).strip() or "x1")
-        self.combo_prompt_variant = ttk.Combobox(
-            preset_row,
-            textvariable=self.prompt_variant_count_var,
-            state="readonly",
-            width=6,
-            values=("x1", "x2", "x3", "x4"),
-            font=("Malgun Gothic", 9),
-        )
-        self.combo_prompt_variant.pack(side="left", padx=(6, 0))
-        self.combo_prompt_variant.bind("<<ComboboxSelected>>", self.on_option_toggle)
-
         tk.Label(
             preset_f,
-            text="※ 이 기능은 프롬프트 자동화에서만 사용됩니다. 프롬프트 입력 직전에 아래 생성 옵션을 먼저 맞춥니다.",
+            text="※ 이 기능은 프롬프트 자동화에서만 사용됩니다. 지금은 Image / Video 모드만 맞춥니다.",
             bg=self.color_bg,
             fg=self.color_text_sec,
             font=("Malgun Gothic", 9),
@@ -2640,38 +2613,9 @@ class FlowVisionApp:
         self.combo_asset_prompt_media_mode.pack(side="left", padx=(6, 12))
         self.combo_asset_prompt_media_mode.bind("<<ComboboxSelected>>", self.on_option_toggle)
 
-        tk.Label(asset_preset_row, text="방향", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
-        asset_orientation_label = PROMPT_ORIENTATION_LABELS.get(self.cfg.get("asset_prompt_orientation", "landscape"), "가로")
-        self.asset_prompt_orientation_var = tk.StringVar(value=asset_orientation_label)
-        self.combo_asset_prompt_orientation = ttk.Combobox(
-            asset_preset_row,
-            textvariable=self.asset_prompt_orientation_var,
-            state="readonly",
-            width=8,
-            values=tuple(PROMPT_ORIENTATION_VALUES.keys()),
-            font=("Malgun Gothic", 9),
-        )
-        self.combo_asset_prompt_orientation.pack(side="left", padx=(6, 12))
-        self.combo_asset_prompt_orientation.bind("<<ComboboxSelected>>", self.on_option_toggle)
-
-        tk.Label(asset_preset_row, text="개수", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
-        self.asset_prompt_variant_count_var = tk.StringVar(
-            value=str(self.cfg.get("asset_prompt_variant_count", "x1")).strip() or "x1"
-        )
-        self.combo_asset_prompt_variant = ttk.Combobox(
-            asset_preset_row,
-            textvariable=self.asset_prompt_variant_count_var,
-            state="readonly",
-            width=6,
-            values=("x1", "x2", "x3", "x4"),
-            font=("Malgun Gothic", 9),
-        )
-        self.combo_asset_prompt_variant.pack(side="left", padx=(6, 0))
-        self.combo_asset_prompt_variant.bind("<<ComboboxSelected>>", self.on_option_toggle)
-
         tk.Label(
             asset_preset_box,
-            text="※ 이 기능은 S자동화에서만 사용됩니다. 프롬프트 자동화 설정과 완전히 분리됩니다.",
+            text="※ 이 기능은 S자동화에서만 사용됩니다. 지금은 Image / Video 모드만 맞춥니다.",
             bg=self.color_bg,
             fg=self.color_text_sec,
             font=("Malgun Gothic", 9),
@@ -2679,11 +2623,11 @@ class FlowVisionApp:
 
         asset_baseline_row = tk.Frame(asset_preset_box, bg=self.color_bg)
         asset_baseline_row.pack(fill="x", pady=(8, 0))
-        ttk.Button(asset_baseline_row, text="☑ 기본값 이미지 맞춤 완료", command=self.on_mark_asset_image_baseline_ready).pack(side="left")
+        ttk.Button(asset_baseline_row, text="☑ 기본값 동영상 맞춤 완료", command=self.on_mark_asset_image_baseline_ready).pack(side="left")
         ttk.Button(asset_baseline_row, text="↺ 다시 맞추기", command=self.on_reset_asset_image_baseline_ready).pack(side="left", padx=6)
         self.lbl_asset_baseline_ready = tk.Label(
             asset_baseline_row,
-            text="기본값 이미지 확인 필요",
+            text="기본값 동영상 확인 필요",
             bg=self.color_bg,
             fg=self.color_error,
             font=("Malgun Gothic", 9, "bold"),
@@ -5568,7 +5512,7 @@ class FlowVisionApp:
 
             if self.cfg.get("asset_loop_enabled"):
                 if self.cfg.get("asset_prompt_mode_preset_enabled", True) and (not self.asset_image_baseline_ready):
-                    messagebox.showwarning("주의", "S자동화 시작 전, Flow 사이트 기본값을 이미지로 맞춘 뒤\n'☑ 기본값 이미지 맞춤 완료' 버튼을 먼저 눌러주세요.")
+                    messagebox.showwarning("주의", "S자동화 시작 전, Flow 사이트 기본값을 동영상으로 맞춘 뒤\n'☑ 기본값 동영상 맞춤 완료' 버튼을 먼저 눌러주세요.")
                     return
             else:
                 if self.cfg.get("prompt_mode_preset_enabled", True) and (not self.prompt_image_baseline_ready):
