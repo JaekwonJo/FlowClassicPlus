@@ -5389,6 +5389,36 @@ class FlowVisionApp:
                 attempt_notes.append(f"EnterFinal={'OK' if submitted else 'FAIL'}")
 
             if not submitted:
+                try:
+                    submit_locator, submit_selector = self._resolve_best_locator(
+                        self._normalize_candidate_list(self.cfg.get("submit_selector", "")) or self._submit_candidates(),
+                        near_locator=input_locator,
+                        timeout_ms=1800,
+                        prefer_enabled=False,
+                    )
+                except Exception:
+                    submit_locator, submit_selector = None, None
+
+                if submit_locator is None:
+                    try:
+                        submit_locator = self._resolve_submit_by_geometry(input_locator, timeout_ms=1500)
+                        submit_selector = "geometry-fallback"
+                    except Exception:
+                        submit_locator = None
+                        submit_selector = None
+
+                if submit_locator is not None:
+                    try:
+                        self.actor.random_action_delay("제출 버튼 클릭 전 딜레이", 0.2, 0.9)
+                    except Exception:
+                        pass
+                    clicked = self._click_with_actor_fallback(submit_locator, "제출 버튼")
+                    if clicked:
+                        self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 시도: 버튼 클릭 ({submit_selector or 'selector'})")
+                        submitted = self._confirm_submission_started(input_locator, before_submit_text, timeout_sec=10)
+                        attempt_notes.append(f"Button={'OK' if submitted else 'FAIL'}")
+
+            if not submitted:
                 raise RuntimeError(f"제출 확인 실패(생성 시작 신호 없음): {', '.join(attempt_notes)}")
 
             self._action_log(
