@@ -4043,7 +4043,7 @@ class FlowVisionApp:
             self.log("ℹ️ 생성 옵션 자동 맞춤: 사용 안 함")
             return
 
-        _found, _used, opener, opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
+        _found, _used, _opener, _opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
             input_locator=input_locator,
             profile=profile,
         )
@@ -4080,11 +4080,7 @@ class FlowVisionApp:
             else:
                 self.log(f"⚠️ {label} 클릭에 실패해 건너뜁니다.")
 
-        panel_closed = self._close_prompt_generation_panel(
-            input_locator=input_locator,
-            opener=opener,
-            opener_desc=opener_desc,
-        )
+        panel_closed = self._close_prompt_generation_panel(input_locator=input_locator)
         if (not panel_closed) and (input_locator is not None):
             try:
                 self.actor.move_to_locator(input_locator, "입력창 다시 포커스")
@@ -4178,9 +4174,9 @@ class FlowVisionApp:
             if cx < (input_left + ib["width"] * 0.45):
                 score += 450.0
 
-            if any(x in meta for x in ("nano banana", "veo", "x1", "x2", "x3", "x4", "frames", "ingredients")):
+            if any(x in meta for x in ("nano banana", "veo", "x1", "x2", "x3", "x4", "frames", "ingredients", "동영상", "영상", "이미지")):
                 score -= 260.0
-            if any(x in meta for x in ("image", "video", "가로", "세로")):
+            if any(x in meta for x in ("image", "video", "가로", "세로", "프레임", "재료")):
                 score -= 120.0
 
             if score < best_score:
@@ -4216,13 +4212,25 @@ class FlowVisionApp:
             target, opener_desc = self._resolve_prompt_preset_toggle_button(input_locator=input_locator)
             label = opener_desc or label
         if target is None:
-            return False
+            try:
+                self.page.keyboard.press("Escape")
+                self.log("📁 생성 옵션 패널 닫기: Escape 폴백")
+                time.sleep(0.35)
+                return True
+            except Exception:
+                return False
         ok = self._click_with_actor_fallback(target, "생성 옵션 패널 닫기")
         if ok:
             self.log(f"📁 생성 옵션 패널 닫기: {label}")
             time.sleep(0.35)
             return True
-        return False
+        try:
+            self.page.keyboard.press("Escape")
+            self.log("📁 생성 옵션 패널 닫기: Escape 폴백")
+            time.sleep(0.35)
+            return True
+        except Exception:
+            return False
 
     def _read_input_text(self, input_locator):
         if input_locator is None:
