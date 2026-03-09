@@ -2417,7 +2417,7 @@ class FlowVisionApp:
 
         # 2. Body
         mid_frame = tk.Frame(self.root, bg=self.color_bg, pady=6)
-        mid_frame.pack(fill="both", expand=True, padx=6)
+        mid_frame.pack(side="top", fill="both", expand=True, padx=6)
         self.mid_frame = mid_frame
 
         self.body_pane = ttk.Panedwindow(mid_frame, orient="horizontal")
@@ -3171,7 +3171,7 @@ class FlowVisionApp:
 
         # 3. Bottom
         bottom = tk.Frame(self.root, bg=self.color_bg)
-        bottom.pack(fill="x", expand=False, padx=20, pady=(0, 16))
+        bottom.pack(side="bottom", fill="x", expand=False, padx=20, pady=(0, 16))
         self.bottom_frame = bottom
         
         file_top = tk.Frame(bottom, bg=self.color_bg)
