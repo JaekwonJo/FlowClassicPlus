@@ -73,7 +73,7 @@ DEFAULT_CONFIG = {
     "prompts_separator": "|||",
     "interval_seconds": 180,
     "start_url": "https://labs.google/flow",
-    "input_selector": "textarea, [contenteditable='true']",
+    "input_selector": "#PINHOLE_TEXT_AREA_ELEMENT_ID, textarea, [role='textbox'], [contenteditable='true']",
     "submit_selector": "button[type='submit']",
     "auto_open_new_project": True,
     "new_project_selector": "",
@@ -3389,6 +3389,22 @@ class FlowVisionApp:
                 seen.add(x)
         return uniq
 
+    def _is_generic_input_selector(self, selector):
+        sel = str(selector or "").strip().lower()
+        if not sel:
+            return False
+        generic_set = {
+            "textarea",
+            "[contenteditable='true']",
+            "[contenteditable='plaintext-only']",
+            "div[contenteditable='true']",
+            "div[contenteditable='plaintext-only']",
+            "[role='textbox']",
+            "textarea, [contenteditable='true']",
+            "#pinhole_text_area_element_id, textarea, [role='textbox'], [contenteditable='true']",
+        }
+        return sel in generic_set
+
     def _submit_candidates(self):
         cands = []
         cands.extend(self._normalize_candidate_list(self.cfg.get("submit_selector", "")))
@@ -3653,6 +3669,110 @@ class FlowVisionApp:
         except Exception:
             return ""
 
+    def _locator_prompt_input_score(self, locator, selector=""):
+        try:
+            info = locator.evaluate(
+                """(el) => {
+                    const a = (name) => (el.getAttribute(name) || "");
+                    const text = (el.innerText || el.textContent || "");
+                    const r = el.getBoundingClientRect();
+                    return {
+                        tag: (el.tagName || "").toLowerCase(),
+                        role: a("role").toLowerCase(),
+                        placeholder: a("placeholder").toLowerCase(),
+                        aria: a("aria-label").toLowerCase(),
+                        title: a("title").toLowerCase(),
+                        name: a("name").toLowerCase(),
+                        contenteditable: a("contenteditable").toLowerCase(),
+                        text_len: text.length || 0,
+                        rect: {x: r.x || 0, y: r.y || 0, width: r.width || 0, height: r.height || 0},
+                    };
+                }"""
+            ) or {}
+        except Exception:
+            return float("-inf")
+
+        rect = info.get("rect") or {}
+        width = float(rect.get("width") or 0.0)
+        height = float(rect.get("height") or 0.0)
+        y = float(rect.get("y") or 0.0)
+        if width < 40 or height < 18:
+            return float("-inf")
+
+        viewport_h = 900.0
+        try:
+            vp = getattr(self.page, "viewport_size", None) or {}
+            viewport_h = float(vp.get("height") or viewport_h)
+        except Exception:
+            viewport_h = 900.0
+
+        tag = str(info.get("tag") or "")
+        role = str(info.get("role") or "")
+        contenteditable = str(info.get("contenteditable") or "")
+        text_len = int(info.get("text_len") or 0)
+        meta = " ".join(
+            [
+                str(info.get("placeholder") or ""),
+                str(info.get("aria") or ""),
+                str(info.get("title") or ""),
+                str(info.get("name") or ""),
+                self._locator_meta_text(locator),
+            ]
+        ).lower()
+
+        prompt_keys = ("무엇을 만들", "prompt", "프롬프트", "message", "메시지")
+        search_keys = ("asset", "search", "에셋", "검색")
+        tile_noise_keys = ("보안", "약관", "패턴", "온·오프라인", "신원 연동", "판단기준")
+
+        score = 0.0
+        if any(k in meta for k in prompt_keys):
+            score += 1700.0
+        if any(k in meta for k in search_keys):
+            score -= 2400.0
+        if any(k.lower() in meta for k in tile_noise_keys):
+            score -= 1400.0
+
+        if tag == "textarea":
+            score += 240.0
+        if role == "textbox":
+            score += 120.0
+        if contenteditable in ("true", "plaintext-only"):
+            score += 100.0
+
+        if 180 <= width <= 1200:
+            score += 120.0
+        elif width > 1500:
+            score -= 180.0
+
+        if 28 <= height <= 180:
+            score += 220.0
+        elif height > 260:
+            score -= 1800.0
+
+        area = width * height
+        if area > 260000:
+            score -= 1200.0
+
+        center_y = y + (height / 2.0)
+        y_ratio = center_y / max(1.0, viewport_h)
+        if 0.45 <= y_ratio <= 0.96:
+            score += 260.0
+        elif y_ratio < 0.22:
+            score -= 260.0
+
+        if text_len > 160:
+            score -= 700.0
+        elif 0 <= text_len <= 12:
+            score += 45.0
+
+        if selector:
+            if self._is_generic_input_selector(selector):
+                score -= 120.0
+            else:
+                score += 90.0
+
+        return score
+
     def _is_asset_search_like_locator(self, locator):
         meta = self._locator_meta_text(locator)
         if not meta:
@@ -3665,11 +3785,64 @@ class FlowVisionApp:
 
     def _resolve_prompt_input_locator(self, input_selector, timeout_ms=2500):
         # 동적 UI에서 ref 재할당이 발생해도 매번 "프롬프트 입력칸"을 다시 찾도록 강제한다.
-        candidates = self._normalize_candidate_list(input_selector)
+        configured = self._normalize_candidate_list(input_selector)
+        specific = [sel for sel in configured if not self._is_generic_input_selector(sel)]
+        generic = [sel for sel in configured if self._is_generic_input_selector(sel)]
+
+        candidates = []
+        for sel in specific:
+            if sel not in candidates:
+                candidates.append(sel)
         for sel in self._input_candidates():
             if sel not in candidates:
                 candidates.append(sel)
+        for sel in generic:
+            if sel not in candidates:
+                candidates.append(sel)
 
+        best = None
+        best_selector = None
+        best_score = float("-inf")
+
+        def _consider(container):
+            nonlocal best, best_selector, best_score
+            for sel in candidates:
+                try:
+                    loc = container.locator(sel)
+                    total = loc.count()
+                except Exception:
+                    continue
+                upper = min(total, 18)
+                for idx in range(upper):
+                    cand = loc.nth(idx)
+                    try:
+                        if not cand.is_visible(timeout=timeout_ms):
+                            continue
+                    except Exception:
+                        continue
+                    if self._is_asset_search_like_locator(cand):
+                        continue
+                    score = self._locator_prompt_input_score(cand, sel)
+                    score -= idx * 6.0
+                    if score > best_score:
+                        best = cand
+                        best_selector = sel
+                        best_score = score
+
+        if self.page:
+            _consider(self.page)
+            try:
+                for fr in self.page.frames:
+                    if fr == self.page.main_frame:
+                        continue
+                    _consider(fr)
+            except Exception:
+                pass
+
+        if best is not None:
+            return best, best_selector
+
+        # 마지막 폴백: 기존 일반 탐색 1회
         input_loc, resolved_selector = self._resolve_best_locator(
             candidates,
             timeout_ms=timeout_ms,
@@ -3677,15 +3850,6 @@ class FlowVisionApp:
         )
         if input_loc is not None:
             return input_loc, resolved_selector
-
-        # 2차 폴백: 사용자 지정 selector만은 마지막으로 1회 허용(예외 케이스 대비)
-        input_loc, resolved_selector = self._resolve_best_locator(
-            self._normalize_candidate_list(input_selector),
-            timeout_ms=max(1200, int(timeout_ms * 0.8)),
-        )
-        if input_loc is not None and (not self._is_asset_search_like_locator(input_loc)):
-            return input_loc, resolved_selector
-
         return None, None
 
     def _prompt_media_candidates(self, media_mode):
@@ -5324,6 +5488,7 @@ class FlowVisionApp:
                 self.cfg["input_selector"] = resolved_input_selector
                 self.root.after(0, lambda v=resolved_input_selector: self.input_selector_var.set(v))
             self.save_config()
+            self.log(f"🧭 프롬프트 입력창 확정: {resolved_input_selector or '자동 탐색'}")
 
             try:
                 self.update_status_label("🎛️ 생성 옵션 맞추는 중...", self.color_info)
