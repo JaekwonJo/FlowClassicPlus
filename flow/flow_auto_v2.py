@@ -2790,6 +2790,76 @@ class FlowVisionApp:
         btn_add.pack(side="left", padx=2)
         ToolTip(btn_add, "새로운 프롬프트 슬롯 추가")
 
+        # [NEW] Delete Slot Button
+        btn_del = ttk.Button(file_top, text="🗑️", width=3, command=self.on_delete_slot)
+        btn_del.pack(side="left", padx=2)
+        ToolTip(btn_del, "현재 프롬프트 슬롯 삭제")
+
+        btn_sync = ttk.Button(file_top, text="🔄 슬롯 동기화", command=self.on_sync_slots)
+        btn_sync.pack(side="left", padx=(6, 2))
+        ToolTip(btn_sync, "flow_prompts_slot 숫자 파일을 자동으로 슬롯에 추가")
+
+        ttk.Button(file_top, text="📂 파일 열기", command=self.on_open_prompts).pack(side="right", padx=5)
+        ttk.Button(file_top, text="🔄 새로고침", command=self.on_reload).pack(side="right")
+
+        file_nav = tk.Frame(bottom, bg=self.color_bg)
+        file_nav.pack(fill="x", pady=(2, 0))
+        btn_nav = tk.Frame(file_nav, bg=self.color_bg)
+        btn_nav.pack(side="left")
+
+        ttk.Button(btn_nav, text="⏮", width=3, command=self.on_first).pack(side="left", padx=1)
+        ttk.Button(btn_nav, text="◀", width=3, command=self.on_prev).pack(side="left", padx=1)
+
+        tk.Label(btn_nav, text="번호 이동:", font=("Malgun Gothic", 9), bg=self.color_bg).pack(side="left", padx=(5, 2))
+        self.ent_jump = tk.Entry(btn_nav, width=5, font=("Consolas", 10), justify="center", relief="solid", borderwidth=1)
+        self.ent_jump.pack(side="left", padx=2)
+        self.ent_jump.bind("<Return>", self.on_direct_jump)
+        ToolTip(self.ent_jump, "이동할 번호 입력 후 엔터(Enter)")
+
+        self.lbl_nav_status = tk.Label(
+            btn_nav,
+            text="0 / 0",
+            width=10,
+            fg=self.color_text,
+            font=("Consolas", 11, "bold"),
+            cursor="hand2",
+            bg=self.color_input_soft,
+            relief="flat",
+        )
+        self.lbl_nav_status.pack(side="left", padx=5)
+        self.lbl_nav_status.bind("<Button-1>", self.on_jump_to)
+        ToolTip(self.lbl_nav_status, "클릭하여 번호로 이동")
+
+        ttk.Button(btn_nav, text="▶", width=3, command=self.on_next).pack(side="left", padx=1)
+        ttk.Button(btn_nav, text="⏭", width=3, command=self.on_last).pack(side="left", padx=1)
+
+        btn_f = tk.Frame(bottom, bg=self.color_bg)
+        btn_f.pack(fill="x", pady=16)
+
+        btn_log = tk.Button(
+            btn_f,
+            text="📜 로그 및 미리보기 창 열기",
+            command=self.log_window.show,
+            bg="#24324B",
+            fg=self.color_text,
+            font=("Malgun Gothic", 12, "bold"),
+            relief="raised",
+            borderwidth=3,
+        )
+        btn_log.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=10)
+
+        btn_refresh_big = tk.Button(
+            btn_f,
+            text="🔄 프롬프트 새로고침 (Reload)",
+            command=self.on_reload,
+            bg="#1B78D0",
+            fg="white",
+            font=("Malgun Gothic", 12, "bold"),
+            relief="raised",
+            borderwidth=3,
+        )
+        btn_refresh_big.pack(side="right", fill="x", expand=True, padx=(5, 0), ipady=10)
+
         self._build_home_menu()
 
     def _build_home_menu(self):
@@ -2866,57 +2936,6 @@ class FlowVisionApp:
                     self.left_canvas.yview_moveto(0.0)
         except Exception:
             pass
-
-        # [NEW] Delete Slot Button
-        btn_del = ttk.Button(file_top, text="🗑️", width=3, command=self.on_delete_slot)
-        btn_del.pack(side="left", padx=2)
-        ToolTip(btn_del, "현재 프롬프트 슬롯 삭제")
-
-        btn_sync = ttk.Button(file_top, text="🔄 슬롯 동기화", command=self.on_sync_slots)
-        btn_sync.pack(side="left", padx=(6, 2))
-        ToolTip(btn_sync, "flow_prompts_slot 숫자 파일을 자동으로 슬롯에 추가")
-
-        ttk.Button(file_top, text="📂 파일 열기", command=self.on_open_prompts).pack(side="right", padx=5)
-        ttk.Button(file_top, text="🔄 새로고침", command=self.on_reload).pack(side="right")
-
-        file_nav = tk.Frame(bottom, bg=self.color_bg)
-        file_nav.pack(fill="x", pady=(2, 0))
-        btn_nav = tk.Frame(file_nav, bg=self.color_bg)
-        btn_nav.pack(side="left")
-        
-        # [NEW] First / Prev
-        ttk.Button(btn_nav, text="⏮", width=3, command=self.on_first).pack(side="left", padx=1)
-        ttk.Button(btn_nav, text="◀", width=3, command=self.on_prev).pack(side="left", padx=1)
-        
-        # [NEW] Direct Jump Entry
-        tk.Label(btn_nav, text="번호 이동:", font=("Malgun Gothic", 9), bg=self.color_bg).pack(side="left", padx=(5, 2))
-        self.ent_jump = tk.Entry(btn_nav, width=5, font=("Consolas", 10), justify="center", relief="solid", borderwidth=1)
-        self.ent_jump.pack(side="left", padx=2)
-        self.ent_jump.bind("<Return>", self.on_direct_jump)
-        ToolTip(self.ent_jump, "이동할 번호 입력 후 엔터(Enter)")
-        
-        # [NEW] Jump (Clickable Label)
-        self.lbl_nav_status = tk.Label(btn_nav, text="0 / 0", width=10, fg=self.color_text, 
-                                       font=("Consolas", 11, "bold"), cursor="hand2", bg="#E9ECEF", relief="flat")
-        self.lbl_nav_status.pack(side="left", padx=5)
-        self.lbl_nav_status.bind("<Button-1>", self.on_jump_to)
-        ToolTip(self.lbl_nav_status, "클릭하여 번호로 이동")
-        
-        # [NEW] Next / Last
-        ttk.Button(btn_nav, text="▶", width=3, command=self.on_next).pack(side="left", padx=1)
-        ttk.Button(btn_nav, text="⏭", width=3, command=self.on_last).pack(side="left", padx=1)
-        
-        # [NEW] Log & Refresh Buttons
-        btn_f = tk.Frame(bottom, bg=self.color_bg)
-        btn_f.pack(fill="x", pady=16)
-
-        btn_log = tk.Button(btn_f, text="📜 로그 및 미리보기 창 열기", command=self.log_window.show, 
-                            bg="#343A40", fg="#00FF00", font=("Malgun Gothic", 12, "bold"), relief="raised", borderwidth=3)
-        btn_log.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=10)
-
-        btn_refresh_big = tk.Button(btn_f, text="🔄 프롬프트 새로고침 (Reload)", command=self.on_reload, 
-                                     bg="#007AFF", fg="white", font=("Malgun Gothic", 12, "bold"), relief="raised", borderwidth=3)
-        btn_refresh_big.pack(side="right", fill="x", expand=True, padx=(5, 0), ipady=10)
 
     def on_fill_schedule_time(self, plus_minutes):
         try:
