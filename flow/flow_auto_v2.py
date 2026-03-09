@@ -413,6 +413,15 @@ class FlowVisionApp:
         self.color_text = "#F4F8FF"
         self.color_text_sec = "#9FB2CE"
         self.root.configure(bg=self.color_bg)
+        self.root.option_add("*Label.Foreground", self.color_text)
+        self.root.option_add("*Label.Background", self.color_bg)
+        self.root.option_add("*Checkbutton.Foreground", self.color_text)
+        self.root.option_add("*Checkbutton.Background", self.color_bg)
+        self.root.option_add("*Checkbutton.ActiveBackground", self.color_bg)
+        self.root.option_add("*Checkbutton.ActiveForeground", self.color_text)
+        self.root.option_add("*Checkbutton.SelectColor", self.color_bg)
+        self.root.option_add("*Radiobutton.Foreground", self.color_text)
+        self.root.option_add("*Radiobutton.Background", self.color_bg)
         
         self.style.configure("TFrame", background=self.color_bg)
         self.style.configure("Card.TFrame", background=self.color_card, relief="flat")
@@ -4822,9 +4831,62 @@ class FlowVisionApp:
         except Exception:
             pass
 
+    def _ask_close_action(self):
+        result = {"action": "cancel"}
+
+        win = tk.Toplevel(self.root)
+        win.title("종료 방식 선택")
+        win.configure(bg=self.color_bg)
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+        win.attributes("-topmost", True)
+
+        box_w = 360
+        box_h = 180
+        try:
+            self.root.update_idletasks()
+            rx = self.root.winfo_rootx()
+            ry = self.root.winfo_rooty()
+            rw = self.root.winfo_width()
+            rh = self.root.winfo_height()
+            x = rx + max((rw - box_w) // 2, 0)
+            y = ry + max((rh - box_h) // 2, 0)
+            win.geometry(f"{box_w}x{box_h}+{x}+{y}")
+        except Exception:
+            win.geometry(f"{box_w}x{box_h}")
+
+        wrap = tk.Frame(win, bg=self.color_bg, padx=18, pady=16)
+        wrap.pack(fill="both", expand=True)
+        tk.Label(wrap, text="X 버튼을 눌렀을 때 어떻게 할까요?", font=("Malgun Gothic", 12, "bold"), bg=self.color_bg, fg=self.color_text).pack(anchor="w")
+        tk.Label(wrap, text="원하시는 동작을 바로 선택하시면 됩니다.", font=("Malgun Gothic", 10), bg=self.color_bg, fg=self.color_text_sec).pack(anchor="w", pady=(6, 14))
+
+        btn_row = tk.Frame(wrap, bg=self.color_bg)
+        btn_row.pack(fill="x", pady=(6, 0))
+
+        def _choose(action):
+            result["action"] = action
+            try:
+                win.grab_release()
+            except Exception:
+                pass
+            win.destroy()
+
+        ttk.Button(btn_row, text="바로 종료", command=lambda: _choose("exit")).pack(side="left", fill="x", expand=True)
+        ttk.Button(btn_row, text="트레이로 가기", command=lambda: _choose("tray")).pack(side="left", fill="x", expand=True, padx=8)
+        ttk.Button(btn_row, text="취소", command=lambda: _choose("cancel")).pack(side="left", fill="x", expand=True)
+
+        win.protocol("WM_DELETE_WINDOW", lambda: _choose("cancel"))
+        self.root.wait_window(win)
+        return result["action"]
+
     def on_window_close(self):
         self._persist_ui_options()
-        self.hide_to_tray()
+        action = self._ask_close_action()
+        if action == "exit":
+            self.on_exit()
+        elif action == "tray":
+            self.hide_to_tray()
 
     def on_exit(self):
         self._persist_ui_options()
