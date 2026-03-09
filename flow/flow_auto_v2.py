@@ -3925,6 +3925,10 @@ class FlowVisionApp:
             self.log("ℹ️ 프롬프트 생성 옵션 자동 맞춤: 사용 안 함")
             return
 
+        _found, _used, opener, opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
+            input_locator=input_locator
+        )
+
         steps = [
             ("생성 모드", self._prompt_media_candidates(self.cfg.get("prompt_media_mode", "image"))),
             ("화면 방향", self._prompt_orientation_candidates(self.cfg.get("prompt_orientation", "landscape"))),
@@ -3957,6 +3961,18 @@ class FlowVisionApp:
             else:
                 self.log(f"⚠️ {label} 클릭에 실패해 건너뜁니다.")
 
+        panel_closed = self._close_prompt_generation_panel(
+            input_locator=input_locator,
+            opener=opener,
+            opener_desc=opener_desc,
+        )
+        if (not panel_closed) and (input_locator is not None):
+            try:
+                self.actor.move_to_locator(input_locator, "입력창 다시 포커스")
+                self.actor.smart_click("입력창 다시 포커스")
+            except Exception:
+                pass
+
     def _resolve_prompt_preset_controls(self, input_locator=None):
         if not self.page:
             raise RuntimeError("브라우저 페이지가 없습니다.")
@@ -3978,6 +3994,115 @@ class FlowVisionApp:
             found[key] = locator
             used[key] = selector or ""
         return found, used
+
+    def _resolve_prompt_preset_toggle_button(self, input_locator=None, timeout_ms=1200):
+        if (not self.page) or (input_locator is None):
+            return None, None
+        try:
+            ib = input_locator.bounding_box()
+        except Exception:
+            ib = None
+        if not ib:
+            return None, None
+
+        input_left = ib["x"]
+        input_right = ib["x"] + ib["width"]
+        input_top = ib["y"]
+        input_mid_y = ib["y"] + ib["height"] / 2.0
+        target_x = max(input_left + ib["width"] * 0.68, input_right - 150.0)
+        target_y = input_mid_y
+
+        best = None
+        best_desc = None
+        best_score = float("inf")
+        try:
+            loc = self.page.locator("button, [role='button']")
+            total = loc.count()
+        except Exception:
+            return None, None
+
+        upper = min(total, 220)
+        for i in range(upper):
+            cand = loc.nth(i)
+            try:
+                if not cand.is_visible(timeout=timeout_ms):
+                    continue
+            except Exception:
+                continue
+            try:
+                box = cand.bounding_box()
+            except Exception:
+                box = None
+            if not box:
+                continue
+            if box["width"] < 40 or box["height"] < 20:
+                continue
+
+            cx = box["x"] + box["width"] / 2.0
+            cy = box["y"] + box["height"] / 2.0
+            try:
+                meta = cand.evaluate(
+                    """(el) => ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '') + ' ' + (el.getAttribute('title') || '')).toLowerCase()"""
+                ) or ""
+            except Exception:
+                meta = ""
+
+            if any(x in meta for x in ("생성", "generate", "submit", "send", "보내", "arrow_forward", "메인 메뉴", "설정", "닫기", "close")):
+                continue
+
+            score = abs(cx - target_x) + (abs(cy - target_y) * 3.2)
+            if cy < (input_top - 40):
+                score += 280.0
+            if cy > (input_top + ib["height"] + 120):
+                score += 520.0
+            if cx < (input_left + ib["width"] * 0.45):
+                score += 450.0
+
+            if any(x in meta for x in ("nano banana", "veo", "x1", "x2", "x3", "x4", "frames", "ingredients")):
+                score -= 260.0
+            if any(x in meta for x in ("image", "video", "가로", "세로")):
+                score -= 120.0
+
+            if score < best_score:
+                best = cand
+                best_desc = meta[:80] or "프롬프트 생성 옵션 패널 버튼"
+                best_score = score
+
+        return best, best_desc
+
+    def _ensure_prompt_generation_panel_open(self, input_locator=None):
+        found, used = self._resolve_prompt_preset_controls(input_locator=input_locator)
+        visible_count = sum(1 for x in found.values() if x is not None)
+        opener = None
+        opener_desc = None
+        opened_now = False
+        if visible_count >= 2:
+            return found, used, opener, opener_desc, opened_now
+
+        opener, opener_desc = self._resolve_prompt_preset_toggle_button(input_locator=input_locator)
+        if opener is not None:
+            ok = self._click_with_actor_fallback(opener, "생성 옵션 패널 열기")
+            if ok:
+                opened_now = True
+                self.log(f"📂 생성 옵션 패널 열기: {opener_desc or '토글 버튼'}")
+                time.sleep(0.6)
+                found, used = self._resolve_prompt_preset_controls(input_locator=input_locator)
+        return found, used, opener, opener_desc, opened_now
+
+    def _close_prompt_generation_panel(self, input_locator=None, opener=None, opener_desc=None):
+        target = opener
+        label = opener_desc or "생성 옵션 패널 닫기"
+        if target is None:
+            target, opener_desc = self._resolve_prompt_preset_toggle_button(input_locator=input_locator)
+            label = opener_desc or label
+        if target is None:
+            return False
+        ok = self._click_with_actor_fallback(target, "생성 옵션 패널 닫기")
+        if ok:
+            self.log(f"📁 생성 옵션 패널 닫기: {label}")
+            time.sleep(0.35)
+            return True
+        return False
 
     def _read_input_text(self, input_locator):
         if input_locator is None:
@@ -4334,7 +4459,9 @@ class FlowVisionApp:
             if input_locator is None:
                 self.log("ℹ️ 프롬프트 입력칸 미탐지 상태 - 생성 옵션만 전역 탐색으로 계속 진행합니다.")
 
-            found, used = self._resolve_prompt_preset_controls(input_locator=input_locator)
+            found, used, opener, opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
+                input_locator=input_locator
+            )
             self._apply_prompt_preset_used_selectors(used)
 
             media_ok = found.get("media") is not None
@@ -4350,6 +4477,7 @@ class FlowVisionApp:
                 self.update_status_label("✅ 생성 옵션 selector 자동찾기 완료", self.color_success)
             else:
                 self.update_status_label("⚠️ 생성 옵션 selector 일부 미탐지", self.color_error)
+            self._close_prompt_generation_panel(input_locator=input_locator, opener=opener, opener_desc=opener_desc)
         except Exception as e:
             self.log(f"❌ 생성 옵션 selector 자동찾기 실패: {e}")
             self.update_status_label("❌ 생성 옵션 selector 자동찾기 실패", self.color_error)
@@ -4379,7 +4507,9 @@ class FlowVisionApp:
             if input_locator is None:
                 self.log("ℹ️ 프롬프트 입력칸 미탐지 상태 - 생성 옵션만 전역 탐색으로 테스트합니다.")
 
-            found, used = self._resolve_prompt_preset_controls(input_locator=input_locator)
+            found, used, opener, opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
+                input_locator=input_locator
+            )
             self._apply_prompt_preset_used_selectors(used)
 
             media_ok = found.get("media") is not None
@@ -4399,6 +4529,7 @@ class FlowVisionApp:
                 self.update_status_label("✅ 생성 옵션 테스트 통과", self.color_success)
             else:
                 self.update_status_label("⚠️ 생성 옵션 확인 필요", self.color_error)
+            self._close_prompt_generation_panel(input_locator=input_locator, opener=opener, opener_desc=opener_desc)
         except Exception as e:
             self.log(f"❌ 생성 옵션 테스트 실패: {e}")
             self.update_status_label("❌ 생성 옵션 테스트 실패", self.color_error)
