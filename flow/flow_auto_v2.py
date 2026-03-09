@@ -5341,6 +5341,23 @@ class FlowVisionApp:
             self.update_status_label("✍️ 프롬프트 입력 중...", "white")
             self.actor.type_text(prompt, input_locator=input_locator, mode=input_mode)
 
+            typed_text = self._read_input_text(input_locator)
+            if len(typed_text.strip()) < max(4, min(24, len(prompt.strip()) // 6)):
+                self.log("⚠️ 입력 확인 결과가 비어 있거나 너무 짧아서 입력창을 다시 찾습니다.")
+                input_locator, resolved_input_selector = self._resolve_prompt_input_locator(
+                    input_selector,
+                    timeout_ms=2600,
+                )
+                if input_locator is None:
+                    raise RuntimeError("생성 옵션 적용 후 프롬프트 입력창을 다시 찾지 못했습니다.")
+                self.update_status_label("✍️ 프롬프트 재입력 중...", "white")
+                self.actor.clear_input_field(input_locator, label="입력창")
+                self.actor.type_text(prompt, input_locator=input_locator, mode=input_mode)
+                typed_text = self._read_input_text(input_locator)
+
+            if len(typed_text.strip()) < max(4, min(24, len(prompt.strip()) // 6)):
+                raise RuntimeError("프롬프트 입력이 실제 입력창에 반영되지 않았습니다.")
+
             self.update_status_label("✅ 입력 완료!", self.color_success)
             self.update_status_label("📖 검토 중...", self.color_info)
             self.actor.read_prompt_pause(prompt)
@@ -5355,68 +5372,49 @@ class FlowVisionApp:
             self.update_status_label("🚀 제출 중...", self.color_accent)
             submitted = False
             attempt_notes = []
-            self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 정책: Enter 전용")
+            self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 정책: 안전 단일 제출")
 
-            def _attempt_enter():
+            submit_locator = None
+            submit_selector = None
+            try:
+                submit_locator, submit_selector = self._resolve_best_locator(
+                    self._normalize_candidate_list(self.cfg.get("submit_selector", "")) or self._submit_candidates(),
+                    near_locator=input_locator,
+                    timeout_ms=1800,
+                    prefer_enabled=False,
+                )
+            except Exception:
+                submit_locator, submit_selector = None, None
+
+            if submit_locator is None:
+                try:
+                    submit_locator = self._resolve_submit_by_geometry(input_locator, timeout_ms=1500)
+                    submit_selector = "geometry-fallback"
+                except Exception:
+                    submit_locator = None
+                    submit_selector = None
+
+            if submit_locator is not None:
+                try:
+                    self.actor.random_action_delay("제출 버튼 클릭 전 딜레이", 0.2, 0.9)
+                except Exception:
+                    pass
+                clicked = self._click_with_actor_fallback(submit_locator, "제출 버튼")
+                if clicked:
+                    self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 시도: 버튼 클릭 ({submit_selector or 'selector'})")
+                    submitted = self._confirm_submission_started(input_locator, before_submit_text, timeout_sec=12)
+                    attempt_notes.append(f"Button={'OK' if submitted else 'FAIL'}")
+
+            if not submitted:
                 try:
                     input_locator.click(timeout=1200)
                 except Exception:
                     pass
-                self.actor.random_action_delay("Enter 제출 전 딜레이", 0.3, 2.0)
+                self.actor.random_action_delay("Enter 제출 전 딜레이", 0.2, 0.8)
                 self.page.keyboard.press("Enter")
-                self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 시도: Enter")
-                ok = self._confirm_submission_started(input_locator, before_submit_text, timeout_sec=12)
-                if not ok:
-                    self.page.keyboard.press("Control+Enter")
-                    self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 시도: Ctrl+Enter")
-                    ok = self._confirm_submission_started(input_locator, before_submit_text, timeout_sec=8)
-                attempt_notes.append(f"Enter={'OK' if ok else 'FAIL'}")
-                return ok
-
-            submitted = _attempt_enter()
-            if not submitted:
-                self.actor.random_action_delay("Enter 재시도 전 딜레이", 0.3, 1.4)
-                submitted = _attempt_enter()
-            if not submitted:
-                try:
-                    input_locator.focus()
-                except Exception:
-                    pass
-                self.actor.random_action_delay("최종 Enter 재시도 전 딜레이", 0.3, 1.4)
-                self.page.keyboard.press("Enter")
-                self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 시도: Enter(최종)")
-                submitted = self._confirm_submission_started(input_locator, before_submit_text, timeout_sec=8)
-                attempt_notes.append(f"EnterFinal={'OK' if submitted else 'FAIL'}")
-
-            if not submitted:
-                try:
-                    submit_locator, submit_selector = self._resolve_best_locator(
-                        self._normalize_candidate_list(self.cfg.get("submit_selector", "")) or self._submit_candidates(),
-                        near_locator=input_locator,
-                        timeout_ms=1800,
-                        prefer_enabled=False,
-                    )
-                except Exception:
-                    submit_locator, submit_selector = None, None
-
-                if submit_locator is None:
-                    try:
-                        submit_locator = self._resolve_submit_by_geometry(input_locator, timeout_ms=1500)
-                        submit_selector = "geometry-fallback"
-                    except Exception:
-                        submit_locator = None
-                        submit_selector = None
-
-                if submit_locator is not None:
-                    try:
-                        self.actor.random_action_delay("제출 버튼 클릭 전 딜레이", 0.2, 0.9)
-                    except Exception:
-                        pass
-                    clicked = self._click_with_actor_fallback(submit_locator, "제출 버튼")
-                    if clicked:
-                        self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 시도: 버튼 클릭 ({submit_selector or 'selector'})")
-                        submitted = self._confirm_submission_started(input_locator, before_submit_text, timeout_sec=10)
-                        attempt_notes.append(f"Button={'OK' if submitted else 'FAIL'}")
+                self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 시도: Enter(최종 1회)")
+                submitted = self._confirm_submission_started(input_locator, before_submit_text, timeout_sec=10)
+                attempt_notes.append(f"Enter={'OK' if submitted else 'FAIL'}")
 
             if not submitted:
                 raise RuntimeError(f"제출 확인 실패(생성 시작 신호 없음): {', '.join(attempt_notes)}")
