@@ -4123,7 +4123,7 @@ class FlowVisionApp:
             self._try_open_new_project_if_needed(input_hint)
             input_locator, _ = self._resolve_prompt_input_locator(input_hint, timeout_ms=2200)
             if input_locator is None:
-                raise RuntimeError("프롬프트 입력칸을 먼저 찾지 못했습니다.")
+                self.log("ℹ️ 프롬프트 입력칸 미탐지 상태 - 생성 옵션만 전역 탐색으로 계속 진행합니다.")
 
             found, used = self._resolve_prompt_preset_controls(input_locator=input_locator)
             self._apply_prompt_preset_used_selectors(used)
@@ -4168,7 +4168,7 @@ class FlowVisionApp:
             self._try_open_new_project_if_needed(input_hint)
             input_locator, _ = self._resolve_prompt_input_locator(input_hint, timeout_ms=2200)
             if input_locator is None:
-                raise RuntimeError("프롬프트 입력칸을 먼저 찾지 못했습니다.")
+                self.log("ℹ️ 프롬프트 입력칸 미탐지 상태 - 생성 옵션만 전역 탐색으로 테스트합니다.")
 
             found, used = self._resolve_prompt_preset_controls(input_locator=input_locator)
             self._apply_prompt_preset_used_selectors(used)
