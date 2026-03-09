@@ -386,6 +386,8 @@ class FlowVisionApp:
         self.download_index = 0
         self.download_session_log = []
         self.download_report_path = None
+        self.prompt_image_baseline_ready = False
+        self.asset_image_baseline_ready = False
 
         self.actor = HumanActor(action_logger=self._action_log, status_callback=self._actor_status)
         self.actor.language_mode = self.cfg.get("language_mode", "en")
@@ -2145,6 +2147,38 @@ class FlowVisionApp:
         if hasattr(self, "lbl_asset_prompt_preset_selector"):
             self.lbl_asset_prompt_preset_selector.config(text=self._preset_selector_summary("asset"))
 
+    def _refresh_manual_baseline_labels(self):
+        if hasattr(self, "lbl_prompt_baseline_ready"):
+            self.lbl_prompt_baseline_ready.config(
+                text="기본값 이미지 확인됨" if self.prompt_image_baseline_ready else "기본값 이미지 확인 필요",
+                fg=self.color_success if self.prompt_image_baseline_ready else self.color_error,
+            )
+        if hasattr(self, "lbl_asset_baseline_ready"):
+            self.lbl_asset_baseline_ready.config(
+                text="기본값 이미지 확인됨" if self.asset_image_baseline_ready else "기본값 이미지 확인 필요",
+                fg=self.color_success if self.asset_image_baseline_ready else self.color_error,
+            )
+
+    def on_mark_prompt_image_baseline_ready(self):
+        self.prompt_image_baseline_ready = True
+        self._refresh_manual_baseline_labels()
+        self.log("✅ 프롬프트 자동화 기본값 이미지 확인 완료")
+
+    def on_reset_prompt_image_baseline_ready(self):
+        self.prompt_image_baseline_ready = False
+        self._refresh_manual_baseline_labels()
+        self.log("ℹ️ 프롬프트 자동화 기본값 이미지 확인 해제")
+
+    def on_mark_asset_image_baseline_ready(self):
+        self.asset_image_baseline_ready = True
+        self._refresh_manual_baseline_labels()
+        self.log("✅ S자동화 기본값 이미지 확인 완료")
+
+    def on_reset_asset_image_baseline_ready(self):
+        self.asset_image_baseline_ready = False
+        self._refresh_manual_baseline_labels()
+        self.log("ℹ️ S자동화 기본값 이미지 확인 해제")
+
     def _build_ui(self):
         # 1. Header (High Visibility)
         header = tk.Frame(self.root, bg=self.color_header, height=64, highlightbackground="#24324B", highlightthickness=1)
@@ -2419,6 +2453,19 @@ class FlowVisionApp:
             font=("Malgun Gothic", 9),
         ).pack(anchor="w", pady=(2, 0))
 
+        baseline_row = tk.Frame(preset_f, bg=self.color_bg)
+        baseline_row.pack(fill="x", pady=(8, 0))
+        ttk.Button(baseline_row, text="☑ 기본값 이미지 맞춤 완료", command=self.on_mark_prompt_image_baseline_ready).pack(side="left")
+        ttk.Button(baseline_row, text="↺ 다시 맞추기", command=self.on_reset_prompt_image_baseline_ready).pack(side="left", padx=6)
+        self.lbl_prompt_baseline_ready = tk.Label(
+            baseline_row,
+            text="기본값 이미지 확인 필요",
+            bg=self.color_bg,
+            fg=self.color_error,
+            font=("Malgun Gothic", 9, "bold"),
+        )
+        self.lbl_prompt_baseline_ready.pack(side="left", padx=(10, 0))
+
         preset_btn_f = tk.Frame(preset_f, bg=self.color_bg)
         preset_btn_f.pack(fill="x", pady=(8, 0))
         ttk.Button(preset_btn_f, text="🔍 생성 옵션 자동찾기", command=self.on_auto_detect_prompt_preset_selectors).pack(side="left")
@@ -2433,6 +2480,7 @@ class FlowVisionApp:
             wraplength=560,
         )
         self.lbl_prompt_preset_selector.pack(anchor="w", pady=(8, 0))
+        self._refresh_manual_baseline_labels()
 
         asset_body, _set_asset_open = self._create_collapsible_section(left_card, "S001~S### 에셋 자동 반복", opened=False)
         self._set_asset_open = _set_asset_open
@@ -2593,6 +2641,19 @@ class FlowVisionApp:
             font=("Malgun Gothic", 9),
         ).pack(anchor="w", pady=(2, 0))
 
+        asset_baseline_row = tk.Frame(asset_preset_box, bg=self.color_bg)
+        asset_baseline_row.pack(fill="x", pady=(8, 0))
+        ttk.Button(asset_baseline_row, text="☑ 기본값 이미지 맞춤 완료", command=self.on_mark_asset_image_baseline_ready).pack(side="left")
+        ttk.Button(asset_baseline_row, text="↺ 다시 맞추기", command=self.on_reset_asset_image_baseline_ready).pack(side="left", padx=6)
+        self.lbl_asset_baseline_ready = tk.Label(
+            asset_baseline_row,
+            text="기본값 이미지 확인 필요",
+            bg=self.color_bg,
+            fg=self.color_error,
+            font=("Malgun Gothic", 9, "bold"),
+        )
+        self.lbl_asset_baseline_ready.pack(side="left", padx=(10, 0))
+
         asset_preset_btn_f = tk.Frame(asset_preset_box, bg=self.color_bg)
         asset_preset_btn_f.pack(fill="x", pady=(8, 0))
         ttk.Button(asset_preset_btn_f, text="🔍 S생성 옵션 자동찾기", command=self.on_auto_detect_asset_prompt_preset_selectors).pack(side="left")
@@ -2607,6 +2668,7 @@ class FlowVisionApp:
             wraplength=560,
         )
         self.lbl_asset_prompt_preset_selector.pack(anchor="w", pady=(8, 0))
+        self._refresh_manual_baseline_labels()
 
         tk.Label(asset_f, text="시작 버튼 selector(선택)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w", pady=(8, 0))
         self.asset_start_selector_var = tk.StringVar(value=self.cfg.get("asset_start_selector", ""))
@@ -5307,6 +5369,15 @@ class FlowVisionApp:
             if not (self.cfg.get("start_url", "").strip() and self.cfg.get("input_selector", "").strip()):
                 messagebox.showwarning("주의", "시작 URL / 입력 셀렉터를 먼저 입력해주세요.")
                 return
+
+            if self.cfg.get("asset_loop_enabled"):
+                if self.cfg.get("asset_prompt_mode_preset_enabled", True) and (not self.asset_image_baseline_ready):
+                    messagebox.showwarning("주의", "S자동화 시작 전, Flow 사이트 기본값을 이미지로 맞춘 뒤\n'☑ 기본값 이미지 맞춤 완료' 버튼을 먼저 눌러주세요.")
+                    return
+            else:
+                if self.cfg.get("prompt_mode_preset_enabled", True) and (not self.prompt_image_baseline_ready):
+                    messagebox.showwarning("주의", "프롬프트 자동화 시작 전, Flow 사이트 기본값을 이미지로 맞춘 뒤\n'☑ 기본값 이미지 맞춤 완료' 버튼을 먼저 눌러주세요.")
+                    return
             
             if not self.prompts and not self.cfg.get("relay_mode"):
                 if self.cfg.get("asset_loop_enabled"):
