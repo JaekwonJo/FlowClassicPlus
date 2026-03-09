@@ -105,6 +105,13 @@ DEFAULT_CONFIG = {
     "prompt_media_mode_selector": "",
     "prompt_orientation_selector": "",
     "prompt_variant_selector": "",
+    "asset_prompt_mode_preset_enabled": True,
+    "asset_prompt_media_mode": "video",
+    "asset_prompt_orientation": "landscape",
+    "asset_prompt_variant_count": "x1",
+    "asset_prompt_media_mode_selector": "",
+    "asset_prompt_orientation_selector": "",
+    "asset_prompt_variant_selector": "",
     "asset_loop_enabled": False,
     "asset_loop_start": 1,
     "asset_loop_end": 1,
@@ -2119,15 +2126,24 @@ class FlowVisionApp:
             self.lbl_typing_speed_value.config(text=f"x{level}")
         self.on_option_toggle()
 
-    def _prompt_preset_selector_summary(self):
-        media = str(self.cfg.get("prompt_media_mode_selector", "") or "").strip() or "-"
-        orientation = str(self.cfg.get("prompt_orientation_selector", "") or "").strip() or "-"
-        variant = str(self.cfg.get("prompt_variant_selector", "") or "").strip() or "-"
-        return f"저장된 selector | 모드: {media} | 방향: {orientation} | 개수: {variant}"
+    def _preset_cfg_key(self, profile, suffix):
+        profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
+        if profile == "asset":
+            return f"asset_prompt_{suffix}"
+        return f"prompt_{suffix}"
+
+    def _preset_selector_summary(self, profile="prompt"):
+        media = str(self.cfg.get(self._preset_cfg_key(profile, "media_mode_selector"), "") or "").strip() or "-"
+        orientation = str(self.cfg.get(self._preset_cfg_key(profile, "orientation_selector"), "") or "").strip() or "-"
+        variant = str(self.cfg.get(self._preset_cfg_key(profile, "variant_selector"), "") or "").strip() or "-"
+        prefix = "S자동화" if profile == "asset" else "프롬프트"
+        return f"{prefix} 저장된 selector | 모드: {media} | 방향: {orientation} | 개수: {variant}"
 
     def _refresh_prompt_preset_selector_label(self):
         if hasattr(self, "lbl_prompt_preset_selector"):
-            self.lbl_prompt_preset_selector.config(text=self._prompt_preset_selector_summary())
+            self.lbl_prompt_preset_selector.config(text=self._preset_selector_summary("prompt"))
+        if hasattr(self, "lbl_asset_prompt_preset_selector"):
+            self.lbl_asset_prompt_preset_selector.config(text=self._preset_selector_summary("asset"))
 
     def _build_ui(self):
         # 1. Header (High Visibility)
@@ -2409,7 +2425,7 @@ class FlowVisionApp:
         ttk.Button(preset_btn_f, text="🧪 생성 옵션 테스트", command=self.on_test_prompt_preset_selectors).pack(side="left", padx=6)
         self.lbl_prompt_preset_selector = tk.Label(
             preset_f,
-            text=self._prompt_preset_selector_summary(),
+            text=self._preset_selector_summary("prompt"),
             bg=self.color_bg,
             fg=self.color_info,
             font=("Consolas", 8),
@@ -2498,6 +2514,99 @@ class FlowVisionApp:
         )
         self.entry_asset_template.pack(fill="x", ipady=3, pady=(2, 0))
         self.entry_asset_template.bind("<FocusOut>", self.on_option_toggle)
+
+        asset_preset_box = tk.LabelFrame(
+            asset_f,
+            text="S자동화 전용 생성 옵션",
+            bg=self.color_bg,
+            fg=self.color_text,
+            font=("Malgun Gothic", 10, "bold"),
+            padx=8,
+            pady=6,
+        )
+        asset_preset_box.pack(fill="x", pady=(10, 0))
+
+        self.asset_prompt_mode_preset_enabled_var = tk.BooleanVar(
+            value=self.cfg.get("asset_prompt_mode_preset_enabled", True)
+        )
+        tk.Checkbutton(
+            asset_preset_box,
+            text="S자동화 시작 전 생성 옵션 자동 맞추기",
+            variable=self.asset_prompt_mode_preset_enabled_var,
+            command=self.on_option_toggle,
+            bg=self.color_bg,
+            font=("Malgun Gothic", 10),
+            activebackground=self.color_bg,
+        ).pack(anchor="w")
+
+        asset_preset_row = tk.Frame(asset_preset_box, bg=self.color_bg)
+        asset_preset_row.pack(fill="x", pady=(8, 4))
+
+        tk.Label(asset_preset_row, text="모드", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        asset_media_label = PROMPT_MEDIA_LABELS.get(self.cfg.get("asset_prompt_media_mode", "video"), "영상")
+        self.asset_prompt_media_mode_var = tk.StringVar(value=asset_media_label)
+        self.combo_asset_prompt_media_mode = ttk.Combobox(
+            asset_preset_row,
+            textvariable=self.asset_prompt_media_mode_var,
+            state="readonly",
+            width=8,
+            values=tuple(PROMPT_MEDIA_VALUES.keys()),
+            font=("Malgun Gothic", 9),
+        )
+        self.combo_asset_prompt_media_mode.pack(side="left", padx=(6, 12))
+        self.combo_asset_prompt_media_mode.bind("<<ComboboxSelected>>", self.on_option_toggle)
+
+        tk.Label(asset_preset_row, text="방향", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        asset_orientation_label = PROMPT_ORIENTATION_LABELS.get(self.cfg.get("asset_prompt_orientation", "landscape"), "가로")
+        self.asset_prompt_orientation_var = tk.StringVar(value=asset_orientation_label)
+        self.combo_asset_prompt_orientation = ttk.Combobox(
+            asset_preset_row,
+            textvariable=self.asset_prompt_orientation_var,
+            state="readonly",
+            width=8,
+            values=tuple(PROMPT_ORIENTATION_VALUES.keys()),
+            font=("Malgun Gothic", 9),
+        )
+        self.combo_asset_prompt_orientation.pack(side="left", padx=(6, 12))
+        self.combo_asset_prompt_orientation.bind("<<ComboboxSelected>>", self.on_option_toggle)
+
+        tk.Label(asset_preset_row, text="개수", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        self.asset_prompt_variant_count_var = tk.StringVar(
+            value=str(self.cfg.get("asset_prompt_variant_count", "x1")).strip() or "x1"
+        )
+        self.combo_asset_prompt_variant = ttk.Combobox(
+            asset_preset_row,
+            textvariable=self.asset_prompt_variant_count_var,
+            state="readonly",
+            width=6,
+            values=("x1", "x2", "x3", "x4"),
+            font=("Malgun Gothic", 9),
+        )
+        self.combo_asset_prompt_variant.pack(side="left", padx=(6, 0))
+        self.combo_asset_prompt_variant.bind("<<ComboboxSelected>>", self.on_option_toggle)
+
+        tk.Label(
+            asset_preset_box,
+            text="※ 이 기능은 S자동화에서만 사용됩니다. 프롬프트 자동화 설정과 완전히 분리됩니다.",
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            font=("Malgun Gothic", 9),
+        ).pack(anchor="w", pady=(2, 0))
+
+        asset_preset_btn_f = tk.Frame(asset_preset_box, bg=self.color_bg)
+        asset_preset_btn_f.pack(fill="x", pady=(8, 0))
+        ttk.Button(asset_preset_btn_f, text="🔍 S생성 옵션 자동찾기", command=self.on_auto_detect_asset_prompt_preset_selectors).pack(side="left")
+        ttk.Button(asset_preset_btn_f, text="🧪 S생성 옵션 테스트", command=self.on_test_asset_prompt_preset_selectors).pack(side="left", padx=6)
+        self.lbl_asset_prompt_preset_selector = tk.Label(
+            asset_preset_box,
+            text=self._preset_selector_summary("asset"),
+            bg=self.color_bg,
+            fg=self.color_info,
+            font=("Consolas", 8),
+            justify="left",
+            wraplength=560,
+        )
+        self.lbl_asset_prompt_preset_selector.pack(anchor="w", pady=(8, 0))
 
         tk.Label(asset_f, text="시작 버튼 selector(선택)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w", pady=(8, 0))
         self.asset_start_selector_var = tk.StringVar(value=self.cfg.get("asset_start_selector", ""))
@@ -3204,6 +3313,13 @@ class FlowVisionApp:
         self.cfg["prompt_orientation"] = PROMPT_ORIENTATION_VALUES.get(orientation_label, self.cfg.get("prompt_orientation", "landscape"))
         variant_value = self.prompt_variant_count_var.get().strip().lower() if hasattr(self, "prompt_variant_count_var") else ""
         self.cfg["prompt_variant_count"] = variant_value if variant_value in {"x1", "x2", "x3", "x4"} else str(self.cfg.get("prompt_variant_count", "x1")).strip().lower() or "x1"
+        self.cfg["asset_prompt_mode_preset_enabled"] = self.asset_prompt_mode_preset_enabled_var.get() if hasattr(self, "asset_prompt_mode_preset_enabled_var") else self.cfg.get("asset_prompt_mode_preset_enabled", True)
+        asset_media_label = self.asset_prompt_media_mode_var.get().strip() if hasattr(self, "asset_prompt_media_mode_var") else ""
+        self.cfg["asset_prompt_media_mode"] = PROMPT_MEDIA_VALUES.get(asset_media_label, self.cfg.get("asset_prompt_media_mode", "video"))
+        asset_orientation_label = self.asset_prompt_orientation_var.get().strip() if hasattr(self, "asset_prompt_orientation_var") else ""
+        self.cfg["asset_prompt_orientation"] = PROMPT_ORIENTATION_VALUES.get(asset_orientation_label, self.cfg.get("asset_prompt_orientation", "landscape"))
+        asset_variant_value = self.asset_prompt_variant_count_var.get().strip().lower() if hasattr(self, "asset_prompt_variant_count_var") else ""
+        self.cfg["asset_prompt_variant_count"] = asset_variant_value if asset_variant_value in {"x1", "x2", "x3", "x4"} else str(self.cfg.get("asset_prompt_variant_count", "x1")).strip().lower() or "x1"
         self.cfg["asset_loop_enabled"] = self.asset_loop_var.get() if hasattr(self, "asset_loop_var") else self.cfg.get("asset_loop_enabled", False)
         raw_start = ""
         raw_end = ""
@@ -3852,12 +3968,12 @@ class FlowVisionApp:
             return input_loc, resolved_selector
         return None, None
 
-    def _prompt_media_candidates(self, media_mode):
+    def _prompt_media_candidates(self, media_mode, profile="prompt"):
         media_mode = "video" if str(media_mode).strip().lower() == "video" else "image"
         target = "Video" if media_mode == "video" else "Image"
         alt = "영상" if media_mode == "video" else "이미지"
         cands = []
-        cands.extend(self._normalize_candidate_list(self.cfg.get("prompt_media_mode_selector", "")))
+        cands.extend(self._normalize_candidate_list(self.cfg.get(self._preset_cfg_key(profile, "media_mode_selector"), "")))
         cands.extend([
             f"button:text-is('{target}')",
             f"[role='button']:text-is('{target}')",
@@ -3870,12 +3986,12 @@ class FlowVisionApp:
         ])
         return self._normalize_candidate_list(cands)
 
-    def _prompt_orientation_candidates(self, orientation):
+    def _prompt_orientation_candidates(self, orientation, profile="prompt"):
         orientation = "portrait" if str(orientation).strip().lower() == "portrait" else "landscape"
         target = "세로 모드" if orientation == "portrait" else "가로 모드"
         key = "세로" if orientation == "portrait" else "가로"
         cands = []
-        cands.extend(self._normalize_candidate_list(self.cfg.get("prompt_orientation_selector", "")))
+        cands.extend(self._normalize_candidate_list(self.cfg.get(self._preset_cfg_key(profile, "orientation_selector"), "")))
         cands.extend([
             f"button:text-is('{target}')",
             f"[role='button']:text-is('{target}')",
@@ -3886,13 +4002,13 @@ class FlowVisionApp:
         ])
         return self._normalize_candidate_list(cands)
 
-    def _prompt_variant_candidates(self, variant_count):
+    def _prompt_variant_candidates(self, variant_count, profile="prompt"):
         target = str(variant_count or "x1").strip().lower()
         if target not in {"x1", "x2", "x3", "x4"}:
             target = "x1"
         upper = target.upper()
         cands = []
-        cands.extend(self._normalize_candidate_list(self.cfg.get("prompt_variant_selector", "")))
+        cands.extend(self._normalize_candidate_list(self.cfg.get(self._preset_cfg_key(profile, "variant_selector"), "")))
         cands.extend([
             f"button:text-is('{target}')",
             f"[role='button']:text-is('{target}')",
@@ -3903,13 +4019,13 @@ class FlowVisionApp:
         ])
         return self._normalize_candidate_list(cands)
 
-    def _apply_prompt_preset_used_selectors(self, used):
+    def _apply_prompt_preset_used_selectors(self, used, profile="prompt"):
         if not isinstance(used, dict):
             return
         mapping = {
-            "media": "prompt_media_mode_selector",
-            "orientation": "prompt_orientation_selector",
-            "variant": "prompt_variant_selector",
+            "media": self._preset_cfg_key(profile, "media_mode_selector"),
+            "orientation": self._preset_cfg_key(profile, "orientation_selector"),
+            "variant": self._preset_cfg_key(profile, "variant_selector"),
         }
         for key, cfg_key in mapping.items():
             val = str(used.get(key, "") or "").strip()
@@ -3918,21 +4034,24 @@ class FlowVisionApp:
         self.save_config()
         self._refresh_prompt_preset_selector_label()
 
-    def _apply_prompt_generation_preset(self, input_locator=None):
+    def _apply_prompt_generation_preset(self, input_locator=None, profile="prompt"):
         if not self.page:
             return
-        if not self.cfg.get("prompt_mode_preset_enabled", True):
-            self.log("ℹ️ 프롬프트 생성 옵션 자동 맞춤: 사용 안 함")
+        profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
+        enabled_key = self._preset_cfg_key(profile, "mode_preset_enabled")
+        if not self.cfg.get(enabled_key, True):
+            self.log("ℹ️ 생성 옵션 자동 맞춤: 사용 안 함")
             return
 
         _found, _used, opener, opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
-            input_locator=input_locator
+            input_locator=input_locator,
+            profile=profile,
         )
 
         steps = [
-            ("생성 모드", self._prompt_media_candidates(self.cfg.get("prompt_media_mode", "image"))),
-            ("화면 방향", self._prompt_orientation_candidates(self.cfg.get("prompt_orientation", "landscape"))),
-            ("생성 개수", self._prompt_variant_candidates(self.cfg.get("prompt_variant_count", "x1"))),
+            ("생성 모드", self._prompt_media_candidates(self.cfg.get(self._preset_cfg_key(profile, "media_mode"), "image"), profile=profile)),
+            ("화면 방향", self._prompt_orientation_candidates(self.cfg.get(self._preset_cfg_key(profile, "orientation"), "landscape"), profile=profile)),
+            ("생성 개수", self._prompt_variant_candidates(self.cfg.get(self._preset_cfg_key(profile, "variant_count"), "x1"), profile=profile)),
         ]
 
         for label, candidates in steps:
@@ -3973,14 +4092,15 @@ class FlowVisionApp:
             except Exception:
                 pass
 
-    def _resolve_prompt_preset_controls(self, input_locator=None):
+    def _resolve_prompt_preset_controls(self, input_locator=None, profile="prompt"):
         if not self.page:
             raise RuntimeError("브라우저 페이지가 없습니다.")
+        profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
 
         defs = [
-            ("media", "생성 모드", self._prompt_media_candidates(self.cfg.get("prompt_media_mode", "image"))),
-            ("orientation", "화면 방향", self._prompt_orientation_candidates(self.cfg.get("prompt_orientation", "landscape"))),
-            ("variant", "생성 개수", self._prompt_variant_candidates(self.cfg.get("prompt_variant_count", "x1"))),
+            ("media", "생성 모드", self._prompt_media_candidates(self.cfg.get(self._preset_cfg_key(profile, "media_mode"), "image"), profile=profile)),
+            ("orientation", "화면 방향", self._prompt_orientation_candidates(self.cfg.get(self._preset_cfg_key(profile, "orientation"), "landscape"), profile=profile)),
+            ("variant", "생성 개수", self._prompt_variant_candidates(self.cfg.get(self._preset_cfg_key(profile, "variant_count"), "x1"), profile=profile)),
         ]
         found = {}
         used = {}
@@ -4070,8 +4190,8 @@ class FlowVisionApp:
 
         return best, best_desc
 
-    def _ensure_prompt_generation_panel_open(self, input_locator=None):
-        found, used = self._resolve_prompt_preset_controls(input_locator=input_locator)
+    def _ensure_prompt_generation_panel_open(self, input_locator=None, profile="prompt"):
+        found, used = self._resolve_prompt_preset_controls(input_locator=input_locator, profile=profile)
         visible_count = sum(1 for x in found.values() if x is not None)
         opener = None
         opener_desc = None
@@ -4086,7 +4206,7 @@ class FlowVisionApp:
                 opened_now = True
                 self.log(f"📂 생성 옵션 패널 열기: {opener_desc or '토글 버튼'}")
                 time.sleep(0.6)
-                found, used = self._resolve_prompt_preset_controls(input_locator=input_locator)
+                found, used = self._resolve_prompt_preset_controls(input_locator=input_locator, profile=profile)
         return found, used, opener, opener_desc, opened_now
 
     def _close_prompt_generation_panel(self, input_locator=None, opener=None, opener_desc=None):
@@ -4441,6 +4561,13 @@ class FlowVisionApp:
         self.on_option_toggle()
         self._auto_detect_prompt_preset_selectors_worker()
 
+    def on_auto_detect_asset_prompt_preset_selectors(self):
+        if self.running:
+            messagebox.showwarning("안내", "자동화 실행 중에는 selector 탐색을 할 수 없습니다.\n먼저 중지 후 시도해주세요.")
+            return
+        self.on_option_toggle()
+        self._auto_detect_asset_prompt_preset_selectors_worker()
+
     def _auto_detect_prompt_preset_selectors_worker(self):
         try:
             self.update_status_label("🔍 생성 옵션 selector 자동 탐색 중...", self.color_info)
@@ -4460,9 +4587,10 @@ class FlowVisionApp:
                 self.log("ℹ️ 프롬프트 입력칸 미탐지 상태 - 생성 옵션만 전역 탐색으로 계속 진행합니다.")
 
             found, used, opener, opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
-                input_locator=input_locator
+                input_locator=input_locator,
+                profile="prompt",
             )
-            self._apply_prompt_preset_used_selectors(used)
+            self._apply_prompt_preset_used_selectors(used, profile="prompt")
 
             media_ok = found.get("media") is not None
             orientation_ok = found.get("orientation") is not None
@@ -4482,12 +4610,61 @@ class FlowVisionApp:
             self.log(f"❌ 생성 옵션 selector 자동찾기 실패: {e}")
             self.update_status_label("❌ 생성 옵션 selector 자동찾기 실패", self.color_error)
 
+    def _auto_detect_asset_prompt_preset_selectors_worker(self):
+        try:
+            self.update_status_label("🔍 S 생성 옵션 selector 자동 탐색 중...", self.color_info)
+            self._ensure_browser_session()
+            self.actor.set_page(self.page)
+
+            start_url = (self.cfg.get("start_url") or "").strip()
+            if start_url:
+                if start_url not in (self.page.url or ""):
+                    self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+                time.sleep(random.uniform(1.0, 2.5))
+
+            input_hint = (self.cfg.get("input_selector") or "").strip() or "#PINHOLE_TEXT_AREA_ELEMENT_ID, textarea, [contenteditable='true'], [role='textbox']"
+            self._try_open_new_project_if_needed(input_hint)
+            input_locator, _ = self._resolve_prompt_input_locator(input_hint, timeout_ms=2200)
+            if input_locator is None:
+                self.log("ℹ️ S입력칸 미탐지 상태 - 생성 옵션만 전역 탐색으로 계속 진행합니다.")
+
+            found, used, opener, opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
+                input_locator=input_locator,
+                profile="asset",
+            )
+            self._apply_prompt_preset_used_selectors(used, profile="asset")
+
+            media_ok = found.get("media") is not None
+            orientation_ok = found.get("orientation") is not None
+            variant_ok = found.get("variant") is not None
+
+            self.log(
+                f"🔍 S 생성 옵션 자동탐색 결과 | 모드({used.get('media') or '-'})={'OK' if media_ok else 'FAIL'} | "
+                f"방향({used.get('orientation') or '-'})={'OK' if orientation_ok else 'FAIL'} | "
+                f"개수({used.get('variant') or '-'})={'OK' if variant_ok else 'FAIL'}"
+            )
+            if media_ok and orientation_ok and variant_ok:
+                self.update_status_label("✅ S 생성 옵션 selector 자동찾기 완료", self.color_success)
+            else:
+                self.update_status_label("⚠️ S 생성 옵션 selector 일부 미탐지", self.color_error)
+            self._close_prompt_generation_panel(input_locator=input_locator, opener=opener, opener_desc=opener_desc)
+        except Exception as e:
+            self.log(f"❌ S 생성 옵션 selector 자동찾기 실패: {e}")
+            self.update_status_label("❌ S 생성 옵션 selector 자동찾기 실패", self.color_error)
+
     def on_test_prompt_preset_selectors(self):
         if self.running:
             messagebox.showwarning("안내", "자동화 실행 중에는 selector 테스트를 할 수 없습니다.\n먼저 중지 후 시도해주세요.")
             return
         self.on_option_toggle()
         self._test_prompt_preset_selectors_worker()
+
+    def on_test_asset_prompt_preset_selectors(self):
+        if self.running:
+            messagebox.showwarning("안내", "자동화 실행 중에는 selector 테스트를 할 수 없습니다.\n먼저 중지 후 시도해주세요.")
+            return
+        self.on_option_toggle()
+        self._test_asset_prompt_preset_selectors_worker()
 
     def _test_prompt_preset_selectors_worker(self):
         try:
@@ -4508,9 +4685,10 @@ class FlowVisionApp:
                 self.log("ℹ️ 프롬프트 입력칸 미탐지 상태 - 생성 옵션만 전역 탐색으로 테스트합니다.")
 
             found, used, opener, opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
-                input_locator=input_locator
+                input_locator=input_locator,
+                profile="prompt",
             )
-            self._apply_prompt_preset_used_selectors(used)
+            self._apply_prompt_preset_used_selectors(used, profile="prompt")
 
             media_ok = found.get("media") is not None
             orientation_ok = found.get("orientation") is not None
@@ -4518,7 +4696,7 @@ class FlowVisionApp:
             all_ok = media_ok and orientation_ok and variant_ok
 
             if all_ok:
-                self._apply_prompt_generation_preset(input_locator=input_locator)
+                self._apply_prompt_generation_preset(input_locator=input_locator, profile="prompt")
 
             self.log(
                 f"🧪 생성 옵션 테스트 | 모드={'OK' if media_ok else 'FAIL'} | "
@@ -4533,6 +4711,52 @@ class FlowVisionApp:
         except Exception as e:
             self.log(f"❌ 생성 옵션 테스트 실패: {e}")
             self.update_status_label("❌ 생성 옵션 테스트 실패", self.color_error)
+
+    def _test_asset_prompt_preset_selectors_worker(self):
+        try:
+            self.update_status_label("🧪 S 생성 옵션 테스트 중...", self.color_info)
+            self._ensure_browser_session()
+            self.actor.set_page(self.page)
+
+            start_url = (self.cfg.get("start_url") or "").strip()
+            if start_url:
+                if start_url not in (self.page.url or ""):
+                    self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+                time.sleep(random.uniform(1.0, 2.5))
+
+            input_hint = (self.cfg.get("input_selector") or "").strip() or "#PINHOLE_TEXT_AREA_ELEMENT_ID, textarea, [contenteditable='true'], [role='textbox']"
+            self._try_open_new_project_if_needed(input_hint)
+            input_locator, _ = self._resolve_prompt_input_locator(input_hint, timeout_ms=2200)
+            if input_locator is None:
+                self.log("ℹ️ S입력칸 미탐지 상태 - 생성 옵션만 전역 탐색으로 테스트합니다.")
+
+            found, used, opener, opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
+                input_locator=input_locator,
+                profile="asset",
+            )
+            self._apply_prompt_preset_used_selectors(used, profile="asset")
+
+            media_ok = found.get("media") is not None
+            orientation_ok = found.get("orientation") is not None
+            variant_ok = found.get("variant") is not None
+            all_ok = media_ok and orientation_ok and variant_ok
+
+            if all_ok:
+                self._apply_prompt_generation_preset(input_locator=input_locator, profile="asset")
+
+            self.log(
+                f"🧪 S 생성 옵션 테스트 | 모드={'OK' if media_ok else 'FAIL'} | "
+                f"방향={'OK' if orientation_ok else 'FAIL'} | "
+                f"개수={'OK' if variant_ok else 'FAIL'}"
+            )
+            if all_ok:
+                self.update_status_label("✅ S 생성 옵션 테스트 통과", self.color_success)
+            else:
+                self.update_status_label("⚠️ S 생성 옵션 확인 필요", self.color_error)
+            self._close_prompt_generation_panel(input_locator=input_locator, opener=opener, opener_desc=opener_desc)
+        except Exception as e:
+            self.log(f"❌ S 생성 옵션 테스트 실패: {e}")
+            self.update_status_label("❌ S 생성 옵션 테스트 실패", self.color_error)
 
     def on_auto_detect_asset_selectors(self):
         if self.running:
@@ -5623,7 +5847,8 @@ class FlowVisionApp:
 
             try:
                 self.update_status_label("🎛️ 생성 옵션 맞추는 중...", self.color_info)
-                self._apply_prompt_generation_preset(input_locator=input_locator)
+                preset_profile = "asset" if self.cfg.get("asset_loop_enabled") else "prompt"
+                self._apply_prompt_generation_preset(input_locator=input_locator, profile=preset_profile)
             except Exception as e:
                 self.log(f"⚠️ 프롬프트 생성 옵션 자동 맞춤 실패: {e}")
 
