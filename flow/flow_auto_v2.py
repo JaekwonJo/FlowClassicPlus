@@ -66,7 +66,7 @@ ES_SYSTEM_REQUIRED = 0x00000001
 ES_DISPLAY_REQUIRED = 0x00000002
 
 APP_VERSION = "2026-03-03 Ver.01"
-APP_NAME = f"Flow Veo 자동화 봇 (Ultimate V2) - {APP_VERSION}"
+APP_NAME = f"Flow Classic Plus - {APP_VERSION}"
 CONFIG_FILE = "flow_config.json"
 DEFAULT_CONFIG = {
     "prompts_file": "flow_prompts.txt",
@@ -375,7 +375,6 @@ class FlowVisionApp:
         self.root = tk.Tk()
         self.root.title(APP_NAME)
         self._set_initial_window_size()
-        self.root.configure(bg="#FFFFFF")
         
         # [NEW] Responsive Grid Weight
         self.root.grid_columnconfigure(0, weight=1)
@@ -395,14 +394,16 @@ class FlowVisionApp:
         self.style = ttk.Style()
         self.style.theme_use('clam')
         
-        self.color_bg = "#FFFFFF"
-        self.color_card = "#F1F3F5"
-        self.color_accent = "#007AFF" # Blue
-        self.color_success = "#28A745" # Green
-        self.color_error = "#DC3545" # Red
-        self.color_info = "#17A2B8"
-        self.color_text = "#212529"
-        self.color_text_sec = "#868E96"
+        self.color_bg = "#0D1524"
+        self.color_card = "#162238"
+        self.color_header = "#101B2F"
+        self.color_accent = "#3AA0FF"
+        self.color_success = "#3CD487"
+        self.color_error = "#FF6B6B"
+        self.color_info = "#57C7FF"
+        self.color_text = "#F4F8FF"
+        self.color_text_sec = "#9FB2CE"
+        self.root.configure(bg=self.color_bg)
         
         self.style.configure("TFrame", background=self.color_bg)
         self.style.configure("Card.TFrame", background=self.color_card, relief="flat")
@@ -411,15 +412,15 @@ class FlowVisionApp:
         self.style.configure("TLabel", background=self.color_bg, foreground=self.color_text, font=("Malgun Gothic", 10))
         
         # Button Styles
-        self.style.configure("TButton", background="#E9ECEF", foreground="black", borderwidth=1, font=("Malgun Gothic", 10, "bold"))
-        self.style.map("TButton", background=[('active', '#DEE2E6')])
+        self.style.configure("TButton", background="#22304A", foreground=self.color_text, borderwidth=1, font=("Malgun Gothic", 10, "bold"))
+        self.style.map("TButton", background=[('active', '#2B3C5B')], foreground=[('active', self.color_text)])
         
         # Progress Bar
-        self.style.configure("Horizontal.TProgressbar", background=self.color_success, troughcolor="#E9ECEF", bordercolor="#DEE2E6", thickness=20)
+        self.style.configure("Horizontal.TProgressbar", background=self.color_success, troughcolor="#1C2940", bordercolor="#2A3A56", thickness=20)
         
         # Big Action Button
         self.style.configure("Action.TButton", background=self.color_accent, foreground="white", font=("Malgun Gothic", 14, "bold"))
-        self.style.map("Action.TButton", background=[('active', '#0056b3'), ('disabled', '#ADB5BD')])
+        self.style.map("Action.TButton", background=[('active', '#1B78D0'), ('disabled', '#5A6982')])
 
         self._ensure_prompt_slots()
         self._build_ui()
@@ -429,8 +430,8 @@ class FlowVisionApp:
     def _set_initial_window_size(self):
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        w = min(1260, max(980, int(sw * 0.94)))
-        h = min(920, max(680, int(sh * 0.86)))
+        w = min(1180, max(940, int(sw * 0.90)))
+        h = min(860, max(660, int(sh * 0.82)))
         x = max((sw - w) // 2, 0)
         y = max((sh - h) // 2, 0)
         self.root.geometry(f"{w}x{h}+{x}+{y}")
@@ -2083,29 +2084,36 @@ class FlowVisionApp:
 
     def _build_ui(self):
         # 1. Header (High Visibility)
-        header = tk.Frame(self.root, bg="#F8F9FA", height=72, highlightbackground="#DEE2E6", highlightthickness=1)
+        header = tk.Frame(self.root, bg=self.color_header, height=72, highlightbackground="#24324B", highlightthickness=1)
         header.pack(fill="x", side="top")
+        self.header = header
         
-        title_f = tk.Frame(header, bg="#F8F9FA")
+        title_f = tk.Frame(header, bg=self.color_header)
         title_f.pack(side="left", padx=20, pady=10)
-        tk.Label(title_f, text="Flow Veo 자동화 봇", font=("Malgun Gothic", 20, "bold"), bg="#F8F9FA", fg="#343A40").pack(anchor="w")
-        tk.Label(title_f, text="Ultimate V2 High-Vis Edition", font=("Malgun Gothic", 10), bg="#F8F9FA", fg="#868E96").pack(anchor="w")
+        tk.Label(title_f, text="Flow Classic Plus", font=("Malgun Gothic", 20, "bold"), bg=self.color_header, fg=self.color_text).pack(anchor="w")
+        tk.Label(title_f, text="클래식 개선판 - 원본과 구분되는 별도 작업본", font=("Malgun Gothic", 10), bg=self.color_header, fg=self.color_text_sec).pack(anchor="w")
 
-        center_f = tk.Frame(header, bg="#F8F9FA")
+        center_f = tk.Frame(header, bg=self.color_header)
         center_f.pack(side="left", fill="both", expand=True, padx=10)
-        tk.Label(center_f, text="진행 상황", font=("Malgun Gothic", 10), bg="#F8F9FA", fg="#868E96").pack(anchor="center", pady=(10, 0))
-        self.lbl_header_progress = tk.Label(center_f, text="0 / 0 (0.0%)", font=("Consolas", 13, "bold"), bg="#F8F9FA", fg=self.color_accent)
+        tk.Label(center_f, text="진행 상황", font=("Malgun Gothic", 10), bg=self.color_header, fg=self.color_text_sec).pack(anchor="center", pady=(10, 0))
+        self.lbl_header_progress = tk.Label(center_f, text="0 / 0 (0.0%)", font=("Consolas", 13, "bold"), bg=self.color_header, fg=self.color_accent)
         self.lbl_header_progress.pack(anchor="center")
 
-        status_f = tk.Frame(header, bg="#F8F9FA")
-        status_f.pack(side="right", padx=30, fill="y")
-        tk.Label(status_f, text="현재 상태", font=("Malgun Gothic", 10), bg="#F8F9FA", fg="#868E96").pack(anchor="e")
-        self.lbl_main_status = tk.Label(status_f, text="준비 완료", font=("Malgun Gothic", 16, "bold"), bg="#F8F9FA", fg=self.color_success)
+        nav_f = tk.Frame(header, bg=self.color_header)
+        nav_f.pack(side="right", padx=12, pady=12)
+        self.btn_go_home = ttk.Button(nav_f, text="🏠 메인 메뉴", command=self.show_home_menu)
+        self.btn_go_home.pack(side="left", padx=(0, 8))
+
+        status_f = tk.Frame(header, bg=self.color_header)
+        status_f.pack(side="right", padx=18, fill="y")
+        tk.Label(status_f, text="현재 상태", font=("Malgun Gothic", 10), bg=self.color_header, fg=self.color_text_sec).pack(anchor="e")
+        self.lbl_main_status = tk.Label(status_f, text="준비 완료", font=("Malgun Gothic", 16, "bold"), bg=self.color_header, fg=self.color_success)
         self.lbl_main_status.pack(anchor="e")
 
         # 2. Body
         mid_frame = tk.Frame(self.root, bg=self.color_bg, pady=10)
         mid_frame.pack(fill="both", expand=True, padx=8)
+        self.mid_frame = mid_frame
 
         self.body_pane = ttk.Panedwindow(mid_frame, orient="horizontal")
         self.body_pane.pack(fill="both", expand=True)
@@ -2115,6 +2123,7 @@ class FlowVisionApp:
         self.left_container.pack_propagate(False) # 고정 너비 유지
 
         canvas = tk.Canvas(self.left_container, bg=self.color_bg, highlightthickness=0)
+        self.left_canvas = canvas
         scrollbar = ttk.Scrollbar(self.left_container, orient="vertical", command=canvas.yview)
         scrollable_frame = tk.Frame(canvas, bg=self.color_bg)
 
@@ -2258,6 +2267,7 @@ class FlowVisionApp:
         self.combo_typing_speed.bind("<<ComboboxSelected>>", self.on_option_toggle)
 
         asset_body, _set_asset_open = self._create_collapsible_section(left_card, "S001~S### 에셋 자동 반복", opened=False)
+        self._set_asset_open = _set_asset_open
         asset_f = tk.Frame(asset_body, bg=self.color_bg)
         asset_f.pack(fill="x", pady=6)
         self.asset_loop_var = tk.BooleanVar(value=self.cfg.get("asset_loop_enabled", False))
@@ -2360,6 +2370,7 @@ class FlowVisionApp:
         ttk.Button(asset_btn_f, text="🧪 에셋 selector 테스트", command=self.on_test_asset_selectors).pack(side="left", padx=6)
 
         dl_body, _set_dl_open = self._create_collapsible_section(left_card, "다운로드 자동화", opened=False)
+        self._set_dl_open = _set_dl_open
         dl_f = tk.Frame(dl_body, bg=self.color_bg)
         dl_f.pack(fill="x", pady=6)
 
@@ -2451,6 +2462,7 @@ class FlowVisionApp:
 
         # Relay (Accordion: 기본 접힘)
         relay_body, _set_relay_open = self._create_collapsible_section(left_card, "이어달리기 / 문서 선택", opened=False)
+        self._set_relay_open = _set_relay_open
         relay_f = tk.Frame(relay_body, bg=self.color_bg)
         relay_f.pack(fill="x", pady=6)
         c3 = tk.Checkbutton(relay_f, text="이어달리기 (파일 순차 실행)", variable=tk.BooleanVar(), command=self.on_option_toggle, bg=self.color_bg, font=("Malgun Gothic", 10), activebackground=self.color_bg)
@@ -2502,6 +2514,7 @@ class FlowVisionApp:
 
         # 예약 (Accordion: 기본 접힘)
         sched_body, _set_sched_open = self._create_collapsible_section(left_card, "예약 시작 설정(고급)", opened=False)
+        self._set_sched_open = _set_sched_open
         sched_card = tk.Frame(sched_body, bg=self.color_bg)
         sched_card.pack(fill="x", pady=(14, 2))
         tk.Label(sched_card, text="4. 1회 예약 시작 (특정 날짜/시간)", font=("Malgun Gothic", 11, "bold"), fg=self.color_text).pack(anchor="w")
@@ -2656,6 +2669,7 @@ class FlowVisionApp:
         # 3. Bottom
         bottom = tk.Frame(self.root, bg=self.color_bg)
         bottom.pack(fill="x", expand=False, padx=20, pady=(0, 16))
+        self.bottom_frame = bottom
         
         file_top = tk.Frame(bottom, bg=self.color_bg)
         file_top.pack(fill="x", pady=5)
@@ -2673,6 +2687,82 @@ class FlowVisionApp:
         btn_add = ttk.Button(file_top, text="➕", width=3, command=self.on_add_slot)
         btn_add.pack(side="left", padx=2)
         ToolTip(btn_add, "새로운 프롬프트 슬롯 추가")
+
+        self._build_home_menu()
+
+    def _build_home_menu(self):
+        self.home_overlay = tk.Frame(self.root, bg=self.color_bg)
+        self.home_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+        wrap = tk.Frame(self.home_overlay, bg=self.color_bg)
+        wrap.pack(fill="both", expand=True, padx=24, pady=108)
+
+        top = tk.Frame(wrap, bg=self.color_bg)
+        top.pack(fill="x", pady=(0, 20))
+        tk.Label(top, text="Flow Classic Plus", font=("Malgun Gothic", 26, "bold"), bg=self.color_bg, fg=self.color_text).pack(anchor="w")
+        tk.Label(
+            top,
+            text="원본 클래식과 헷갈리지 않게, 여기서는 큰 메뉴에서 골라서 들어가면 됩니다.",
+            font=("Malgun Gothic", 11),
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+        ).pack(anchor="w", pady=(6, 0))
+
+        grid = tk.Frame(wrap, bg=self.color_bg)
+        grid.pack(fill="both", expand=True)
+        for col in range(2):
+            grid.grid_columnconfigure(col, weight=1, uniform="home")
+        for row in range(2):
+            grid.grid_rowconfigure(row, weight=1, uniform="home")
+
+        self._make_home_card(grid, 0, 0, "📝 프롬프트 자동화", "일반 프롬프트 작업으로 바로 들어갑니다.", lambda: self.open_home_target("prompt"))
+        self._make_home_card(grid, 0, 1, "🔁 S001 자동화", "S001 형식 반복 작업 화면으로 들어갑니다.", lambda: self.open_home_target("asset"))
+        self._make_home_card(grid, 1, 0, "⬇ 다운로드 자동화", "이미지/영상 다운로드 설정으로 들어갑니다.", lambda: self.open_home_target("download"))
+        self._make_home_card(grid, 1, 1, "⚙ 전체 설정 보기", "클래식 전체 설정 화면을 그대로 엽니다.", lambda: self.open_home_target("all"))
+
+    def _make_home_card(self, parent, row, col, title, desc, command):
+        card = tk.Frame(parent, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1, cursor="hand2")
+        card.grid(row=row, column=col, sticky="nsew", padx=10, pady=10)
+        inner = tk.Frame(card, bg=self.color_card)
+        inner.pack(fill="both", expand=True, padx=18, pady=18)
+        tk.Label(inner, text=title, font=("Malgun Gothic", 18, "bold"), bg=self.color_card, fg=self.color_text).pack(anchor="w")
+        tk.Label(inner, text=desc, font=("Malgun Gothic", 10), bg=self.color_card, fg=self.color_text_sec, wraplength=320, justify="left").pack(anchor="w", pady=(10, 18))
+        ttk.Button(inner, text="들어가기", command=command).pack(anchor="w")
+
+        for widget in (card, inner):
+            widget.bind("<Button-1>", lambda _e, cb=command: cb())
+
+    def show_home_menu(self):
+        if hasattr(self, "home_overlay"):
+            self.home_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+            self.home_overlay.lift()
+
+    def hide_home_menu(self):
+        if hasattr(self, "home_overlay"):
+            self.home_overlay.place_forget()
+
+    def open_home_target(self, target):
+        self.hide_home_menu()
+        try:
+            if hasattr(self, "_set_asset_open"):
+                self._set_asset_open(target == "asset")
+            if hasattr(self, "_set_dl_open"):
+                self._set_dl_open(target == "download")
+            if hasattr(self, "_set_relay_open"):
+                self._set_relay_open(False)
+            if hasattr(self, "_set_sched_open"):
+                self._set_sched_open(False)
+            if hasattr(self, "left_canvas"):
+                if target == "prompt":
+                    self.left_canvas.yview_moveto(0.0)
+                elif target == "asset":
+                    self.left_canvas.yview_moveto(0.30)
+                elif target == "download":
+                    self.left_canvas.yview_moveto(0.52)
+                else:
+                    self.left_canvas.yview_moveto(0.0)
+        except Exception:
+            pass
 
         # [NEW] Delete Slot Button
         btn_del = ttk.Button(file_top, text="🗑️", width=3, command=self.on_delete_slot)
