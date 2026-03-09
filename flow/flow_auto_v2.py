@@ -128,7 +128,7 @@ DEFAULT_CONFIG = {
     "download_mode": "video",  # video / image
     "download_video_quality": "1080P",
     "download_image_quality": "4K",
-    "download_wait_seconds": 60,
+    "download_wait_seconds": 20,
     "download_search_input_selector": "",
     "download_video_filter_selector": "",
     "download_image_filter_selector": "",
@@ -390,6 +390,7 @@ class FlowVisionApp:
         self.download_index = 0
         self.download_session_log = []
         self.download_report_path = None
+        self.completion_summary_path = None
         self.prompt_image_baseline_ready = False
         self.asset_image_baseline_ready = False
         self.current_media_state = None
@@ -1843,7 +1844,7 @@ class FlowVisionApp:
             raise RuntimeError("브라우저 페이지가 없습니다.")
         mode = "image" if mode == "image" else "video"
         quality = self._download_quality(mode) if not quality else str(quality).strip().upper()
-        wait_sec = max(10, min(120, int(wait_sec)))
+        wait_sec = max(3, min(120, int(wait_sec)))
         used = {"search_input": "", "filter": "", "card": "", "more": "", "menu": "", "quality": ""}
 
         self._click_download_filter(mode, used)
@@ -2073,12 +2074,109 @@ class FlowVisionApp:
         return None
 
     def _show_completion_popup(self):
+        run_mode = self.current_run_mode
+        try:
+            if run_mode == "download":
+                self.save_download_report()
+            else:
+                self.save_session_report()
+        except Exception:
+            pass
+        payload = self._build_completion_payload(run_mode)
+        try:
+            self._save_completion_summary(payload)
+        except Exception as e:
+            self.log(f"⚠️ 완료 요약 저장 실패: {e}")
+
         def _done_ui():
             self.on_stop()
             self.play_sound("finish")
             self.update_status_label("🎉 전체 완료!", self.color_success)
-            messagebox.showinfo("작업 완료", "모든 작업이 완료되어 자동으로 중지되었습니다.")
+            messagebox.showinfo("작업 완료", self._format_completion_popup_text(payload))
         self.root.after(0, _done_ui)
+
+    def _build_completion_payload(self, run_mode=None):
+        mode = run_mode or self.current_run_mode or "prompt"
+        started_at = getattr(self, "session_start_time", None)
+        ended_at = datetime.now()
+        if mode == "download":
+            entries = list(getattr(self, "download_session_log", []) or [])
+            failed = [x for x in entries if x.get("status") != "success"]
+            success = len(entries) - len(failed)
+            return {
+                "run_mode": "download",
+                "title": "다운로드 자동화",
+                "started_at": started_at,
+                "ended_at": ended_at,
+                "total": len(entries),
+                "success": success,
+                "failed": len(failed),
+                "failed_tags": [x.get("tag", "") for x in failed if x.get("tag")],
+                "prompt_file": "",
+                "output_dir": str(self._resolve_download_output_dir()),
+                "action_log_path": str(self.action_log_path) if self.action_log_path else "",
+                "report_path": str(self.download_report_path) if self.download_report_path else "",
+            }
+        entries = list(getattr(self, "session_log", []) or [])
+        return {
+            "run_mode": mode,
+            "title": "S자동화" if mode == "asset" else "프롬프트 자동화",
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "total": len(entries),
+            "success": len(entries),
+            "failed": 0,
+            "failed_tags": [],
+            "prompt_file": str(self.cfg.get("prompts_file", "") or ""),
+            "output_dir": "",
+            "action_log_path": str(self.action_log_path) if self.action_log_path else "",
+            "report_path": str(self.session_report_path) if self.session_report_path else "",
+        }
+
+    def _format_completion_popup_text(self, payload):
+        started_at = payload.get("started_at")
+        ended_at = payload.get("ended_at")
+        try:
+            duration_sec = max(0, int((ended_at - started_at).total_seconds())) if started_at and ended_at else 0
+        except Exception:
+            duration_sec = 0
+        mm, ss = divmod(duration_sec, 60)
+        hh, mm = divmod(mm, 60)
+        duration_text = f"{hh:02d}:{mm:02d}:{ss:02d}"
+        lines = [
+            f"작업 종류: {payload.get('title', '자동화')}",
+            f"시작: {started_at.strftime('%Y-%m-%d %H:%M:%S') if hasattr(started_at, 'strftime') else '-'}",
+            f"종료: {ended_at.strftime('%Y-%m-%d %H:%M:%S') if hasattr(ended_at, 'strftime') else '-'}",
+            f"총 소요 시간: {duration_text}",
+            f"총 작업 수: {payload.get('total', 0)}",
+            f"성공: {payload.get('success', 0)}",
+            f"실패: {payload.get('failed', 0)}",
+        ]
+        if payload.get("prompt_file"):
+            lines.append(f"프롬프트 파일: {payload.get('prompt_file')}")
+        if payload.get("output_dir"):
+            lines.append(f"저장 폴더: {payload.get('output_dir')}")
+        failed_tags = payload.get("failed_tags", []) or []
+        if failed_tags:
+            preview = ", ".join(failed_tags[:8])
+            if len(failed_tags) > 8:
+                preview += f" 외 {len(failed_tags) - 8}개"
+            lines.append(f"실패 항목: {preview}")
+        if payload.get("action_log_path"):
+            lines.append(f"행동 로그: {payload.get('action_log_path')}")
+        if payload.get("report_path"):
+            lines.append(f"리포트: {payload.get('report_path')}")
+        if getattr(self, "completion_summary_path", None):
+            lines.append(f"완료 요약: {self.completion_summary_path}")
+        return "\n".join(lines)
+
+    def _save_completion_summary(self, payload):
+        stamp_base = getattr(self, "session_start_time", datetime.now())
+        stamp = stamp_base.strftime("%Y%m%d_%H%M%S") if hasattr(stamp_base, "strftime") else datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.completion_summary_path = self.logs_dir / f"completion_summary_{stamp}.txt"
+        text = self._format_completion_popup_text(payload)
+        self.completion_summary_path.write_text(text, encoding="utf-8")
+        self.log(f"🧾 완료 요약 저장: {self.completion_summary_path.name}")
 
     def update_status_label(self, text, color):
         if color == "white": color = self.color_text
@@ -2720,6 +2818,30 @@ class FlowVisionApp:
         )
         self.combo_download_image_quality.pack(side="left", padx=(6, 0))
         self.combo_download_image_quality.bind("<<ComboboxSelected>>", self.on_option_toggle)
+
+        wait_f = tk.Frame(dl_f, bg=self.color_bg)
+        wait_f.pack(fill="x", pady=(0, 6))
+        tk.Label(wait_f, text="실패 판단 대기(초)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        self.download_wait_seconds_var = tk.StringVar(value=str(self.cfg.get("download_wait_seconds", 20)))
+        self.entry_download_wait = tk.Entry(
+            wait_f,
+            textvariable=self.download_wait_seconds_var,
+            width=6,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=("Consolas", 10),
+        )
+        self.entry_download_wait.pack(side="left", padx=(6, 10), ipady=2)
+        self.entry_download_wait.bind("<FocusOut>", self.on_option_toggle)
+        self.entry_download_wait.bind("<Return>", self.on_option_toggle)
+        tk.Label(
+            wait_f,
+            text="재시도 없이 이 시간 뒤 다음 항목으로 넘어갑니다.",
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            font=("Malgun Gothic", 9),
+        ).pack(side="left")
 
         out_f = tk.Frame(dl_f, bg=self.color_bg)
         out_f.pack(fill="x", pady=(0, 6))
@@ -3431,6 +3553,11 @@ class FlowVisionApp:
         self.cfg["download_image_quality"] = self.download_image_quality_var.get().strip().upper() if hasattr(self, "download_image_quality_var") else str(self.cfg.get("download_image_quality", "4K"))
         if self.cfg["download_image_quality"] not in ("1K", "2K", "4K"):
             self.cfg["download_image_quality"] = "4K"
+        try:
+            raw_download_wait = self.download_wait_seconds_var.get().strip() if hasattr(self, "download_wait_seconds_var") else str(self.cfg.get("download_wait_seconds", 20))
+            self.cfg["download_wait_seconds"] = max(3, min(120, int(raw_download_wait or 20)))
+        except Exception:
+            self.cfg["download_wait_seconds"] = int(self.cfg.get("download_wait_seconds", 20) or 20)
         self.cfg["download_output_dir"] = self.download_output_dir_var.get().strip() if hasattr(self, "download_output_dir_var") else self.cfg.get("download_output_dir", "")
         self.cfg["download_search_input_selector"] = self.download_search_input_selector_var.get().strip() if hasattr(self, "download_search_input_selector_var") else self.cfg.get("download_search_input_selector", "")
         self.cfg["download_video_filter_selector"] = self.download_video_filter_selector_var.get().strip() if hasattr(self, "download_video_filter_selector_var") else self.cfg.get("download_video_filter_selector", "")
@@ -5559,6 +5686,7 @@ class FlowVisionApp:
             self.session_log = []
             self._open_action_log("download_trace" if is_download_mode else "action_trace")
             self.session_report_path = self.logs_dir / f"session_report_{self.session_start_time.strftime('%Y%m%d_%H%M%S')}.json"
+            self.completion_summary_path = None
             if is_download_mode:
                 self.download_report_path = self.logs_dir / f"download_report_{self.session_start_time.strftime('%Y%m%d_%H%M%S')}.json"
         self.running = True
@@ -5580,7 +5708,7 @@ class FlowVisionApp:
         self.on_option_toggle()
         if is_download_mode:
             mode_label = "영상" if self._download_mode() == "video" else "이미지"
-            self.log(f"🚀 다운로드 자동화 시작 ({mode_label}, {len(self.download_items)}개)")
+            self.log(f"🚀 다운로드 자동화 시작 | 모드={mode_label} | 대상={len(self.download_items)}개 | 실패판단대기={self.cfg.get('download_wait_seconds', 20)}초")
         elif self.cfg.get("asset_loop_enabled"):
             self.log("🚀 S반복 자동화 시작")
         else:
@@ -6199,7 +6327,7 @@ class FlowVisionApp:
         quality = self._download_quality(mode)
         tag = self.download_items[self.download_index]
         started_at = datetime.now()
-        self.log(f"📁 다운로드 저장 폴더: {self._resolve_download_output_dir()}")
+        self.log(f"⬇️ 다운로드 시작: {tag} | {mode}/{quality}")
 
         try:
             self._ensure_browser_session()
@@ -6234,11 +6362,10 @@ class FlowVisionApp:
                 "ended_at": datetime.now().isoformat(),
                 "error": "",
             })
-            self.log(f"✅ 다운로드 성공: {tag} ({mode}/{quality}) {file_name}")
-            if file_path:
-                self.log(f"📂 저장 위치: {file_path}")
+            self.log(f"✅ 다운로드 성공: {tag} -> {file_name or '파일명 확인 필요'}")
             self.play_sound("success")
         except Exception as e:
+            short_err = str(e).strip().splitlines()[0][:120]
             self.download_session_log.append({
                 "tag": tag,
                 "mode": mode,
@@ -6248,9 +6375,10 @@ class FlowVisionApp:
                 "file_path": "",
                 "started_at": started_at.isoformat(),
                 "ended_at": datetime.now().isoformat(),
-                "error": str(e),
+                "error": short_err,
             })
-            self.log(f"⚠️ 다운로드 실패: {tag} | 이유: {e}")
+            self.log(f"❌ 다운로드 실패: {tag} | {short_err}")
+            self.log(f"↪ 재시도 없이 다음 항목으로 이동: {tag}")
             self.update_status_label(f"⚠️ 실패 후 다음으로 이동: {tag}", self.color_error)
         finally:
             self.download_index += 1
@@ -6449,12 +6577,17 @@ class FlowVisionApp:
                 "mode": self._download_mode(),
                 "video_quality": self._download_quality("video"),
                 "image_quality": self._download_quality("image"),
+                "failure_wait_seconds": int(self.cfg.get("download_wait_seconds", 20) or 20),
                 "output_dir": str(self._resolve_download_output_dir()),
                 "total": len(self.download_session_log),
                 "success": len(self.download_session_log) - len(failed),
                 "failed": len(failed),
                 "failed_tags": [x.get("tag", "") for x in failed],
                 "entries": self.download_session_log,
+                "summary_lines": [
+                    f"{x.get('tag', '')} | {'성공' if x.get('status') == 'success' else '실패'} | {x.get('mode', '')}/{x.get('quality', '')} | {(x.get('file_name') or x.get('error') or '').strip()}"
+                    for x in self.download_session_log
+                ],
             }
             self.download_report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             self.log(f"🧾 다운로드 리포트 저장: {self.download_report_path.name}")
