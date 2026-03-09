@@ -98,6 +98,10 @@ DEFAULT_CONFIG = {
     "language_mode": "en",
     "input_mode": "typing", # typing, paste, mixed
     "typing_speed_profile": "normal",
+    "prompt_mode_preset_enabled": True,
+    "prompt_media_mode": "image",
+    "prompt_orientation": "landscape",
+    "prompt_variant_count": "x1",
     "asset_loop_enabled": False,
     "asset_loop_start": 1,
     "asset_loop_end": 1,
@@ -138,6 +142,11 @@ DEFAULT_CONFIG = {
     "ref_img4_area": None,
     "ref_img5_area": None
 }
+
+PROMPT_MEDIA_LABELS = {"image": "이미지", "video": "영상"}
+PROMPT_MEDIA_VALUES = {label: value for value, label in PROMPT_MEDIA_LABELS.items()}
+PROMPT_ORIENTATION_LABELS = {"landscape": "가로", "portrait": "세로"}
+PROMPT_ORIENTATION_VALUES = {label: value for value, label in PROMPT_ORIENTATION_LABELS.items()}
 
 SLOT_FILE_REGEX = re.compile(r"^flow_prompts_slot_?(\d+)\.txt$", re.IGNORECASE)
 
@@ -2266,6 +2275,74 @@ class FlowVisionApp:
         self.combo_typing_speed.pack(side="left", padx=(8, 0))
         self.combo_typing_speed.bind("<<ComboboxSelected>>", self.on_option_toggle)
 
+        preset_body, _set_preset_open = self._create_collapsible_section(left_card, "프롬프트 생성 옵션 자동 맞춤", opened=True)
+        self._set_prompt_preset_open = _set_preset_open
+        preset_f = tk.Frame(preset_body, bg=self.color_bg)
+        preset_f.pack(fill="x", pady=6)
+
+        self.prompt_mode_preset_enabled_var = tk.BooleanVar(value=self.cfg.get("prompt_mode_preset_enabled", True))
+        tk.Checkbutton(
+            preset_f,
+            text="프롬프트 입력 전에 생성 옵션 자동 맞추기",
+            variable=self.prompt_mode_preset_enabled_var,
+            command=self.on_option_toggle,
+            bg=self.color_bg,
+            font=("Malgun Gothic", 10),
+            activebackground=self.color_bg,
+        ).pack(anchor="w")
+
+        preset_row = tk.Frame(preset_f, bg=self.color_bg)
+        preset_row.pack(fill="x", pady=(8, 4))
+
+        tk.Label(preset_row, text="모드", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        media_label = PROMPT_MEDIA_LABELS.get(self.cfg.get("prompt_media_mode", "image"), "이미지")
+        self.prompt_media_mode_var = tk.StringVar(value=media_label)
+        self.combo_prompt_media_mode = ttk.Combobox(
+            preset_row,
+            textvariable=self.prompt_media_mode_var,
+            state="readonly",
+            width=8,
+            values=tuple(PROMPT_MEDIA_VALUES.keys()),
+            font=("Malgun Gothic", 9),
+        )
+        self.combo_prompt_media_mode.pack(side="left", padx=(6, 12))
+        self.combo_prompt_media_mode.bind("<<ComboboxSelected>>", self.on_option_toggle)
+
+        tk.Label(preset_row, text="방향", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        orientation_label = PROMPT_ORIENTATION_LABELS.get(self.cfg.get("prompt_orientation", "landscape"), "가로")
+        self.prompt_orientation_var = tk.StringVar(value=orientation_label)
+        self.combo_prompt_orientation = ttk.Combobox(
+            preset_row,
+            textvariable=self.prompt_orientation_var,
+            state="readonly",
+            width=8,
+            values=tuple(PROMPT_ORIENTATION_VALUES.keys()),
+            font=("Malgun Gothic", 9),
+        )
+        self.combo_prompt_orientation.pack(side="left", padx=(6, 12))
+        self.combo_prompt_orientation.bind("<<ComboboxSelected>>", self.on_option_toggle)
+
+        tk.Label(preset_row, text="개수", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        self.prompt_variant_count_var = tk.StringVar(value=str(self.cfg.get("prompt_variant_count", "x1")).strip() or "x1")
+        self.combo_prompt_variant = ttk.Combobox(
+            preset_row,
+            textvariable=self.prompt_variant_count_var,
+            state="readonly",
+            width=6,
+            values=("x1", "x2", "x3", "x4"),
+            font=("Malgun Gothic", 9),
+        )
+        self.combo_prompt_variant.pack(side="left", padx=(6, 0))
+        self.combo_prompt_variant.bind("<<ComboboxSelected>>", self.on_option_toggle)
+
+        tk.Label(
+            preset_f,
+            text="※ 다운로드용이 아니라, 프롬프트 입력창 아래 생성 옵션을 먼저 맞추는 기능입니다.",
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            font=("Malgun Gothic", 9),
+        ).pack(anchor="w", pady=(2, 0))
+
         asset_body, _set_asset_open = self._create_collapsible_section(left_card, "S001~S### 에셋 자동 반복", opened=False)
         self._set_asset_open = _set_asset_open
         asset_f = tk.Frame(asset_body, bg=self.color_bg)
@@ -3022,6 +3099,13 @@ class FlowVisionApp:
         self.cfg["scheduled_start_enabled"] = self.schedule_var.get() if hasattr(self, "schedule_var") else self.cfg.get("scheduled_start_enabled", False)
         self.cfg["scheduled_start_at"] = self.schedule_text_var.get().strip() if hasattr(self, "schedule_text_var") else self.cfg.get("scheduled_start_at", "")
         self.cfg["language_mode"] = "ko_en" if self.lang_var.get() else "en"
+        self.cfg["prompt_mode_preset_enabled"] = self.prompt_mode_preset_enabled_var.get() if hasattr(self, "prompt_mode_preset_enabled_var") else self.cfg.get("prompt_mode_preset_enabled", True)
+        media_label = self.prompt_media_mode_var.get().strip() if hasattr(self, "prompt_media_mode_var") else ""
+        self.cfg["prompt_media_mode"] = PROMPT_MEDIA_VALUES.get(media_label, self.cfg.get("prompt_media_mode", "image"))
+        orientation_label = self.prompt_orientation_var.get().strip() if hasattr(self, "prompt_orientation_var") else ""
+        self.cfg["prompt_orientation"] = PROMPT_ORIENTATION_VALUES.get(orientation_label, self.cfg.get("prompt_orientation", "landscape"))
+        variant_value = self.prompt_variant_count_var.get().strip().lower() if hasattr(self, "prompt_variant_count_var") else ""
+        self.cfg["prompt_variant_count"] = variant_value if variant_value in {"x1", "x2", "x3", "x4"} else str(self.cfg.get("prompt_variant_count", "x1")).strip().lower() or "x1"
         self.cfg["asset_loop_enabled"] = self.asset_loop_var.get() if hasattr(self, "asset_loop_var") else self.cfg.get("asset_loop_enabled", False)
         raw_start = ""
         raw_end = ""
@@ -3493,6 +3577,98 @@ class FlowVisionApp:
             return input_loc, resolved_selector
 
         return None, None
+
+    def _prompt_media_candidates(self, media_mode):
+        media_mode = "video" if str(media_mode).strip().lower() == "video" else "image"
+        target = "Video" if media_mode == "video" else "Image"
+        alt = "영상" if media_mode == "video" else "이미지"
+        return [
+            f"button:text-is('{target}')",
+            f"[role='button']:text-is('{target}')",
+            f"button:has-text('{target}')",
+            f"[role='button']:has-text('{target}')",
+            f"button[aria-label*='{target.lower()}' i]",
+            f"[role='button'][aria-label*='{target.lower()}' i]",
+            f"button:has-text('{alt}')",
+            f"[role='button']:has-text('{alt}')",
+        ]
+
+    def _prompt_orientation_candidates(self, orientation):
+        orientation = "portrait" if str(orientation).strip().lower() == "portrait" else "landscape"
+        target = "세로 모드" if orientation == "portrait" else "가로 모드"
+        key = "세로" if orientation == "portrait" else "가로"
+        return [
+            f"button:text-is('{target}')",
+            f"[role='button']:text-is('{target}')",
+            f"button:has-text('{target}')",
+            f"[role='button']:has-text('{target}')",
+            f"button[aria-label*='{key}' i]",
+            f"[role='button'][aria-label*='{key}' i]",
+        ]
+
+    def _prompt_variant_candidates(self, variant_count):
+        target = str(variant_count or "x1").strip().lower()
+        if target not in {"x1", "x2", "x3", "x4"}:
+            target = "x1"
+        upper = target.upper()
+        return [
+            f"button:text-is('{target}')",
+            f"[role='button']:text-is('{target}')",
+            f"button:text-is('{upper}')",
+            f"[role='button']:text-is('{upper}')",
+            f"button:has-text('{target}')",
+            f"[role='button']:has-text('{target}')",
+        ]
+
+    def _apply_prompt_generation_preset(self, input_locator=None):
+        if not self.page:
+            return
+        if not self.cfg.get("prompt_mode_preset_enabled", True):
+            self.log("ℹ️ 프롬프트 생성 옵션 자동 맞춤: 사용 안 함")
+            return
+
+        near_cx = None
+        near_cy = None
+        try:
+            box = input_locator.bounding_box() if input_locator is not None else None
+            if box:
+                near_cx = float(box["x"]) + float(box["width"]) * 0.5
+                near_cy = float(box["y"]) - 40.0
+        except Exception:
+            pass
+
+        steps = [
+            ("생성 모드", self._prompt_media_candidates(self.cfg.get("prompt_media_mode", "image"))),
+            ("화면 방향", self._prompt_orientation_candidates(self.cfg.get("prompt_orientation", "landscape"))),
+            ("생성 개수", self._prompt_variant_candidates(self.cfg.get("prompt_variant_count", "x1"))),
+        ]
+
+        for label, candidates in steps:
+            locator = None
+            used_selector = None
+            for _ in range(10):
+                locator, used_selector = self._resolve_best_locator(
+                    candidates,
+                    timeout_ms=700,
+                    near_cx=near_cx,
+                    near_cy=near_cy,
+                    prefer_enabled=False,
+                )
+                if locator is not None:
+                    break
+                time.sleep(0.2)
+            if locator is None:
+                self.log(f"⚠️ {label} 버튼을 찾지 못해 건너뜁니다.")
+                continue
+            ok = self._click_with_actor_fallback(locator, label)
+            if ok:
+                self.log(f"🎛️ {label} 자동 적용: {used_selector or '텍스트 버튼'}")
+                try:
+                    self.actor.random_action_delay(f"{label} 적용 후 짧은 대기", 0.12, 0.45)
+                except Exception:
+                    pass
+            else:
+                self.log(f"⚠️ {label} 클릭에 실패해 건너뜁니다.")
 
     def _read_input_text(self, input_locator):
         if input_locator is None:
@@ -4856,6 +5032,12 @@ class FlowVisionApp:
                 self.cfg["input_selector"] = resolved_input_selector
                 self.root.after(0, lambda v=resolved_input_selector: self.input_selector_var.set(v))
             self.save_config()
+
+            try:
+                self.update_status_label("🎛️ 생성 옵션 맞추는 중...", self.color_info)
+                self._apply_prompt_generation_preset(input_locator=input_locator)
+            except Exception as e:
+                self.log(f"⚠️ 프롬프트 생성 옵션 자동 맞춤 실패: {e}")
 
             if self.cfg.get("afk_mode") and random.random() < 0.5:
                 self.actor.random_behavior_routine()
