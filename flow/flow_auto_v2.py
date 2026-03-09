@@ -4302,7 +4302,8 @@ class FlowVisionApp:
 
         raw_id = str(info.get("id") or "").strip()
         if raw_id:
-            return f"#{raw_id}"
+            esc_id = raw_id.replace("\\", "\\\\").replace("'", "\\'")
+            return f"button[id='{esc_id}']"
 
         raw_aria = str(info.get("aria") or "").strip()
         if raw_aria:
@@ -4776,6 +4777,7 @@ class FlowVisionApp:
 
     def _auto_detect_prompt_preset_selectors_worker(self):
         try:
+            self._open_action_log("prompt_preset_detect")
             self.update_status_label("🔍 생성 옵션 selector 자동 탐색 중...", self.color_info)
             self._ensure_browser_session()
             self.actor.set_page(self.page)
@@ -4851,9 +4853,12 @@ class FlowVisionApp:
         except Exception as e:
             self.log(f"❌ 생성 옵션 selector 자동찾기 실패: {e}")
             self.update_status_label("❌ 생성 옵션 selector 자동찾기 실패", self.color_error)
+        finally:
+            self._close_action_log()
 
     def _auto_detect_asset_prompt_preset_selectors_worker(self):
         try:
+            self._open_action_log("asset_preset_detect")
             self.update_status_label("🔍 S 생성 옵션 selector 자동 탐색 중...", self.color_info)
             self._ensure_browser_session()
             self.actor.set_page(self.page)
@@ -4928,6 +4933,8 @@ class FlowVisionApp:
         except Exception as e:
             self.log(f"❌ S 생성 옵션 selector 자동찾기 실패: {e}")
             self.update_status_label("❌ S 생성 옵션 selector 자동찾기 실패", self.color_error)
+        finally:
+            self._close_action_log()
 
     def on_test_prompt_preset_selectors(self):
         if self.running:
@@ -4945,6 +4952,7 @@ class FlowVisionApp:
 
     def _test_prompt_preset_selectors_worker(self):
         try:
+            self._open_action_log("prompt_preset_test")
             self.update_status_label("🧪 생성 옵션 테스트 중...", self.color_info)
             self._ensure_browser_session()
             self.actor.set_page(self.page)
@@ -4982,9 +4990,12 @@ class FlowVisionApp:
         except Exception as e:
             self.log(f"❌ 생성 옵션 테스트 실패: {e}")
             self.update_status_label("❌ 생성 옵션 테스트 실패", self.color_error)
+        finally:
+            self._close_action_log()
 
     def _test_asset_prompt_preset_selectors_worker(self):
         try:
+            self._open_action_log("asset_preset_test")
             self.update_status_label("🧪 S 생성 옵션 테스트 중...", self.color_info)
             self._ensure_browser_session()
             self.actor.set_page(self.page)
@@ -5022,6 +5033,8 @@ class FlowVisionApp:
         except Exception as e:
             self.log(f"❌ S 생성 옵션 테스트 실패: {e}")
             self.update_status_label("❌ S 생성 옵션 테스트 실패", self.color_error)
+        finally:
+            self._close_action_log()
 
     def on_auto_detect_asset_selectors(self):
         if self.running:
