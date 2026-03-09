@@ -2119,6 +2119,16 @@ class FlowVisionApp:
             self.lbl_typing_speed_value.config(text=f"x{level}")
         self.on_option_toggle()
 
+    def _prompt_preset_selector_summary(self):
+        media = str(self.cfg.get("prompt_media_mode_selector", "") or "").strip() or "-"
+        orientation = str(self.cfg.get("prompt_orientation_selector", "") or "").strip() or "-"
+        variant = str(self.cfg.get("prompt_variant_selector", "") or "").strip() or "-"
+        return f"저장된 selector | 모드: {media} | 방향: {orientation} | 개수: {variant}"
+
+    def _refresh_prompt_preset_selector_label(self):
+        if hasattr(self, "lbl_prompt_preset_selector"):
+            self.lbl_prompt_preset_selector.config(text=self._prompt_preset_selector_summary())
+
     def _build_ui(self):
         # 1. Header (High Visibility)
         header = tk.Frame(self.root, bg=self.color_header, height=64, highlightbackground="#24324B", highlightthickness=1)
@@ -2397,6 +2407,16 @@ class FlowVisionApp:
         preset_btn_f.pack(fill="x", pady=(8, 0))
         ttk.Button(preset_btn_f, text="🔍 생성 옵션 자동찾기", command=self.on_auto_detect_prompt_preset_selectors).pack(side="left")
         ttk.Button(preset_btn_f, text="🧪 생성 옵션 테스트", command=self.on_test_prompt_preset_selectors).pack(side="left", padx=6)
+        self.lbl_prompt_preset_selector = tk.Label(
+            preset_f,
+            text=self._prompt_preset_selector_summary(),
+            bg=self.color_bg,
+            fg=self.color_info,
+            font=("Consolas", 8),
+            justify="left",
+            wraplength=560,
+        )
+        self.lbl_prompt_preset_selector.pack(anchor="w", pady=(8, 0))
 
         asset_body, _set_asset_open = self._create_collapsible_section(left_card, "S001~S### 에셋 자동 반복", opened=False)
         self._set_asset_open = _set_asset_open
@@ -3290,6 +3310,7 @@ class FlowVisionApp:
             self.cfg["relay_end_slot"] = self.combo_relay_end.current()
         self.cfg["relay_selected_slots"] = self._normalize_relay_selected_slots(self.cfg.get("relay_selected_slots", []))
         self.save_config()
+        self._refresh_prompt_preset_selector_label()
         self._sync_relay_selection_label()
         if hasattr(self, 'actor'):
             self.actor.language_mode = self.cfg["language_mode"]
@@ -3731,6 +3752,7 @@ class FlowVisionApp:
             if val:
                 self.cfg[cfg_key] = val
         self.save_config()
+        self._refresh_prompt_preset_selector_label()
 
     def _apply_prompt_generation_preset(self, input_locator=None):
         if not self.page:
