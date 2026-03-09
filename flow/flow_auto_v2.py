@@ -4080,13 +4080,19 @@ class FlowVisionApp:
             else:
                 self.log(f"⚠️ {label} 클릭에 실패해 건너뜁니다.")
 
-        panel_closed = self._close_prompt_generation_panel(input_locator=input_locator)
-        if (not panel_closed) and (input_locator is not None):
-            try:
-                self.actor.move_to_locator(input_locator, "입력창 다시 포커스")
-                self.actor.smart_click("입력창 다시 포커스")
-            except Exception:
-                pass
+        try:
+            self.log("🔄 생성 옵션 적용 후 새로고침")
+            self.page.reload(wait_until="domcontentloaded", timeout=45000)
+        except Exception as e:
+            self.log(f"⚠️ 생성 옵션 적용 후 새로고침 실패: {e}")
+
+        try:
+            self.actor.random_action_delay("생성 옵션 적용 후 새로고침 안정화", 1.0, 2.4)
+        except Exception:
+            pass
+
+        input_hint = (self.cfg.get("input_selector") or "").strip() or "#PINHOLE_TEXT_AREA_ELEMENT_ID, textarea, [contenteditable='true'], [role='textbox']"
+        self._wait_until_input_visible(input_hint, timeout_sec=15)
 
     def _resolve_prompt_preset_controls(self, input_locator=None, profile="prompt"):
         if not self.page:
