@@ -5405,7 +5405,7 @@ class FlowVisionApp:
                     submitted = self._confirm_submission_started(input_locator, before_submit_text, timeout_sec=12)
                     attempt_notes.append(f"Button={'OK' if submitted else 'FAIL'}")
 
-            if not submitted:
+            if (not submitted) and (submit_locator is None):
                 try:
                     input_locator.click(timeout=1200)
                 except Exception:
