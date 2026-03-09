@@ -45,7 +45,7 @@ class HumanActor:
         self.mouse_x = 960.0
         self.mouse_y = 540.0
         self._viewport_cache = (1920, 1080)
-        self.typing_speed_profile = "normal"
+        self.typing_speed_profile = "x5"
         self.typing_speed_factor = 1.0
         self.action_delay_factor = 1.0
         self.thinking_delay_factor = 1.0
@@ -133,23 +133,38 @@ class HumanActor:
         self._apply_typing_speed_profile()
 
     def set_typing_speed_profile(self, profile: str):
-        profile = str(profile or "normal").strip().lower()
-        if profile not in ("slow", "normal", "fast", "turbo"):
-            profile = "normal"
+        profile = str(profile or "x5").strip().lower()
+        legacy_map = {
+            "slow": "x2",
+            "normal": "x5",
+            "fast": "x10",
+            "turbo": "x16",
+        }
+        profile = legacy_map.get(profile, profile)
+        m = None
+        try:
+            import re as _re
+            m = _re.match(r"^x([0-9]{1,2})$", profile)
+        except Exception:
+            m = None
+        if not m:
+            profile = "x5"
+            level = 5
+        else:
+            level = max(1, min(20, int(m.group(1))))
+            profile = f"x{level}"
         self.typing_speed_profile = profile
+        self.typing_speed_level = level
         self._apply_typing_speed_profile()
 
     def _apply_typing_speed_profile(self):
-        mapping = {
-            "slow": {"typing": 0.88, "action": 1.08, "thinking": 1.15},
-            "normal": {"typing": 1.0, "action": 1.0, "thinking": 1.0},
-            "fast": {"typing": 1.22, "action": 0.82, "thinking": 0.62},
-            "turbo": {"typing": 1.42, "action": 0.68, "thinking": 0.45},
-        }
-        chosen = mapping.get(self.typing_speed_profile, mapping["normal"])
-        self.typing_speed_factor = chosen["typing"]
-        self.action_delay_factor = chosen["action"]
-        self.thinking_delay_factor = chosen["thinking"]
+        level = max(1, min(20, int(getattr(self, "typing_speed_level", 5))))
+        self.typing_speed_factor = 0.65 + ((level - 1) / 19.0) * 5.35
+        self.action_delay_factor = max(0.12, 1.45 - ((level - 1) / 19.0) * 1.33)
+        self.thinking_delay_factor = max(0.10, 1.60 - ((level - 1) / 19.0) * 1.50)
+
+    def _speed_variation(self):
+        return random.uniform(0.7, 1.3)
 
     def get_active_traits(self):
         return self.active_traits
@@ -305,14 +320,14 @@ class HumanActor:
             time.sleep(random.uniform(0.03, 0.08))
 
     def random_action_delay(self, reason: str = "행동 딜레이", min_sec: float = 0.3, max_sec: float = 2.0) -> float:
-        delay = random.uniform(min_sec, max_sec) * self.action_delay_factor
+        delay = random.uniform(min_sec, max_sec) * self.action_delay_factor * self._speed_variation()
         delay = max(0.03, delay)
         self._log_action(f"{reason}: {delay:.2f}초 대기")
         time.sleep(delay)
         return delay
 
     def think_pause(self, reason: str = "생각 중", min_sec: float = 2.0, max_sec: float = 15.0) -> float:
-        pause = random.uniform(min_sec, max_sec) * self.thinking_delay_factor
+        pause = random.uniform(min_sec, max_sec) * self.thinking_delay_factor * self._speed_variation()
         pause = max(0.15, pause)
         self._log_action(f"{reason}: {pause:.2f}초")
         self._status(f"🤔 {reason} ({pause:.1f}초)")
@@ -444,7 +459,7 @@ class HumanActor:
                 self.page.keyboard.type(ch)
 
             # typing 모드 과도 지연(문자당 수초) 완화: 자연스러움은 유지하고 실사용 속도 보장
-            speed = max(0.65, min(self.cfg.get("speed_multiplier", 1.0) * self.typing_speed_factor, 2.4))
+            speed = max(0.45, min(self.cfg.get("speed_multiplier", 1.0) * self.typing_speed_factor * self._speed_variation(), 8.0))
             fatigue_slow = 1.0 + max(0.0, (1.0 - fatigue)) * 0.45
             if ch in [" ", "\n"]:
                 base_min, base_max = 0.015, 0.06
@@ -453,7 +468,7 @@ class HumanActor:
             else:
                 base_min, base_max = 0.025, 0.11
             delay = random.uniform(base_min, base_max) * (1.0 / speed) * fatigue_slow
-            delay = max(0.01, min(delay, 0.18))
+            delay = max(0.004, min(delay, 0.18))
             if speed_callback:
                 speed_callback(round(1.0 / max(delay, 0.01), 2))
 

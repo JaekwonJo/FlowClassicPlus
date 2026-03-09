@@ -97,7 +97,7 @@ DEFAULT_CONFIG = {
     "scheduled_start_at": "",
     "language_mode": "en",
     "input_mode": "typing", # typing, paste, mixed
-    "typing_speed_profile": "normal",
+    "typing_speed_profile": "x5",
     "prompt_mode_preset_enabled": True,
     "prompt_media_mode": "image",
     "prompt_orientation": "landscape",
@@ -412,6 +412,9 @@ class FlowVisionApp:
         self.color_info = "#57C7FF"
         self.color_text = "#F4F8FF"
         self.color_text_sec = "#9FB2CE"
+        self.color_input_bg = "#D4DBE7"
+        self.color_input_fg = "#0E1726"
+        self.color_input_soft = "#C2CDDD"
         self.root.configure(bg=self.color_bg)
         self.root.option_add("*Label.Foreground", self.color_text)
         self.root.option_add("*Label.Background", self.color_bg)
@@ -2167,19 +2170,19 @@ class FlowVisionApp:
 
         tk.Label(left_card, text="시작 URL", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
         self.start_url_var = tk.StringVar(value=self.cfg.get("start_url", "https://labs.google/flow"))
-        self.entry_start_url = tk.Entry(left_card, textvariable=self.start_url_var, bg="#FFFFFF", fg="black", font=("Consolas", 10))
+        self.entry_start_url = tk.Entry(left_card, textvariable=self.start_url_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
         self.entry_start_url.pack(fill="x", ipady=4, pady=(2, 8))
         self.entry_start_url.bind("<FocusOut>", self.on_option_toggle)
 
         tk.Label(left_card, text="입력창 CSS Selector", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
         self.input_selector_var = tk.StringVar(value=self.cfg.get("input_selector", "textarea, [contenteditable='true']"))
-        self.entry_input_selector = tk.Entry(left_card, textvariable=self.input_selector_var, bg="#FFFFFF", fg="black", font=("Consolas", 10))
+        self.entry_input_selector = tk.Entry(left_card, textvariable=self.input_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
         self.entry_input_selector.pack(fill="x", ipady=4, pady=(2, 8))
         self.entry_input_selector.bind("<FocusOut>", self.on_option_toggle)
 
         tk.Label(left_card, text="제출 버튼 CSS Selector", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
         self.submit_selector_var = tk.StringVar(value=self.cfg.get("submit_selector", "button[type='submit']"))
-        self.entry_submit_selector = tk.Entry(left_card, textvariable=self.submit_selector_var, bg="#FFFFFF", fg="black", font=("Consolas", 10))
+        self.entry_submit_selector = tk.Entry(left_card, textvariable=self.submit_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
         self.entry_submit_selector.pack(fill="x", ipady=4, pady=(2, 8))
         self.entry_submit_selector.bind("<FocusOut>", self.on_option_toggle)
 
@@ -2229,11 +2232,11 @@ class FlowVisionApp:
 
         tk.Label(left_card, text="새 프로젝트 버튼 selector(선택)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
         self.new_project_selector_var = tk.StringVar(value=self.cfg.get("new_project_selector", ""))
-        self.entry_new_project_selector = tk.Entry(left_card, textvariable=self.new_project_selector_var, bg="#FFFFFF", fg="black", font=("Consolas", 10))
+        self.entry_new_project_selector = tk.Entry(left_card, textvariable=self.new_project_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
         self.entry_new_project_selector.pack(fill="x", ipady=4, pady=(2, 8))
         self.entry_new_project_selector.bind("<FocusOut>", self.on_option_toggle)
 
-        self.lbl_coords = tk.Label(left_card, text=self._get_coord_text(), font=("Consolas", 9), fg=self.color_accent, bg="#F1F3F5", padx=5, pady=4)
+        self.lbl_coords = tk.Label(left_card, text=self._get_coord_text(), font=("Consolas", 9), fg=self.color_accent, bg=self.color_input_soft, padx=5, pady=4)
         self.lbl_coords.pack(fill="x", pady=(5, 16))
         
         # Options
@@ -2273,13 +2276,18 @@ class FlowVisionApp:
         speed_f = tk.Frame(left_card, bg=self.color_bg)
         speed_f.pack(fill="x", pady=(0, 8))
         tk.Label(speed_f, text="⚡ 타이핑 속도", bg=self.color_bg, font=("Malgun Gothic", 10, "bold")).pack(side="left")
-        self.typing_speed_profile_var = tk.StringVar(value=str(self.cfg.get("typing_speed_profile", "normal")).strip() or "normal")
+        speed_default = str(self.cfg.get("typing_speed_profile", "x5")).strip().lower() or "x5"
+        legacy_speed_map = {"slow": "x2", "normal": "x5", "fast": "x10", "turbo": "x16"}
+        speed_default = legacy_speed_map.get(speed_default, speed_default)
+        if not speed_default.startswith("x"):
+            speed_default = "x5"
+        self.typing_speed_profile_var = tk.StringVar(value=speed_default)
         self.combo_typing_speed = ttk.Combobox(
             speed_f,
             textvariable=self.typing_speed_profile_var,
             state="readonly",
             width=12,
-            values=("slow", "normal", "fast", "turbo"),
+            values=tuple(f"x{i}" for i in range(1, 21)),
             font=("Malgun Gothic", 10),
         )
         self.combo_typing_speed.pack(side="left", padx=(8, 0))
@@ -2386,8 +2394,8 @@ class FlowVisionApp:
             width=6,
             textvariable=self.asset_loop_start_var,
             command=self.on_option_toggle,
-            bg="#FFFFFF",
-            fg="black",
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
         )
         self.spin_asset_start.pack(side="left", padx=(6, 14))
         self.spin_asset_start.bind("<FocusOut>", self.on_option_toggle)
@@ -2403,8 +2411,8 @@ class FlowVisionApp:
             width=6,
             textvariable=self.asset_loop_end_var,
             command=self.on_option_toggle,
-            bg="#FFFFFF",
-            fg="black",
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
         )
         self.spin_asset_end.pack(side="left", padx=(6, 0))
         self.spin_asset_end.bind("<FocusOut>", self.on_option_toggle)
@@ -2415,7 +2423,7 @@ class FlowVisionApp:
         asset_prefix_f.pack(fill="x", pady=(0, 6))
         tk.Label(asset_prefix_f, text="접두어", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
         self.asset_loop_prefix_var = tk.StringVar(value=self.cfg.get("asset_loop_prefix", "S"))
-        self.entry_asset_prefix = tk.Entry(asset_prefix_f, textvariable=self.asset_loop_prefix_var, bg="#FFFFFF", fg="black", font=("Consolas", 10), width=8)
+        self.entry_asset_prefix = tk.Entry(asset_prefix_f, textvariable=self.asset_loop_prefix_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10), width=8)
         self.entry_asset_prefix.pack(side="left", padx=(6, 0))
         self.entry_asset_prefix.bind("<FocusOut>", self.on_option_toggle)
 
@@ -2426,8 +2434,9 @@ class FlowVisionApp:
         self.entry_asset_template = tk.Entry(
             asset_f,
             textvariable=self.asset_loop_template_var,
-            bg="#FFFFFF",
-            fg="black",
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
             font=("Consolas", 10),
         )
         self.entry_asset_template.pack(fill="x", ipady=3, pady=(2, 0))
@@ -2435,19 +2444,19 @@ class FlowVisionApp:
 
         tk.Label(asset_f, text="시작 버튼 selector(선택)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w", pady=(8, 0))
         self.asset_start_selector_var = tk.StringVar(value=self.cfg.get("asset_start_selector", ""))
-        self.entry_asset_start_selector = tk.Entry(asset_f, textvariable=self.asset_start_selector_var, bg="#FFFFFF", fg="black", font=("Consolas", 10))
+        self.entry_asset_start_selector = tk.Entry(asset_f, textvariable=self.asset_start_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
         self.entry_asset_start_selector.pack(fill="x", ipady=3, pady=(2, 4))
         self.entry_asset_start_selector.bind("<FocusOut>", self.on_option_toggle)
 
         tk.Label(asset_f, text="에셋 검색 버튼 selector(선택)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
         self.asset_search_btn_selector_var = tk.StringVar(value=self.cfg.get("asset_search_button_selector", ""))
-        self.entry_asset_search_btn_selector = tk.Entry(asset_f, textvariable=self.asset_search_btn_selector_var, bg="#FFFFFF", fg="black", font=("Consolas", 10))
+        self.entry_asset_search_btn_selector = tk.Entry(asset_f, textvariable=self.asset_search_btn_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
         self.entry_asset_search_btn_selector.pack(fill="x", ipady=3, pady=(2, 4))
         self.entry_asset_search_btn_selector.bind("<FocusOut>", self.on_option_toggle)
 
         tk.Label(asset_f, text="에셋 검색 입력칸 selector(선택)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
         self.asset_search_input_selector_var = tk.StringVar(value=self.cfg.get("asset_search_input_selector", ""))
-        self.entry_asset_search_input_selector = tk.Entry(asset_f, textvariable=self.asset_search_input_selector_var, bg="#FFFFFF", fg="black", font=("Consolas", 10))
+        self.entry_asset_search_input_selector = tk.Entry(asset_f, textvariable=self.asset_search_input_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
         self.entry_asset_search_input_selector.pack(fill="x", ipady=3, pady=(2, 6))
         self.entry_asset_search_input_selector.bind("<FocusOut>", self.on_option_toggle)
 
@@ -2511,8 +2520,9 @@ class FlowVisionApp:
         self.entry_download_output_dir = tk.Entry(
             out_f,
             textvariable=self.download_output_dir_var,
-            bg="#FFFFFF",
-            fg="black",
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
             font=("Consolas", 9),
         )
         self.entry_download_output_dir.pack(side="left", fill="x", expand=True, padx=(6, 6), ipady=2)
@@ -2521,19 +2531,19 @@ class FlowVisionApp:
 
         tk.Label(dl_f, text="검색 입력 selector(공통)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
         self.download_search_input_selector_var = tk.StringVar(value=self.cfg.get("download_search_input_selector", ""))
-        self.entry_download_search = tk.Entry(dl_f, textvariable=self.download_search_input_selector_var, bg="#FFFFFF", fg="black", font=("Consolas", 10))
+        self.entry_download_search = tk.Entry(dl_f, textvariable=self.download_search_input_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
         self.entry_download_search.pack(fill="x", ipady=3, pady=(2, 4))
         self.entry_download_search.bind("<FocusOut>", self.on_option_toggle)
 
         tk.Label(dl_f, text="영상 필터 selector", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
         self.download_video_filter_selector_var = tk.StringVar(value=self.cfg.get("download_video_filter_selector", ""))
-        self.entry_download_video_filter = tk.Entry(dl_f, textvariable=self.download_video_filter_selector_var, bg="#FFFFFF", fg="black", font=("Consolas", 10))
+        self.entry_download_video_filter = tk.Entry(dl_f, textvariable=self.download_video_filter_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
         self.entry_download_video_filter.pack(fill="x", ipady=3, pady=(2, 4))
         self.entry_download_video_filter.bind("<FocusOut>", self.on_option_toggle)
 
         tk.Label(dl_f, text="이미지 필터 selector", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
         self.download_image_filter_selector_var = tk.StringVar(value=self.cfg.get("download_image_filter_selector", ""))
-        self.entry_download_image_filter = tk.Entry(dl_f, textvariable=self.download_image_filter_selector_var, bg="#FFFFFF", fg="black", font=("Consolas", 10))
+        self.entry_download_image_filter = tk.Entry(dl_f, textvariable=self.download_image_filter_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
         self.entry_download_image_filter.pack(fill="x", ipady=3, pady=(2, 4))
         self.entry_download_image_filter.bind("<FocusOut>", self.on_option_toggle)
 
@@ -2559,7 +2569,7 @@ class FlowVisionApp:
 
         tk.Label(relay_f, text="횟수:", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left", padx=(8, 2))
         self.relay_cnt_var = tk.IntVar(value=self.cfg.get("relay_count", 1))
-        sp = tk.Spinbox(relay_f, from_=1, to=10, width=3, textvariable=self.relay_cnt_var, command=self.on_option_toggle, bg="#FFFFFF", fg="black")
+        sp = tk.Spinbox(relay_f, from_=1, to=10, width=3, textvariable=self.relay_cnt_var, command=self.on_option_toggle, bg=self.color_input_bg, fg=self.color_input_fg)
         sp.pack(side="left", padx=5)
 
         relay_range_f = tk.Frame(relay_body, bg=self.color_bg)
@@ -2594,7 +2604,7 @@ class FlowVisionApp:
         self._sync_relay_selection_label()
 
         tk.Label(left_card, text="3. 작업 간격 (초)", font=("Malgun Gothic", 11, "bold"), fg=self.color_text).pack(anchor="w", pady=(20, 5))
-        self.entry_interval = tk.Entry(left_card, bg="#FFFFFF", fg="black", font=("Consolas", 16, "bold"), justify="center", relief="solid", borderwidth=1)
+        self.entry_interval = tk.Entry(left_card, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 16, "bold"), justify="center", relief="solid", borderwidth=1)
         self.entry_interval.insert(0, str(self.cfg.get("interval_seconds", 180)))
         self.entry_interval.pack(fill="x", ipady=5)
         tk.Label(left_card, text="※ 설정한 시간마다 봇이 작동합니다.", font=("Malgun Gothic", 9), fg=self.color_text_sec).pack(anchor="w")
@@ -2618,8 +2628,9 @@ class FlowVisionApp:
         self.schedule_text_var = tk.StringVar(value=self.cfg.get("scheduled_start_at", ""))
         self.entry_schedule_display = tk.Entry(
             sched_card,
-            bg="#FFFFFF",
-            fg="black",
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
             font=("Consolas", 11),
             justify="center",
             relief="solid",
