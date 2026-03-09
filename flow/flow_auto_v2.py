@@ -2218,7 +2218,6 @@ class FlowVisionApp:
         self.combo_browser_channel.bind("<<ComboboxSelected>>", self.on_option_toggle)
 
         new_project_f = tk.Frame(left_card, bg=self.color_bg)
-        new_project_f.pack(fill="x", pady=(0, 8))
         self.auto_new_project_var = tk.BooleanVar(value=self.cfg.get("auto_open_new_project", True))
         tk.Checkbutton(
             new_project_f,
@@ -2230,14 +2229,11 @@ class FlowVisionApp:
             activebackground=self.color_bg,
         ).pack(side="left")
 
-        tk.Label(left_card, text="새 프로젝트 버튼 selector(선택)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
         self.new_project_selector_var = tk.StringVar(value=self.cfg.get("new_project_selector", ""))
         self.entry_new_project_selector = tk.Entry(left_card, textvariable=self.new_project_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
-        self.entry_new_project_selector.pack(fill="x", ipady=4, pady=(2, 8))
         self.entry_new_project_selector.bind("<FocusOut>", self.on_option_toggle)
 
         self.lbl_coords = tk.Label(left_card, text=self._get_coord_text(), font=("Consolas", 9), fg=self.color_accent, bg=self.color_input_soft, padx=5, pady=4)
-        self.lbl_coords.pack(fill="x", pady=(5, 16))
         
         # Options
         tk.Label(left_card, text="2. 옵션 설정", font=("Malgun Gothic", 11, "bold"), fg=self.color_text).pack(anchor="w", pady=(0, 5))
@@ -2293,7 +2289,7 @@ class FlowVisionApp:
         self.combo_typing_speed.pack(side="left", padx=(8, 0))
         self.combo_typing_speed.bind("<<ComboboxSelected>>", self.on_option_toggle)
 
-        preset_body, _set_preset_open = self._create_collapsible_section(left_card, "프롬프트 생성 옵션 자동 맞춤", opened=True)
+        preset_body, _set_preset_open = self._create_collapsible_section(left_card, "프롬프트 자동화 전용 생성 옵션", opened=True)
         self._set_prompt_preset_open = _set_preset_open
         preset_f = tk.Frame(preset_body, bg=self.color_bg)
         preset_f.pack(fill="x", pady=6)
@@ -2355,7 +2351,7 @@ class FlowVisionApp:
 
         tk.Label(
             preset_f,
-            text="※ 다운로드용이 아니라, 프롬프트 입력창 아래 생성 옵션을 먼저 맞추는 기능입니다.",
+            text="※ 이 기능은 프롬프트 자동화에서만 사용됩니다. 프롬프트 입력 직전에 아래 생성 옵션을 먼저 맞춥니다.",
             bg=self.color_bg,
             fg=self.color_text_sec,
             font=("Malgun Gothic", 9),
