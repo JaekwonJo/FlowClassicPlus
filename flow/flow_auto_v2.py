@@ -620,6 +620,29 @@ class FlowVisionApp:
             pass
         self.playwright = None
 
+    def on_open_bot_work_window(self):
+        try:
+            self.on_option_toggle()
+            self._ensure_browser_session()
+            self.actor.set_page(self.page)
+            start_url = (self.cfg.get("start_url") or "").strip()
+            if not start_url:
+                raise RuntimeError("시작 URL을 먼저 입력해주세요.")
+            current_url = (self.page.url or "").strip() if self.page else ""
+            if (not current_url) or (start_url not in current_url):
+                self.log(f"🌐 봇 작업창 이동: {start_url}")
+                self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+                time.sleep(random.uniform(1.0, 2.0))
+            try:
+                self.page.bring_to_front()
+            except Exception:
+                pass
+            self.log("🤖 봇 작업창 열기 완료 - 이 창에서 Image 기본값을 맞춰주세요.")
+            self.update_status_label("🤖 봇 작업창 열림", self.color_success)
+        except Exception as e:
+            self.log(f"❌ 봇 작업창 열기 실패: {e}")
+            self.update_status_label("❌ 봇 작업창 열기 실패", self.color_error)
+
     def _ensure_worker_thread(self):
         if self.worker_thread and self.worker_thread.is_alive():
             return
@@ -2277,6 +2300,7 @@ class FlowVisionApp:
         selector_tool_f.pack(fill="x", pady=(0, 8))
         ttk.Button(selector_tool_f, text="🔍 Selector 자동 찾기", command=self.on_auto_detect_selectors).pack(side="left")
         ttk.Button(selector_tool_f, text="🧪 Selector 테스트", command=self.on_test_selectors).pack(side="left", padx=6)
+        ttk.Button(selector_tool_f, text="🤖 봇 작업창 열기", command=self.on_open_bot_work_window).pack(side="left")
 
         browser_f = tk.Frame(left_card, bg=self.color_bg)
         browser_f.pack(fill="x", pady=(0, 10))
