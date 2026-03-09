@@ -417,25 +417,44 @@ class FlowVisionApp:
             if icon_path.exists(): self.root.iconbitmap(str(icon_path))
         except: pass
         
-        # [STYLE] High Visibility Theme
+        # [STYLE] Premium Cute + Readable Theme
         self.style = ttk.Style()
         self.style.theme_use('clam')
-        
-        self.color_bg = "#0D1524"
-        self.color_card = "#162238"
-        self.color_header = "#101B2F"
-        self.color_accent = "#3AA0FF"
-        self.color_success = "#3CD487"
-        self.color_error = "#FF6B6B"
-        self.color_info = "#57C7FF"
-        self.color_text = "#F4F8FF"
-        self.color_text_sec = "#9FB2CE"
-        self.color_input_bg = "#D4DBE7"
-        self.color_input_fg = "#0E1726"
-        self.color_input_soft = "#C2CDDD"
+
+        try:
+            self.root.tk.call("tk", "scaling", 1.08)
+        except Exception:
+            pass
+
+        self.font_ui_family = "Segoe UI"
+        self.font_mono_family = "Consolas"
+        self.font_title = (self.font_ui_family, 21, "bold")
+        self.font_subtitle = (self.font_ui_family, 11)
+        self.font_section = (self.font_ui_family, 12, "bold")
+        self.font_body = (self.font_ui_family, 11)
+        self.font_body_bold = (self.font_ui_family, 11, "bold")
+        self.font_small = (self.font_ui_family, 10)
+        self.font_mono = (self.font_mono_family, 11)
+        self.font_mono_small = (self.font_mono_family, 10)
+
+        self.color_bg = "#0E1728"
+        self.color_card = "#182741"
+        self.color_header = "#12203A"
+        self.color_accent = "#59A8FF"
+        self.color_success = "#59D98E"
+        self.color_error = "#FF7575"
+        self.color_info = "#8AD7FF"
+        self.color_text = "#F7FAFF"
+        self.color_text_sec = "#B8C6DD"
+        self.color_input_bg = "#E6EDF7"
+        self.color_input_fg = "#10203A"
+        self.color_input_soft = "#D7E1F0"
         self.root.configure(bg=self.color_bg)
+        self.root.option_add("*Font", self.font_body)
         self.root.option_add("*Label.Foreground", self.color_text)
         self.root.option_add("*Label.Background", self.color_bg)
+        self.root.option_add("*Entry.Font", self.font_mono)
+        self.root.option_add("*Text.Font", self.font_mono)
         self.root.option_add("*Checkbutton.Foreground", self.color_text)
         self.root.option_add("*Checkbutton.Background", self.color_bg)
         self.root.option_add("*Checkbutton.ActiveBackground", self.color_bg)
@@ -447,18 +466,19 @@ class FlowVisionApp:
         self.style.configure("TFrame", background=self.color_bg)
         self.style.configure("Card.TFrame", background=self.color_card, relief="flat")
         self.style.configure("TLabelframe", background=self.color_bg, foreground=self.color_accent, borderwidth=2, relief="groove")
-        self.style.configure("TLabelframe.Label", background=self.color_bg, foreground=self.color_accent, font=("Malgun Gothic", 12, "bold"))
-        self.style.configure("TLabel", background=self.color_bg, foreground=self.color_text, font=("Malgun Gothic", 10))
+        self.style.configure("TLabelframe.Label", background=self.color_bg, foreground=self.color_accent, font=self.font_section)
+        self.style.configure("TLabel", background=self.color_bg, foreground=self.color_text, font=self.font_body)
+        self.style.configure("TCombobox", fieldbackground=self.color_input_bg, foreground=self.color_input_fg, padding=4)
         
         # Button Styles
-        self.style.configure("TButton", background="#22304A", foreground=self.color_text, borderwidth=1, font=("Malgun Gothic", 10, "bold"))
-        self.style.map("TButton", background=[('active', '#2B3C5B')], foreground=[('active', self.color_text)])
+        self.style.configure("TButton", background="#294162", foreground=self.color_text, borderwidth=1, font=self.font_body_bold, padding=6)
+        self.style.map("TButton", background=[('active', '#37557D')], foreground=[('active', self.color_text)])
         
         # Progress Bar
         self.style.configure("Horizontal.TProgressbar", background=self.color_success, troughcolor="#1C2940", bordercolor="#2A3A56", thickness=20)
         
         # Big Action Button
-        self.style.configure("Action.TButton", background=self.color_accent, foreground="white", font=("Malgun Gothic", 14, "bold"))
+        self.style.configure("Action.TButton", background=self.color_accent, foreground="white", font=(self.font_ui_family, 15, "bold"), padding=10)
         self.style.map("Action.TButton", background=[('active', '#1B78D0'), ('disabled', '#5A6982')])
 
         self._ensure_prompt_slots()
@@ -2203,7 +2223,7 @@ class FlowVisionApp:
             bg=self.color_bg,
             activebackground=self.color_bg,
             fg=self.color_text,
-            font=("Malgun Gothic", 10, "bold"),
+            font=self.font_body_bold,
             cursor="hand2",
             padx=8,
             pady=6,
@@ -2320,13 +2340,13 @@ class FlowVisionApp:
         
         title_f = tk.Frame(header, bg=self.color_header)
         title_f.pack(side="left", padx=16, pady=8)
-        tk.Label(title_f, text="Flow Classic Plus", font=("Malgun Gothic", 18, "bold"), bg=self.color_header, fg=self.color_text).pack(anchor="w")
-        tk.Label(title_f, text="클래식 개선판", font=("Malgun Gothic", 9), bg=self.color_header, fg=self.color_text_sec).pack(anchor="w")
+        tk.Label(title_f, text="Flow Classic Plus", font=self.font_title, bg=self.color_header, fg=self.color_text).pack(anchor="w")
+        tk.Label(title_f, text="클래식 개선판", font=self.font_subtitle, bg=self.color_header, fg=self.color_text_sec).pack(anchor="w")
 
         center_f = tk.Frame(header, bg=self.color_header)
         center_f.pack(side="left", fill="both", expand=True, padx=10)
-        tk.Label(center_f, text="진행 상황", font=("Malgun Gothic", 9), bg=self.color_header, fg=self.color_text_sec).pack(anchor="center", pady=(8, 0))
-        self.lbl_header_progress = tk.Label(center_f, text="0 / 0 (0.0%)", font=("Consolas", 12, "bold"), bg=self.color_header, fg=self.color_accent)
+        tk.Label(center_f, text="진행 상황", font=self.font_small, bg=self.color_header, fg=self.color_text_sec).pack(anchor="center", pady=(8, 0))
+        self.lbl_header_progress = tk.Label(center_f, text="0 / 0 (0.0%)", font=(self.font_mono_family, 13, "bold"), bg=self.color_header, fg=self.color_accent)
         self.lbl_header_progress.pack(anchor="center")
 
         nav_f = tk.Frame(header, bg=self.color_header)
@@ -2336,8 +2356,8 @@ class FlowVisionApp:
 
         status_f = tk.Frame(header, bg=self.color_header)
         status_f.pack(side="right", padx=14, fill="y")
-        tk.Label(status_f, text="현재 상태", font=("Malgun Gothic", 9), bg=self.color_header, fg=self.color_text_sec).pack(anchor="e")
-        self.lbl_main_status = tk.Label(status_f, text="준비 완료", font=("Malgun Gothic", 15, "bold"), bg=self.color_header, fg=self.color_success)
+        tk.Label(status_f, text="현재 상태", font=self.font_small, bg=self.color_header, fg=self.color_text_sec).pack(anchor="e")
+        self.lbl_main_status = tk.Label(status_f, text="준비 완료", font=(self.font_ui_family, 16, "bold"), bg=self.color_header, fg=self.color_success)
         self.lbl_main_status.pack(anchor="e")
 
         # 2. Body
@@ -2374,23 +2394,23 @@ class FlowVisionApp:
         left_card.pack(fill="x", padx=4, pady=4)
         
         # Playwright Target Settings
-        tk.Label(left_card, text="1. 브라우저 대상 설정 (필수)", font=("Malgun Gothic", 11, "bold"), fg=self.color_text).pack(anchor="w", pady=(0, 5))
+        tk.Label(left_card, text="1. 브라우저 대상 설정 (필수)", font=self.font_section, fg=self.color_text).pack(anchor="w", pady=(0, 5))
 
-        tk.Label(left_card, text="시작 URL", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
+        tk.Label(left_card, text="시작 URL", bg=self.color_bg, font=self.font_small).pack(anchor="w")
         self.start_url_var = tk.StringVar(value=self.cfg.get("start_url", "https://labs.google/flow"))
-        self.entry_start_url = tk.Entry(left_card, textvariable=self.start_url_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
+        self.entry_start_url = tk.Entry(left_card, textvariable=self.start_url_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono)
         self.entry_start_url.pack(fill="x", ipady=4, pady=(2, 8))
         self.entry_start_url.bind("<FocusOut>", self.on_option_toggle)
 
-        tk.Label(left_card, text="입력창 CSS Selector", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
+        tk.Label(left_card, text="입력창 CSS Selector", bg=self.color_bg, font=self.font_small).pack(anchor="w")
         self.input_selector_var = tk.StringVar(value=self.cfg.get("input_selector", "textarea, [contenteditable='true']"))
-        self.entry_input_selector = tk.Entry(left_card, textvariable=self.input_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
+        self.entry_input_selector = tk.Entry(left_card, textvariable=self.input_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono)
         self.entry_input_selector.pack(fill="x", ipady=4, pady=(2, 8))
         self.entry_input_selector.bind("<FocusOut>", self.on_option_toggle)
 
-        tk.Label(left_card, text="제출 버튼 CSS Selector", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
+        tk.Label(left_card, text="제출 버튼 CSS Selector", bg=self.color_bg, font=self.font_small).pack(anchor="w")
         self.submit_selector_var = tk.StringVar(value=self.cfg.get("submit_selector", "button[type='submit']"))
-        self.entry_submit_selector = tk.Entry(left_card, textvariable=self.submit_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
+        self.entry_submit_selector = tk.Entry(left_card, textvariable=self.submit_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono)
         self.entry_submit_selector.pack(fill="x", ipady=4, pady=(2, 8))
         self.entry_submit_selector.bind("<FocusOut>", self.on_option_toggle)
 
@@ -2409,18 +2429,18 @@ class FlowVisionApp:
             variable=self.browser_headless_var,
             command=self.on_option_toggle,
             bg=self.color_bg,
-            font=("Malgun Gothic", 9),
+            font=self.font_small,
             activebackground=self.color_bg,
         ).pack(side="left")
 
-        tk.Label(browser_f, text="채널:", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left", padx=(10, 4))
+        tk.Label(browser_f, text="채널:", bg=self.color_bg, font=self.font_small).pack(side="left", padx=(10, 4))
         self.browser_channel_var = tk.StringVar(value=self.cfg.get("browser_channel", "chrome"))
         self.combo_browser_channel = ttk.Combobox(
             browser_f,
             textvariable=self.browser_channel_var,
             state="readonly",
             width=10,
-            font=("Malgun Gothic", 9),
+            font=self.font_small,
             values=("chrome", "msedge", "chromium"),
         )
         self.combo_browser_channel.pack(side="left")
@@ -2445,33 +2465,33 @@ class FlowVisionApp:
         self.lbl_coords = tk.Label(left_card, text=self._get_coord_text(), font=("Consolas", 9), fg=self.color_accent, bg=self.color_input_soft, padx=5, pady=4)
         
         # Options
-        tk.Label(left_card, text="2. 옵션 설정", font=("Malgun Gothic", 11, "bold"), fg=self.color_text).pack(anchor="w", pady=(0, 5))
+        tk.Label(left_card, text="2. 옵션 설정", font=self.font_section, fg=self.color_text).pack(anchor="w", pady=(0, 5))
         
         op_f = tk.Frame(left_card, bg=self.color_bg)
         op_f.pack(fill="x")
         
-        c1 = tk.Checkbutton(op_f, text="소리 켜기", variable=tk.BooleanVar(), command=self.on_option_toggle, bg=self.color_bg, font=("Malgun Gothic", 10), activebackground=self.color_bg)
+        c1 = tk.Checkbutton(op_f, text="소리 켜기", variable=tk.BooleanVar(), command=self.on_option_toggle, bg=self.color_bg, font=self.font_body, activebackground=self.color_bg)
         self.sound_var = tk.BooleanVar(value=self.cfg.get("sound_enabled", True))
         c1.config(variable=self.sound_var)
         c1.grid(row=0, column=0, sticky="w", padx=5)
         
-        c2 = tk.Checkbutton(op_f, text="대기 중 랜덤 행동", variable=tk.BooleanVar(), command=self.on_option_toggle, bg=self.color_bg, fg="#D63384", selectcolor=self.color_bg, activebackground=self.color_bg, font=("Malgun Gothic", 10, "bold"))
+        c2 = tk.Checkbutton(op_f, text="대기 중 랜덤 행동", variable=tk.BooleanVar(), command=self.on_option_toggle, bg=self.color_bg, fg="#FF8CC3", selectcolor=self.color_bg, activebackground=self.color_bg, font=self.font_body_bold)
         self.afk_var = tk.BooleanVar(value=self.cfg.get("afk_mode", False))
         c2.config(variable=self.afk_var)
         c2.grid(row=0, column=1, sticky="w", padx=5)
         
-        c_lang = tk.Checkbutton(op_f, text="한글+영어 모드", variable=tk.BooleanVar(), command=self.on_option_toggle, bg=self.color_bg, font=("Malgun Gothic", 10), activebackground=self.color_bg)
+        c_lang = tk.Checkbutton(op_f, text="한글+영어 모드", variable=tk.BooleanVar(), command=self.on_option_toggle, bg=self.color_bg, font=self.font_body, activebackground=self.color_bg)
         self.lang_var = tk.BooleanVar(value=(self.cfg.get("language_mode", "en") == "ko_en"))
         c_lang.config(variable=self.lang_var)
         c_lang.grid(row=1, column=0, columnspan=2, sticky="w", padx=5)
         
         # [NEW] Input Mode Selection
-        tk.Label(left_card, text="⌨️ 입력 방식 선택", font=("Malgun Gothic", 10, "bold"), bg=self.color_bg).pack(anchor="w", pady=(15, 0))
+        tk.Label(left_card, text="⌨️ 입력 방식 선택", font=self.font_body_bold, bg=self.color_bg).pack(anchor="w", pady=(15, 0))
         self.input_mode_var = tk.StringVar(value=self.cfg.get("input_mode", "typing"))
         mode_f = tk.Frame(left_card, bg=self.color_bg)
         mode_f.pack(fill="x", pady=5)
         
-        self.combo_input_mode = ttk.Combobox(mode_f, textvariable=self.input_mode_var, state="readonly", font=("Malgun Gothic", 10))
+        self.combo_input_mode = ttk.Combobox(mode_f, textvariable=self.input_mode_var, state="readonly", font=self.font_body)
         self.combo_input_mode['values'] = ("typing", "paste", "mixed")
         self.combo_input_mode.pack(side="left", fill="x", expand=True)
         self.combo_input_mode.bind("<<ComboboxSelected>>", self.on_option_toggle)
@@ -3101,10 +3121,10 @@ class FlowVisionApp:
         
         file_top = tk.Frame(bottom, bg=self.color_bg)
         file_top.pack(fill="x", pady=5)
-        tk.Label(file_top, text="📁 프롬프트 파일 선택:", font=("Malgun Gothic", 11, "bold"), fg=self.color_text).pack(side="left")
+        tk.Label(file_top, text="📁 프롬프트 파일 선택:", font=self.font_section, fg=self.color_text).pack(side="left")
         
         self.slot_var = tk.StringVar()
-        self.combo_slots = ttk.Combobox(file_top, textvariable=self.slot_var, state="readonly", width=12, font=("Malgun Gothic", 10))
+        self.combo_slots = ttk.Combobox(file_top, textvariable=self.slot_var, state="readonly", width=12, font=self.font_body)
         self.combo_slots.pack(side="left", padx=10)
         self.combo_slots.bind("<<ComboboxSelected>>", self.on_slot_change)
         
@@ -3136,11 +3156,11 @@ class FlowVisionApp:
         ttk.Button(btn_nav, text="⏮", width=3, command=self.on_first).pack(side="left", padx=1)
         ttk.Button(btn_nav, text="◀", width=3, command=self.on_prev).pack(side="left", padx=1)
 
-        tk.Label(btn_nav, text="번호 이동:", font=("Malgun Gothic", 9), bg=self.color_bg).pack(side="left", padx=(5, 2))
+        tk.Label(btn_nav, text="번호 이동:", font=self.font_small, bg=self.color_bg).pack(side="left", padx=(5, 2))
         self.ent_jump = tk.Entry(
             btn_nav,
             width=5,
-            font=("Consolas", 10),
+            font=self.font_mono,
             justify="center",
             relief="solid",
             borderwidth=1,
@@ -3157,7 +3177,7 @@ class FlowVisionApp:
             text="0 / 0",
             width=10,
             fg=self.color_text,
-            font=("Consolas", 11, "bold"),
+            font=(self.font_mono_family, 11, "bold"),
             cursor="hand2",
             bg=self.color_input_soft,
             relief="flat",
@@ -3178,7 +3198,7 @@ class FlowVisionApp:
             command=self.log_window.show,
             bg="#24324B",
             fg=self.color_text,
-            font=("Malgun Gothic", 10, "bold"),
+            font=self.font_body_bold,
             relief="raised",
             borderwidth=3,
         )
@@ -3190,7 +3210,7 @@ class FlowVisionApp:
             command=self.on_reload,
             bg="#1B78D0",
             fg="white",
-            font=("Malgun Gothic", 10, "bold"),
+            font=self.font_body_bold,
             relief="raised",
             borderwidth=3,
         )
@@ -3207,11 +3227,11 @@ class FlowVisionApp:
 
         top = tk.Frame(wrap, bg=self.color_bg)
         top.pack(fill="x", pady=(0, 20))
-        tk.Label(top, text="Flow Classic Plus", font=("Malgun Gothic", 26, "bold"), bg=self.color_bg, fg=self.color_text).pack(anchor="w")
+        tk.Label(top, text="Flow Classic Plus", font=(self.font_ui_family, 28, "bold"), bg=self.color_bg, fg=self.color_text).pack(anchor="w")
         tk.Label(
             top,
             text="원본 클래식과 헷갈리지 않게, 여기서는 큰 메뉴에서 골라서 들어가면 됩니다.",
-            font=("Malgun Gothic", 11),
+            font=(self.font_ui_family, 12),
             bg=self.color_bg,
             fg=self.color_text_sec,
         ).pack(anchor="w", pady=(6, 0))
@@ -3233,8 +3253,8 @@ class FlowVisionApp:
         card.grid(row=row, column=col, sticky="nsew", padx=10, pady=10)
         inner = tk.Frame(card, bg=self.color_card)
         inner.pack(fill="both", expand=True, padx=18, pady=18)
-        tk.Label(inner, text=title, font=("Malgun Gothic", 18, "bold"), bg=self.color_card, fg=self.color_text).pack(anchor="w")
-        tk.Label(inner, text=desc, font=("Malgun Gothic", 10), bg=self.color_card, fg=self.color_text_sec, wraplength=320, justify="left").pack(anchor="w", pady=(10, 18))
+        tk.Label(inner, text=title, font=(self.font_ui_family, 19, "bold"), bg=self.color_card, fg=self.color_text).pack(anchor="w")
+        tk.Label(inner, text=desc, font=(self.font_ui_family, 11), bg=self.color_card, fg=self.color_text_sec, wraplength=320, justify="left").pack(anchor="w", pady=(10, 18))
         ttk.Button(inner, text="들어가기", command=command).pack(anchor="w")
 
         for widget in (card, inner):
