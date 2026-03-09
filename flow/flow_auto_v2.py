@@ -4212,21 +4212,40 @@ class FlowVisionApp:
             except Exception:
                 meta = ""
 
+            has_count_chip = any(x in meta for x in ("x1", "x2", "x3", "x4"))
+            looks_like_model_dropdown = any(
+                x in meta for x in (
+                    "quality", "lower priority", "priority", "fast", "arrow_drop_down",
+                    "veo 3.1", "veo 2", "veo3.1", "veo2",
+                )
+            )
+
             if any(x in meta for x in ("생성", "generate", "submit", "send", "보내", "arrow_forward", "메인 메뉴", "설정", "닫기", "close")):
+                continue
+            if looks_like_model_dropdown:
+                continue
+            if not (
+                has_count_chip
+                or any(x in meta for x in ("nano banana", "동영상", "image", "video", "이미지", "영상"))
+            ):
                 continue
 
             score = abs(cx - target_x) + (abs(cy - target_y) * 3.2)
-            if cy < (input_top - 40):
-                score += 280.0
-            if cy > (input_top + ib["height"] + 120):
-                score += 520.0
+            if cy < (input_top - 20):
+                score += 1200.0
+            if cy > (input_top + ib["height"] + 70):
+                score += 1200.0
             if cx < (input_left + ib["width"] * 0.45):
                 score += 450.0
 
-            if any(x in meta for x in ("nano banana", "veo", "x1", "x2", "x3", "x4", "frames", "ingredients", "동영상", "영상", "이미지")):
-                score -= 260.0
+            if has_count_chip:
+                score -= 320.0
+            if any(x in meta for x in ("nano banana", "동영상", "영상", "이미지")):
+                score -= 180.0
             if any(x in meta for x in ("image", "video", "가로", "세로", "프레임", "재료")):
                 score -= 120.0
+            if any(x in meta for x in ("frames", "ingredients", "프레임", "재료")):
+                score += 380.0
 
             if score < best_score:
                 best = cand
@@ -4279,6 +4298,11 @@ class FlowVisionApp:
         for line in info.get("textLines") or []:
             v = str(line or "").strip()
             if not v or v.lower() in bad_lines:
+                continue
+            vl = v.lower()
+            if any(x in vl for x in ("quality", "lower priority", "priority", "fast", "veo 3.1", "veo 2", "veo3.1", "veo2")):
+                continue
+            if ("nano banana" in vl or "동영상" in vl or "이미지" in vl) and not any(x in vl for x in ("x1", "x2", "x3", "x4")):
                 continue
             if len(v) > 48:
                 continue
