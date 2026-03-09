@@ -102,6 +102,9 @@ DEFAULT_CONFIG = {
     "prompt_media_mode": "image",
     "prompt_orientation": "landscape",
     "prompt_variant_count": "x1",
+    "prompt_media_mode_selector": "",
+    "prompt_orientation_selector": "",
+    "prompt_variant_selector": "",
     "asset_loop_enabled": False,
     "asset_loop_start": 1,
     "asset_loop_end": 1,
@@ -2357,6 +2360,11 @@ class FlowVisionApp:
             font=("Malgun Gothic", 9),
         ).pack(anchor="w", pady=(2, 0))
 
+        preset_btn_f = tk.Frame(preset_f, bg=self.color_bg)
+        preset_btn_f.pack(fill="x", pady=(8, 0))
+        ttk.Button(preset_btn_f, text="🔍 생성 옵션 자동찾기", command=self.on_auto_detect_prompt_preset_selectors).pack(side="left")
+        ttk.Button(preset_btn_f, text="🧪 생성 옵션 테스트", command=self.on_test_prompt_preset_selectors).pack(side="left", padx=6)
+
         asset_body, _set_asset_open = self._create_collapsible_section(left_card, "S001~S### 에셋 자동 반복", opened=False)
         self._set_asset_open = _set_asset_open
         asset_f = tk.Frame(asset_body, bg=self.color_bg)
@@ -3600,7 +3608,9 @@ class FlowVisionApp:
         media_mode = "video" if str(media_mode).strip().lower() == "video" else "image"
         target = "Video" if media_mode == "video" else "Image"
         alt = "영상" if media_mode == "video" else "이미지"
-        return [
+        cands = []
+        cands.extend(self._normalize_candidate_list(self.cfg.get("prompt_media_mode_selector", "")))
+        cands.extend([
             f"button:text-is('{target}')",
             f"[role='button']:text-is('{target}')",
             f"button:has-text('{target}')",
@@ -3609,34 +3619,55 @@ class FlowVisionApp:
             f"[role='button'][aria-label*='{target.lower()}' i]",
             f"button:has-text('{alt}')",
             f"[role='button']:has-text('{alt}')",
-        ]
+        ])
+        return self._normalize_candidate_list(cands)
 
     def _prompt_orientation_candidates(self, orientation):
         orientation = "portrait" if str(orientation).strip().lower() == "portrait" else "landscape"
         target = "세로 모드" if orientation == "portrait" else "가로 모드"
         key = "세로" if orientation == "portrait" else "가로"
-        return [
+        cands = []
+        cands.extend(self._normalize_candidate_list(self.cfg.get("prompt_orientation_selector", "")))
+        cands.extend([
             f"button:text-is('{target}')",
             f"[role='button']:text-is('{target}')",
             f"button:has-text('{target}')",
             f"[role='button']:has-text('{target}')",
             f"button[aria-label*='{key}' i]",
             f"[role='button'][aria-label*='{key}' i]",
-        ]
+        ])
+        return self._normalize_candidate_list(cands)
 
     def _prompt_variant_candidates(self, variant_count):
         target = str(variant_count or "x1").strip().lower()
         if target not in {"x1", "x2", "x3", "x4"}:
             target = "x1"
         upper = target.upper()
-        return [
+        cands = []
+        cands.extend(self._normalize_candidate_list(self.cfg.get("prompt_variant_selector", "")))
+        cands.extend([
             f"button:text-is('{target}')",
             f"[role='button']:text-is('{target}')",
             f"button:text-is('{upper}')",
             f"[role='button']:text-is('{upper}')",
             f"button:has-text('{target}')",
             f"[role='button']:has-text('{target}')",
-        ]
+        ])
+        return self._normalize_candidate_list(cands)
+
+    def _apply_prompt_preset_used_selectors(self, used):
+        if not isinstance(used, dict):
+            return
+        mapping = {
+            "media": "prompt_media_mode_selector",
+            "orientation": "prompt_orientation_selector",
+            "variant": "prompt_variant_selector",
+        }
+        for key, cfg_key in mapping.items():
+            val = str(used.get(key, "") or "").strip()
+            if val:
+                self.cfg[cfg_key] = val
+        self.save_config()
 
     def _apply_prompt_generation_preset(self, input_locator=None):
         if not self.page:
@@ -3687,6 +3718,38 @@ class FlowVisionApp:
                     pass
             else:
                 self.log(f"⚠️ {label} 클릭에 실패해 건너뜁니다.")
+
+    def _resolve_prompt_preset_controls(self, input_locator=None):
+        if not self.page:
+            raise RuntimeError("브라우저 페이지가 없습니다.")
+        near_cx = None
+        near_cy = None
+        try:
+            box = input_locator.bounding_box() if input_locator is not None else None
+            if box:
+                near_cx = float(box["x"]) + float(box["width"]) * 0.5
+                near_cy = float(box["y"]) - 40.0
+        except Exception:
+            pass
+
+        defs = [
+            ("media", "생성 모드", self._prompt_media_candidates(self.cfg.get("prompt_media_mode", "image"))),
+            ("orientation", "화면 방향", self._prompt_orientation_candidates(self.cfg.get("prompt_orientation", "landscape"))),
+            ("variant", "생성 개수", self._prompt_variant_candidates(self.cfg.get("prompt_variant_count", "x1"))),
+        ]
+        found = {}
+        used = {}
+        for key, _label, candidates in defs:
+            locator, selector = self._resolve_best_locator(
+                candidates,
+                timeout_ms=1600,
+                near_cx=near_cx,
+                near_cy=near_cy,
+                prefer_enabled=False,
+            )
+            found[key] = locator
+            used[key] = selector or ""
+        return found, used
 
     def _read_input_text(self, input_locator):
         if input_locator is None:
@@ -4017,6 +4080,100 @@ class FlowVisionApp:
         except Exception as e:
             self.log(f"❌ selector 테스트 실패: {e}")
             self.update_status_label("❌ selector 테스트 실패", self.color_error)
+
+    def on_auto_detect_prompt_preset_selectors(self):
+        if self.running:
+            messagebox.showwarning("안내", "자동화 실행 중에는 selector 탐색을 할 수 없습니다.\n먼저 중지 후 시도해주세요.")
+            return
+        self.on_option_toggle()
+        self._auto_detect_prompt_preset_selectors_worker()
+
+    def _auto_detect_prompt_preset_selectors_worker(self):
+        try:
+            self.update_status_label("🔍 생성 옵션 selector 자동 탐색 중...", self.color_info)
+            self._ensure_browser_session()
+            self.actor.set_page(self.page)
+
+            start_url = (self.cfg.get("start_url") or "").strip()
+            if start_url:
+                if start_url not in (self.page.url or ""):
+                    self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+                time.sleep(random.uniform(1.0, 2.5))
+
+            input_hint = (self.cfg.get("input_selector") or "").strip() or "#PINHOLE_TEXT_AREA_ELEMENT_ID, textarea, [contenteditable='true'], [role='textbox']"
+            self._try_open_new_project_if_needed(input_hint)
+            input_locator, _ = self._resolve_prompt_input_locator(input_hint, timeout_ms=2200)
+            if input_locator is None:
+                raise RuntimeError("프롬프트 입력칸을 먼저 찾지 못했습니다.")
+
+            found, used = self._resolve_prompt_preset_controls(input_locator=input_locator)
+            self._apply_prompt_preset_used_selectors(used)
+
+            media_ok = found.get("media") is not None
+            orientation_ok = found.get("orientation") is not None
+            variant_ok = found.get("variant") is not None
+
+            self.log(
+                f"🔍 생성 옵션 자동탐색 결과 | 모드({used.get('media') or '-'})={'OK' if media_ok else 'FAIL'} | "
+                f"방향({used.get('orientation') or '-'})={'OK' if orientation_ok else 'FAIL'} | "
+                f"개수({used.get('variant') or '-'})={'OK' if variant_ok else 'FAIL'}"
+            )
+            if media_ok and orientation_ok and variant_ok:
+                self.update_status_label("✅ 생성 옵션 selector 자동찾기 완료", self.color_success)
+            else:
+                self.update_status_label("⚠️ 생성 옵션 selector 일부 미탐지", self.color_error)
+        except Exception as e:
+            self.log(f"❌ 생성 옵션 selector 자동찾기 실패: {e}")
+            self.update_status_label("❌ 생성 옵션 selector 자동찾기 실패", self.color_error)
+
+    def on_test_prompt_preset_selectors(self):
+        if self.running:
+            messagebox.showwarning("안내", "자동화 실행 중에는 selector 테스트를 할 수 없습니다.\n먼저 중지 후 시도해주세요.")
+            return
+        self.on_option_toggle()
+        self._test_prompt_preset_selectors_worker()
+
+    def _test_prompt_preset_selectors_worker(self):
+        try:
+            self.update_status_label("🧪 생성 옵션 테스트 중...", self.color_info)
+            self._ensure_browser_session()
+            self.actor.set_page(self.page)
+
+            start_url = (self.cfg.get("start_url") or "").strip()
+            if start_url:
+                if start_url not in (self.page.url or ""):
+                    self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+                time.sleep(random.uniform(1.0, 2.5))
+
+            input_hint = (self.cfg.get("input_selector") or "").strip() or "#PINHOLE_TEXT_AREA_ELEMENT_ID, textarea, [contenteditable='true'], [role='textbox']"
+            self._try_open_new_project_if_needed(input_hint)
+            input_locator, _ = self._resolve_prompt_input_locator(input_hint, timeout_ms=2200)
+            if input_locator is None:
+                raise RuntimeError("프롬프트 입력칸을 먼저 찾지 못했습니다.")
+
+            found, used = self._resolve_prompt_preset_controls(input_locator=input_locator)
+            self._apply_prompt_preset_used_selectors(used)
+
+            media_ok = found.get("media") is not None
+            orientation_ok = found.get("orientation") is not None
+            variant_ok = found.get("variant") is not None
+            all_ok = media_ok and orientation_ok and variant_ok
+
+            if all_ok:
+                self._apply_prompt_generation_preset(input_locator=input_locator)
+
+            self.log(
+                f"🧪 생성 옵션 테스트 | 모드={'OK' if media_ok else 'FAIL'} | "
+                f"방향={'OK' if orientation_ok else 'FAIL'} | "
+                f"개수={'OK' if variant_ok else 'FAIL'}"
+            )
+            if all_ok:
+                self.update_status_label("✅ 생성 옵션 테스트 통과", self.color_success)
+            else:
+                self.update_status_label("⚠️ 생성 옵션 확인 필요", self.color_error)
+        except Exception as e:
+            self.log(f"❌ 생성 옵션 테스트 실패: {e}")
+            self.update_status_label("❌ 생성 옵션 테스트 실패", self.color_error)
 
     def on_auto_detect_asset_selectors(self):
         if self.running:
