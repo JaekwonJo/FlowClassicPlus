@@ -382,7 +382,7 @@ class FlowVisionApp:
 
         self.actor = HumanActor(action_logger=self._action_log, status_callback=self._actor_status)
         self.actor.language_mode = self.cfg.get("language_mode", "en")
-        self.actor.set_typing_speed_profile(self.cfg.get("typing_speed_profile", "normal"))
+        self.actor.set_typing_speed_profile(self.cfg.get("typing_speed_profile", "x5"))
         
         self.root = tk.Tk()
         self.root.title(APP_NAME)
@@ -454,8 +454,8 @@ class FlowVisionApp:
     def _set_initial_window_size(self):
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        w = min(1100, max(920, int(sw * 0.84)))
-        h = min(780, max(640, int(sh * 0.76)))
+        w = min(1120, max(940, int(sw * 0.86)))
+        h = min(840, max(700, int(sh * 0.80)))
         x = max((sw - w) // 2, 0)
         y = max((sh - h) // 2, 0)
         self.root.geometry(f"{w}x{h}+{x}+{y}")
@@ -2867,7 +2867,7 @@ class FlowVisionApp:
         ttk.Button(btn_nav, text="⏭", width=3, command=self.on_last).pack(side="left", padx=1)
 
         btn_f = tk.Frame(bottom, bg=self.color_bg)
-        btn_f.pack(fill="x", pady=12)
+        btn_f.pack(fill="x", pady=8)
 
         btn_log = tk.Button(
             btn_f,
@@ -2875,11 +2875,11 @@ class FlowVisionApp:
             command=self.log_window.show,
             bg="#24324B",
             fg=self.color_text,
-            font=("Malgun Gothic", 11, "bold"),
+            font=("Malgun Gothic", 10, "bold"),
             relief="raised",
             borderwidth=3,
         )
-        btn_log.pack(fill="x", expand=True, pady=(0, 6), ipady=8)
+        btn_log.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=6)
 
         btn_refresh_big = tk.Button(
             btn_f,
@@ -2887,11 +2887,11 @@ class FlowVisionApp:
             command=self.on_reload,
             bg="#1B78D0",
             fg="white",
-            font=("Malgun Gothic", 11, "bold"),
+            font=("Malgun Gothic", 10, "bold"),
             relief="raised",
             borderwidth=3,
         )
-        btn_refresh_big.pack(fill="x", expand=True, ipady=8)
+        btn_refresh_big.pack(side="left", fill="x", expand=True, padx=(5, 0), ipady=6)
 
         self._build_home_menu()
 
@@ -3739,16 +3739,6 @@ class FlowVisionApp:
             self.log("ℹ️ 프롬프트 생성 옵션 자동 맞춤: 사용 안 함")
             return
 
-        near_cx = None
-        near_cy = None
-        try:
-            box = input_locator.bounding_box() if input_locator is not None else None
-            if box:
-                near_cx = float(box["x"]) + float(box["width"]) * 0.5
-                near_cy = float(box["y"]) - 40.0
-        except Exception:
-            pass
-
         steps = [
             ("생성 모드", self._prompt_media_candidates(self.cfg.get("prompt_media_mode", "image"))),
             ("화면 방향", self._prompt_orientation_candidates(self.cfg.get("prompt_orientation", "landscape"))),
@@ -3761,9 +3751,8 @@ class FlowVisionApp:
             for _ in range(10):
                 locator, used_selector = self._resolve_best_locator(
                     candidates,
+                    near_locator=input_locator if input_locator is not None else None,
                     timeout_ms=700,
-                    near_cx=near_cx,
-                    near_cy=near_cy,
                     prefer_enabled=False,
                 )
                 if locator is not None:
@@ -3785,15 +3774,6 @@ class FlowVisionApp:
     def _resolve_prompt_preset_controls(self, input_locator=None):
         if not self.page:
             raise RuntimeError("브라우저 페이지가 없습니다.")
-        near_cx = None
-        near_cy = None
-        try:
-            box = input_locator.bounding_box() if input_locator is not None else None
-            if box:
-                near_cx = float(box["x"]) + float(box["width"]) * 0.5
-                near_cy = float(box["y"]) - 40.0
-        except Exception:
-            pass
 
         defs = [
             ("media", "생성 모드", self._prompt_media_candidates(self.cfg.get("prompt_media_mode", "image"))),
