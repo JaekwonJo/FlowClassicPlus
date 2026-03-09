@@ -3015,7 +3015,17 @@ class FlowVisionApp:
         ttk.Button(btn_nav, text="◀", width=3, command=self.on_prev).pack(side="left", padx=1)
 
         tk.Label(btn_nav, text="번호 이동:", font=("Malgun Gothic", 9), bg=self.color_bg).pack(side="left", padx=(5, 2))
-        self.ent_jump = tk.Entry(btn_nav, width=5, font=("Consolas", 10), justify="center", relief="solid", borderwidth=1)
+        self.ent_jump = tk.Entry(
+            btn_nav,
+            width=5,
+            font=("Consolas", 10),
+            justify="center",
+            relief="solid",
+            borderwidth=1,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+        )
         self.ent_jump.pack(side="left", padx=2)
         self.ent_jump.bind("<Return>", self.on_direct_jump)
         ToolTip(self.ent_jump, "이동할 번호 입력 후 엔터(Enter)")
@@ -5577,9 +5587,9 @@ class FlowVisionApp:
             self.log("🚀 프롬프트 자동화 시작")
         if not is_download_mode:
             # 실행 시점 입력방식 고정: 중간에 설정이 바뀌어도 현재 런에는 영향 없게 한다.
-            self.run_input_mode = (self.cfg.get("input_mode", "paste") or "paste").strip().lower()
+            self.run_input_mode = (self.cfg.get("input_mode", "typing") or "typing").strip().lower()
             if self.run_input_mode not in ("typing", "paste", "mixed"):
-                self.run_input_mode = "paste"
+                self.run_input_mode = "typing"
             self.cfg["input_mode"] = self.run_input_mode
             self.input_mode_var.set(self.run_input_mode)
             self.save_config()
@@ -6008,7 +6018,7 @@ class FlowVisionApp:
             self.actor.set_page(self.page)
             start_url = (self.cfg.get("start_url") or "").strip()
             input_selector = (self.cfg.get("input_selector") or "").strip()
-            input_mode = self.run_input_mode if self.run_input_mode in ("typing", "paste", "mixed") else self.cfg.get("input_mode", "paste")
+            input_mode = self.run_input_mode if self.run_input_mode in ("typing", "paste", "mixed") else self.cfg.get("input_mode", "typing")
 
             if not (start_url and input_selector):
                 raise RuntimeError("URL 또는 입력 selector 설정이 비어 있습니다.")
