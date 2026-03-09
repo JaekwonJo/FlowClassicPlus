@@ -4690,13 +4690,16 @@ class FlowVisionApp:
             )
             self._apply_prompt_preset_used_selectors(used, profile="prompt")
 
-            media_ok = found.get("media") is not None
-            orientation_ok = found.get("orientation") is not None
-            variant_ok = found.get("variant") is not None
-            all_ok = media_ok and orientation_ok and variant_ok
+            self._apply_prompt_generation_preset(input_locator=input_locator, profile="prompt")
+            found_after, _used_after, opener_after, opener_desc_after, _opened_after = self._ensure_prompt_generation_panel_open(
+                input_locator=input_locator,
+                profile="prompt",
+            )
 
-            if all_ok:
-                self._apply_prompt_generation_preset(input_locator=input_locator, profile="prompt")
+            media_ok = found_after.get("media") is not None
+            orientation_ok = found_after.get("orientation") is not None
+            variant_ok = found_after.get("variant") is not None
+            all_ok = media_ok and orientation_ok and variant_ok
 
             self.log(
                 f"🧪 생성 옵션 테스트 | 모드={'OK' if media_ok else 'FAIL'} | "
@@ -4707,7 +4710,7 @@ class FlowVisionApp:
                 self.update_status_label("✅ 생성 옵션 테스트 통과", self.color_success)
             else:
                 self.update_status_label("⚠️ 생성 옵션 확인 필요", self.color_error)
-            self._close_prompt_generation_panel(input_locator=input_locator, opener=opener, opener_desc=opener_desc)
+            self._close_prompt_generation_panel(input_locator=input_locator, opener=opener_after or opener, opener_desc=opener_desc_after or opener_desc)
         except Exception as e:
             self.log(f"❌ 생성 옵션 테스트 실패: {e}")
             self.update_status_label("❌ 생성 옵션 테스트 실패", self.color_error)
@@ -4736,13 +4739,16 @@ class FlowVisionApp:
             )
             self._apply_prompt_preset_used_selectors(used, profile="asset")
 
-            media_ok = found.get("media") is not None
-            orientation_ok = found.get("orientation") is not None
-            variant_ok = found.get("variant") is not None
-            all_ok = media_ok and orientation_ok and variant_ok
+            self._apply_prompt_generation_preset(input_locator=input_locator, profile="asset")
+            found_after, _used_after, opener_after, opener_desc_after, _opened_after = self._ensure_prompt_generation_panel_open(
+                input_locator=input_locator,
+                profile="asset",
+            )
 
-            if all_ok:
-                self._apply_prompt_generation_preset(input_locator=input_locator, profile="asset")
+            media_ok = found_after.get("media") is not None
+            orientation_ok = found_after.get("orientation") is not None
+            variant_ok = found_after.get("variant") is not None
+            all_ok = media_ok and orientation_ok and variant_ok
 
             self.log(
                 f"🧪 S 생성 옵션 테스트 | 모드={'OK' if media_ok else 'FAIL'} | "
@@ -4753,7 +4759,7 @@ class FlowVisionApp:
                 self.update_status_label("✅ S 생성 옵션 테스트 통과", self.color_success)
             else:
                 self.update_status_label("⚠️ S 생성 옵션 확인 필요", self.color_error)
-            self._close_prompt_generation_panel(input_locator=input_locator, opener=opener, opener_desc=opener_desc)
+            self._close_prompt_generation_panel(input_locator=input_locator, opener=opener_after or opener, opener_desc=opener_desc_after or opener_desc)
         except Exception as e:
             self.log(f"❌ S 생성 옵션 테스트 실패: {e}")
             self.update_status_label("❌ S 생성 옵션 테스트 실패", self.color_error)
