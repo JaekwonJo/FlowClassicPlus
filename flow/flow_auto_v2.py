@@ -439,19 +439,20 @@ class FlowVisionApp:
     def _set_initial_window_size(self):
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        w = min(1180, max(940, int(sw * 0.90)))
-        h = min(860, max(660, int(sh * 0.82)))
+        w = min(1100, max(920, int(sw * 0.84)))
+        h = min(780, max(640, int(sh * 0.76)))
         x = max((sw - w) // 2, 0)
         y = max((sh - h) // 2, 0)
         self.root.geometry(f"{w}x{h}+{x}+{y}")
-        self.root.minsize(860, 620)
+        self.root.minsize(900, 620)
 
     def _init_body_sash(self):
         try:
+            self.root.update_idletasks()
             total_w = self.body_pane.winfo_width()
             if total_w > 0:
-                # 왼쪽(설정) 비중을 크게: 68% / 32%
-                self.body_pane.sashpos(0, int(total_w * 0.68))
+                # 왼쪽(설정) 비중을 조금 더 크게 유지
+                self.body_pane.sashpos(0, int(total_w * 0.64))
         except:
             pass
 
@@ -2093,19 +2094,19 @@ class FlowVisionApp:
 
     def _build_ui(self):
         # 1. Header (High Visibility)
-        header = tk.Frame(self.root, bg=self.color_header, height=72, highlightbackground="#24324B", highlightthickness=1)
+        header = tk.Frame(self.root, bg=self.color_header, height=64, highlightbackground="#24324B", highlightthickness=1)
         header.pack(fill="x", side="top")
         self.header = header
         
         title_f = tk.Frame(header, bg=self.color_header)
-        title_f.pack(side="left", padx=20, pady=10)
-        tk.Label(title_f, text="Flow Classic Plus", font=("Malgun Gothic", 20, "bold"), bg=self.color_header, fg=self.color_text).pack(anchor="w")
-        tk.Label(title_f, text="클래식 개선판 - 원본과 구분되는 별도 작업본", font=("Malgun Gothic", 10), bg=self.color_header, fg=self.color_text_sec).pack(anchor="w")
+        title_f.pack(side="left", padx=16, pady=8)
+        tk.Label(title_f, text="Flow Classic Plus", font=("Malgun Gothic", 18, "bold"), bg=self.color_header, fg=self.color_text).pack(anchor="w")
+        tk.Label(title_f, text="클래식 개선판", font=("Malgun Gothic", 9), bg=self.color_header, fg=self.color_text_sec).pack(anchor="w")
 
         center_f = tk.Frame(header, bg=self.color_header)
         center_f.pack(side="left", fill="both", expand=True, padx=10)
-        tk.Label(center_f, text="진행 상황", font=("Malgun Gothic", 10), bg=self.color_header, fg=self.color_text_sec).pack(anchor="center", pady=(10, 0))
-        self.lbl_header_progress = tk.Label(center_f, text="0 / 0 (0.0%)", font=("Consolas", 13, "bold"), bg=self.color_header, fg=self.color_accent)
+        tk.Label(center_f, text="진행 상황", font=("Malgun Gothic", 9), bg=self.color_header, fg=self.color_text_sec).pack(anchor="center", pady=(8, 0))
+        self.lbl_header_progress = tk.Label(center_f, text="0 / 0 (0.0%)", font=("Consolas", 12, "bold"), bg=self.color_header, fg=self.color_accent)
         self.lbl_header_progress.pack(anchor="center")
 
         nav_f = tk.Frame(header, bg=self.color_header)
@@ -2114,21 +2115,21 @@ class FlowVisionApp:
         self.btn_go_home.pack(side="left", padx=(0, 8))
 
         status_f = tk.Frame(header, bg=self.color_header)
-        status_f.pack(side="right", padx=18, fill="y")
-        tk.Label(status_f, text="현재 상태", font=("Malgun Gothic", 10), bg=self.color_header, fg=self.color_text_sec).pack(anchor="e")
-        self.lbl_main_status = tk.Label(status_f, text="준비 완료", font=("Malgun Gothic", 16, "bold"), bg=self.color_header, fg=self.color_success)
+        status_f.pack(side="right", padx=14, fill="y")
+        tk.Label(status_f, text="현재 상태", font=("Malgun Gothic", 9), bg=self.color_header, fg=self.color_text_sec).pack(anchor="e")
+        self.lbl_main_status = tk.Label(status_f, text="준비 완료", font=("Malgun Gothic", 15, "bold"), bg=self.color_header, fg=self.color_success)
         self.lbl_main_status.pack(anchor="e")
 
         # 2. Body
-        mid_frame = tk.Frame(self.root, bg=self.color_bg, pady=10)
-        mid_frame.pack(fill="both", expand=True, padx=8)
+        mid_frame = tk.Frame(self.root, bg=self.color_bg, pady=6)
+        mid_frame.pack(fill="both", expand=True, padx=6)
         self.mid_frame = mid_frame
 
         self.body_pane = ttk.Panedwindow(mid_frame, orient="horizontal")
         self.body_pane.pack(fill="both", expand=True)
 
         # --- Left: Settings (Scrollable) ---
-        self.left_container = tk.Frame(self.body_pane, bg=self.color_bg, width=440)
+        self.left_container = tk.Frame(self.body_pane, bg=self.color_bg, width=520)
         self.left_container.pack_propagate(False) # 고정 너비 유지
 
         canvas = tk.Canvas(self.left_container, bg=self.color_bg, highlightthickness=0)
@@ -2149,8 +2150,8 @@ class FlowVisionApp:
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
-        left_card = ttk.LabelFrame(scrollable_frame, text=" ⚙️ 기본 설정 ", padding=15)
-        left_card.pack(fill="x", padx=5, pady=5)
+        left_card = ttk.LabelFrame(scrollable_frame, text=" ⚙️ 기본 설정 ", padding=12)
+        left_card.pack(fill="x", padx=4, pady=4)
         
         # Playwright Target Settings
         tk.Label(left_card, text="1. 브라우저 대상 설정 (필수)", font=("Malgun Gothic", 11, "bold"), fg=self.color_text).pack(anchor="w", pady=(0, 5))
@@ -2642,8 +2643,8 @@ class FlowVisionApp:
         self.root.after(120, self._init_body_sash)
         
         # 1. Progress Card
-        prog_card = ttk.LabelFrame(right_panel, text=" 📊 진행 상황 ", padding=10)
-        prog_card.pack(fill="x", pady=(0, 10))
+        prog_card = ttk.LabelFrame(right_panel, text=" 📊 진행 상황 ", padding=8)
+        prog_card.pack(fill="x", pady=(0, 8))
         
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(prog_card, variable=self.progress_var, maximum=100, mode='determinate', style="Horizontal.TProgressbar")
@@ -2651,14 +2652,14 @@ class FlowVisionApp:
         
         info_f = tk.Frame(prog_card, bg=self.color_bg)
         info_f.pack(fill="x")
-        self.lbl_prog_text = tk.Label(info_f, text="0 / 0 (0.0%)", font=("Consolas", 14, "bold"), fg=self.color_accent, bg=self.color_bg)
+        self.lbl_prog_text = tk.Label(info_f, text="0 / 0 (0.0%)", font=("Consolas", 13, "bold"), fg=self.color_accent, bg=self.color_bg)
         self.lbl_prog_text.pack(side="left")
         self.lbl_eta = tk.Label(info_f, text="종료 예정: --:--", font=("Malgun Gothic", 10), fg=self.color_text_sec, bg=self.color_bg)
         self.lbl_eta.pack(side="right", pady=4)
         
         # 2. Mini HUD (핵심 정보만 표시)
-        mon_card = ttk.LabelFrame(right_panel, text=" ⚡ Mini HUD ", padding=10)
-        mon_card.pack(fill="x", pady=(0, 10))
+        mon_card = ttk.LabelFrame(right_panel, text=" ⚡ Mini HUD ", padding=8)
+        mon_card.pack(fill="x", pady=(0, 8))
 
         top_line = tk.Frame(mon_card, bg=self.color_bg)
         top_line.pack(fill="x")
@@ -2715,33 +2716,33 @@ class FlowVisionApp:
         self.lbl_hud_trait.pack(anchor="w", pady=(4, 0))
         self._set_mini_hud_collapsed(True)
 
-        ctrl_card = ttk.LabelFrame(right_panel, text=" ▶ 실행 컨트롤 ", padding=10)
-        ctrl_card.pack(fill="x", pady=(0, 10))
+        ctrl_card = ttk.LabelFrame(right_panel, text=" ▶ 실행 컨트롤 ", padding=8)
+        ctrl_card.pack(fill="x", pady=(0, 8))
         self.btn_start_prompt = ttk.Button(
             ctrl_card,
             text="▶ 프롬프트 자동화 시작",
             style="Action.TButton",
             command=self.on_start_prompt,
         )
-        self.btn_start_prompt.pack(fill="x", ipady=12)
+        self.btn_start_prompt.pack(fill="x", ipady=7)
         self.btn_start_asset = ttk.Button(
             ctrl_card,
             text="▶ S반복 자동화 시작",
             command=self.on_start_asset,
         )
-        self.btn_start_asset.pack(fill="x", ipady=10, pady=(8, 0))
+        self.btn_start_asset.pack(fill="x", ipady=6, pady=(6, 0))
         self.btn_start_download = ttk.Button(
             ctrl_card,
             text="▶ 다운로드 자동화 시작",
             command=self.on_start_download,
         )
-        self.btn_start_download.pack(fill="x", ipady=10, pady=(8, 0))
+        self.btn_start_download.pack(fill="x", ipady=6, pady=(6, 0))
         self.btn_pause = ttk.Button(ctrl_card, text="⏸ 일시정지", command=self.on_pause, state="disabled")
-        self.btn_pause.pack(fill="x", pady=(8, 0), ipady=6)
+        self.btn_pause.pack(fill="x", pady=(6, 0), ipady=4)
         self.btn_resume = ttk.Button(ctrl_card, text="▶ 재개", command=self.on_resume, state="disabled")
-        self.btn_resume.pack(fill="x", pady=(6, 0), ipady=6)
+        self.btn_resume.pack(fill="x", pady=(6, 0), ipady=4)
         self.btn_stop = ttk.Button(ctrl_card, text="⏹ 완전중지(브라우저 종료)", command=self.on_stop, state="disabled")
-        self.btn_stop.pack(fill="x", pady=(6, 0), ipady=6)
+        self.btn_stop.pack(fill="x", pady=(6, 0), ipady=4)
 
         # 3. Bottom
         bottom = tk.Frame(self.root, bg=self.color_bg)
@@ -2820,6 +2821,7 @@ class FlowVisionApp:
 
     def open_home_target(self, target):
         self.hide_home_menu()
+        self.root.after(80, self._init_body_sash)
         try:
             if hasattr(self, "_set_asset_open"):
                 self._set_asset_open(target == "asset")
