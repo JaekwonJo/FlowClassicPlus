@@ -2107,6 +2107,18 @@ class FlowVisionApp:
     def _toggle_mini_hud(self):
         self._set_mini_hud_collapsed(not getattr(self, "mini_hud_collapsed", False))
 
+    def on_typing_speed_scale_change(self):
+        try:
+            level = int(self.typing_speed_scale_var.get())
+        except Exception:
+            level = 5
+        level = max(1, min(20, level))
+        if hasattr(self, "typing_speed_profile_var"):
+            self.typing_speed_profile_var.set(f"x{level}")
+        if hasattr(self, "lbl_typing_speed_value"):
+            self.lbl_typing_speed_value.config(text=f"x{level}")
+        self.on_option_toggle()
+
     def _build_ui(self):
         # 1. Header (High Visibility)
         header = tk.Frame(self.root, bg=self.color_header, height=64, highlightbackground="#24324B", highlightthickness=1)
@@ -2274,23 +2286,44 @@ class FlowVisionApp:
 
         speed_f = tk.Frame(left_card, bg=self.color_bg)
         speed_f.pack(fill="x", pady=(0, 8))
-        tk.Label(speed_f, text="⚡ 타이핑 속도", bg=self.color_bg, font=("Malgun Gothic", 10, "bold")).pack(side="left")
+        tk.Label(speed_f, text="⚡ 타이핑 속도", bg=self.color_bg, font=("Malgun Gothic", 10, "bold")).pack(anchor="w")
         speed_default = str(self.cfg.get("typing_speed_profile", "x5")).strip().lower() or "x5"
         legacy_speed_map = {"slow": "x2", "normal": "x5", "fast": "x10", "turbo": "x16"}
         speed_default = legacy_speed_map.get(speed_default, speed_default)
-        if not speed_default.startswith("x"):
-            speed_default = "x5"
-        self.typing_speed_profile_var = tk.StringVar(value=speed_default)
-        self.combo_typing_speed = ttk.Combobox(
-            speed_f,
-            textvariable=self.typing_speed_profile_var,
-            state="readonly",
-            width=12,
-            values=tuple(f"x{i}" for i in range(1, 21)),
-            font=("Malgun Gothic", 10),
+        try:
+            speed_level = int(speed_default.replace("x", "").strip())
+        except Exception:
+            speed_level = 5
+        speed_level = max(1, min(20, speed_level))
+        speed_row = tk.Frame(speed_f, bg=self.color_bg)
+        speed_row.pack(fill="x", pady=(4, 0))
+        self.typing_speed_scale_var = tk.IntVar(value=speed_level)
+        self.typing_speed_profile_var = tk.StringVar(value=f"x{speed_level}")
+        self.scale_typing_speed = tk.Scale(
+            speed_row,
+            from_=1,
+            to=20,
+            orient="horizontal",
+            variable=self.typing_speed_scale_var,
+            command=lambda _v: self.on_typing_speed_scale_change(),
+            bg=self.color_bg,
+            fg=self.color_text,
+            highlightthickness=0,
+            troughcolor="#24324B",
+            activebackground=self.color_accent,
+            font=("Consolas", 9),
+            length=220,
         )
-        self.combo_typing_speed.pack(side="left", padx=(8, 0))
-        self.combo_typing_speed.bind("<<ComboboxSelected>>", self.on_option_toggle)
+        self.scale_typing_speed.pack(side="left", fill="x", expand=True)
+        self.lbl_typing_speed_value = tk.Label(
+            speed_row,
+            text=f"x{speed_level}",
+            bg=self.color_bg,
+            fg=self.color_accent,
+            font=("Consolas", 12, "bold"),
+            width=5,
+        )
+        self.lbl_typing_speed_value.pack(side="left", padx=(10, 0))
 
         preset_body, _set_preset_open = self._create_collapsible_section(left_card, "프롬프트 자동화 전용 생성 옵션", opened=True)
         self._set_prompt_preset_open = _set_preset_open
@@ -2834,7 +2867,7 @@ class FlowVisionApp:
         ttk.Button(btn_nav, text="⏭", width=3, command=self.on_last).pack(side="left", padx=1)
 
         btn_f = tk.Frame(bottom, bg=self.color_bg)
-        btn_f.pack(fill="x", pady=16)
+        btn_f.pack(fill="x", pady=12)
 
         btn_log = tk.Button(
             btn_f,
@@ -2842,11 +2875,11 @@ class FlowVisionApp:
             command=self.log_window.show,
             bg="#24324B",
             fg=self.color_text,
-            font=("Malgun Gothic", 12, "bold"),
+            font=("Malgun Gothic", 11, "bold"),
             relief="raised",
             borderwidth=3,
         )
-        btn_log.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=10)
+        btn_log.pack(fill="x", expand=True, pady=(0, 6), ipady=8)
 
         btn_refresh_big = tk.Button(
             btn_f,
@@ -2854,11 +2887,11 @@ class FlowVisionApp:
             command=self.on_reload,
             bg="#1B78D0",
             fg="white",
-            font=("Malgun Gothic", 12, "bold"),
+            font=("Malgun Gothic", 11, "bold"),
             relief="raised",
             borderwidth=3,
         )
-        btn_refresh_big.pack(side="right", fill="x", expand=True, padx=(5, 0), ipady=10)
+        btn_refresh_big.pack(fill="x", expand=True, ipady=8)
 
         self._build_home_menu()
 
@@ -3224,10 +3257,21 @@ class FlowVisionApp:
                 pass
         else:
             self.cfg["input_mode"] = self.input_mode_var.get()
-        if hasattr(self, "typing_speed_profile_var"):
+        if hasattr(self, "typing_speed_scale_var"):
+            try:
+                level = int(self.typing_speed_scale_var.get())
+            except Exception:
+                level = 5
+            level = max(1, min(20, level))
+            self.cfg["typing_speed_profile"] = f"x{level}"
+            if hasattr(self, "typing_speed_profile_var"):
+                self.typing_speed_profile_var.set(f"x{level}")
+            if hasattr(self, "lbl_typing_speed_value"):
+                self.lbl_typing_speed_value.config(text=f"x{level}")
+        elif hasattr(self, "typing_speed_profile_var"):
             self.cfg["typing_speed_profile"] = self.typing_speed_profile_var.get().strip()
         else:
-            self.cfg["typing_speed_profile"] = str(self.cfg.get("typing_speed_profile", "normal")).strip() or "normal"
+            self.cfg["typing_speed_profile"] = str(self.cfg.get("typing_speed_profile", "x5")).strip() or "x5"
         self.cfg["start_url"] = self.start_url_var.get().strip() if hasattr(self, "start_url_var") else self.cfg.get("start_url", "")
         self.cfg["input_selector"] = self.input_selector_var.get().strip() if hasattr(self, "input_selector_var") else self.cfg.get("input_selector", "")
         self.cfg["submit_selector"] = self.submit_selector_var.get().strip() if hasattr(self, "submit_selector_var") else self.cfg.get("submit_selector", "")
@@ -3761,9 +3805,8 @@ class FlowVisionApp:
         for key, _label, candidates in defs:
             locator, selector = self._resolve_best_locator(
                 candidates,
+                near_locator=input_locator if input_locator is not None else None,
                 timeout_ms=1600,
-                near_cx=near_cx,
-                near_cy=near_cy,
                 prefer_enabled=False,
             )
             found[key] = locator
