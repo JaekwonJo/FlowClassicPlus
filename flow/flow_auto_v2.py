@@ -105,6 +105,8 @@ DEFAULT_CONFIG = {
     "prompt_media_mode_selector": "",
     "prompt_orientation_selector": "",
     "prompt_variant_selector": "",
+    "prompt_image_panel_selector": "",
+    "prompt_video_panel_selector": "",
     "asset_prompt_mode_preset_enabled": True,
     "asset_prompt_media_mode": "video",
     "asset_prompt_orientation": "landscape",
@@ -112,6 +114,8 @@ DEFAULT_CONFIG = {
     "asset_prompt_media_mode_selector": "",
     "asset_prompt_orientation_selector": "",
     "asset_prompt_variant_selector": "",
+    "asset_prompt_image_panel_selector": "",
+    "asset_prompt_video_panel_selector": "",
     "asset_loop_enabled": False,
     "asset_loop_start": 1,
     "asset_loop_end": 1,
@@ -388,6 +392,7 @@ class FlowVisionApp:
         self.download_report_path = None
         self.prompt_image_baseline_ready = False
         self.asset_image_baseline_ready = False
+        self.current_media_state = None
 
         self.actor = HumanActor(action_logger=self._action_log, status_callback=self._actor_status)
         self.actor.language_mode = self.cfg.get("language_mode", "en")
@@ -2134,12 +2139,17 @@ class FlowVisionApp:
             return f"asset_prompt_{suffix}"
         return f"prompt_{suffix}"
 
+    def _panel_selector_key(self, profile, state):
+        profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
+        state = "video" if str(state).strip().lower() == "video" else "image"
+        prefix = "asset_prompt" if profile == "asset" else "prompt"
+        return f"{prefix}_{state}_panel_selector"
+
     def _preset_selector_summary(self, profile="prompt"):
-        media = str(self.cfg.get(self._preset_cfg_key(profile, "media_mode_selector"), "") or "").strip() or "-"
-        orientation = str(self.cfg.get(self._preset_cfg_key(profile, "orientation_selector"), "") or "").strip() or "-"
-        variant = str(self.cfg.get(self._preset_cfg_key(profile, "variant_selector"), "") or "").strip() or "-"
+        image_panel = str(self.cfg.get(self._panel_selector_key(profile, "image"), "") or "").strip() or "-"
+        video_panel = str(self.cfg.get(self._panel_selector_key(profile, "video"), "") or "").strip() or "-"
         prefix = "S자동화" if profile == "asset" else "프롬프트"
-        return f"{prefix} 저장된 selector | 모드: {media} | 방향: {orientation} | 개수: {variant}"
+        return f"{prefix} 저장된 selector | 이미지 패널: {image_panel} | 동영상 패널: {video_panel}"
 
     def _refresh_prompt_preset_selector_label(self):
         if hasattr(self, "lbl_prompt_preset_selector"):
@@ -2161,6 +2171,7 @@ class FlowVisionApp:
 
     def on_mark_prompt_image_baseline_ready(self):
         self.prompt_image_baseline_ready = True
+        self.current_media_state = "image"
         self._refresh_manual_baseline_labels()
         self.log("✅ 프롬프트 자동화 기본값 이미지 확인 완료")
 
@@ -2171,6 +2182,7 @@ class FlowVisionApp:
 
     def on_mark_asset_image_baseline_ready(self):
         self.asset_image_baseline_ready = True
+        self.current_media_state = "image"
         self._refresh_manual_baseline_labels()
         self.log("✅ S자동화 기본값 이미지 확인 완료")
 
@@ -4048,6 +4060,21 @@ class FlowVisionApp:
         ])
         return self._normalize_candidate_list(cands)
 
+    def _panel_media_tab_candidates(self, state):
+        state = "video" if str(state).strip().lower() == "video" else "image"
+        target = "Video" if state == "video" else "Image"
+        alt = "영상" if state == "video" else "이미지"
+        return self._normalize_candidate_list([
+            f"button:text-is('{target}')",
+            f"[role='button']:text-is('{target}')",
+            f"button:has-text('{target}')",
+            f"[role='button']:has-text('{target}')",
+            f"button:has-text('{alt}')",
+            f"[role='button']:has-text('{alt}')",
+            f"button[aria-label*='{target.lower()}' i]",
+            f"[role='button'][aria-label*='{target.lower()}' i]",
+        ])
+
     def _prompt_orientation_candidates(self, orientation, profile="prompt"):
         orientation = "portrait" if str(orientation).strip().lower() == "portrait" else "landscape"
         target = "세로 모드" if orientation == "portrait" else "가로 모드"
@@ -4104,57 +4131,11 @@ class FlowVisionApp:
         if not self.cfg.get(enabled_key, True):
             self.log("ℹ️ 생성 옵션 자동 맞춤: 사용 안 함")
             return
-
-        _found, _used, _opener, _opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
-            input_locator=input_locator,
-            profile=profile,
-        )
-
-        steps = [
-            ("생성 모드", self._prompt_media_candidates(self.cfg.get(self._preset_cfg_key(profile, "media_mode"), "image"), profile=profile)),
-            ("화면 방향", self._prompt_orientation_candidates(self.cfg.get(self._preset_cfg_key(profile, "orientation"), "landscape"), profile=profile)),
-            ("생성 개수", self._prompt_variant_candidates(self.cfg.get(self._preset_cfg_key(profile, "variant_count"), "x1"), profile=profile)),
-        ]
-
-        for label, candidates in steps:
-            locator = None
-            used_selector = None
-            for _ in range(10):
-                locator, used_selector = self._resolve_best_locator(
-                    candidates,
-                    near_locator=input_locator if input_locator is not None else None,
-                    timeout_ms=700,
-                    prefer_enabled=False,
-                )
-                if locator is not None:
-                    break
-                time.sleep(0.2)
-            if locator is None:
-                self.log(f"⚠️ {label} 버튼을 찾지 못해 건너뜁니다.")
-                continue
-            ok = self._click_with_actor_fallback(locator, label)
-            if ok:
-                self.log(f"🎛️ {label} 자동 적용: {used_selector or '텍스트 버튼'}")
-                try:
-                    self.actor.random_action_delay(f"{label} 적용 후 짧은 대기", 0.12, 0.45)
-                except Exception:
-                    pass
-            else:
-                self.log(f"⚠️ {label} 클릭에 실패해 건너뜁니다.")
-
-        try:
-            self.log("🔄 생성 옵션 적용 후 새로고침")
-            self.page.reload(wait_until="domcontentloaded", timeout=45000)
-        except Exception as e:
-            self.log(f"⚠️ 생성 옵션 적용 후 새로고침 실패: {e}")
-
-        try:
-            self.actor.random_action_delay("생성 옵션 적용 후 새로고침 안정화", 1.0, 2.4)
-        except Exception:
-            pass
-
-        input_hint = (self.cfg.get("input_selector") or "").strip() or "#PINHOLE_TEXT_AREA_ELEMENT_ID, textarea, [contenteditable='true'], [role='textbox']"
-        self._wait_until_input_visible(input_hint, timeout_sec=15)
+        desired_state = str(self.cfg.get(self._preset_cfg_key(profile, "media_mode"), "image")).strip().lower()
+        desired_state = "video" if desired_state == "video" else "image"
+        ok = self._switch_media_state(desired_state, input_locator=input_locator, profile=profile)
+        if not ok:
+            raise RuntimeError("생성 모드 전환에 실패했습니다. 기본값 이미지 확인 후 자동찾기/테스트를 다시 실행해주세요.")
 
     def _resolve_prompt_preset_controls(self, input_locator=None, profile="prompt"):
         if not self.page:
@@ -4254,6 +4235,57 @@ class FlowVisionApp:
 
         return best, best_desc
 
+    def _locator_to_button_selector(self, locator):
+        if locator is None:
+            return ""
+        try:
+            info = locator.evaluate(
+                """(el) => {
+                    const a = (k) => (el.getAttribute(k) || "").trim();
+                    const textLines = String(el.innerText || "")
+                        .split(/\\n+/)
+                        .map(x => x.trim())
+                        .filter(Boolean);
+                    return {
+                        id: a("id"),
+                        aria: a("aria-label"),
+                        title: a("title"),
+                        textLines,
+                    };
+                }"""
+            ) or {}
+        except Exception:
+            return ""
+
+        raw_id = str(info.get("id") or "").strip()
+        if raw_id:
+            return f"#{raw_id}"
+
+        raw_aria = str(info.get("aria") or "").strip()
+        if raw_aria:
+            esc = raw_aria.replace("'", "\\'")
+            return f"button[aria-label*='{esc}']"
+
+        raw_title = str(info.get("title") or "").strip()
+        if raw_title:
+            esc = raw_title.replace("'", "\\'")
+            return f"button[title*='{esc}']"
+
+        bad_lines = {
+            "image", "video", "가로 모드", "세로 모드", "frames", "ingredients",
+            "x1", "x2", "x3", "x4", "생성 시 0크레딧이 사용됩니다.", "생성 시 10크레딧이 사용됩니다.",
+            "동영상", "이미지", "가로", "세로", "프레임", "재료",
+        }
+        for line in info.get("textLines") or []:
+            v = str(line or "").strip()
+            if not v or v.lower() in bad_lines:
+                continue
+            if len(v) > 48:
+                continue
+            esc = v.replace("'", "\\'")
+            return f"button:has-text('{esc}')"
+        return ""
+
     def _ensure_prompt_generation_panel_open(self, input_locator=None, profile="prompt"):
         found, used = self._resolve_prompt_preset_controls(input_locator=input_locator, profile=profile)
         visible_count = sum(1 for x in found.values() if x is not None)
@@ -4272,6 +4304,56 @@ class FlowVisionApp:
                 time.sleep(0.6)
                 found, used = self._resolve_prompt_preset_controls(input_locator=input_locator, profile=profile)
         return found, used, opener, opener_desc, opened_now
+
+    def _resolve_saved_panel_button(self, profile, state):
+        selector = str(self.cfg.get(self._panel_selector_key(profile, state), "") or "").strip()
+        if not selector or not self.page:
+            return None, selector
+        loc, used = self._resolve_best_locator([selector], timeout_ms=1200, prefer_enabled=False)
+        return loc, used or selector
+
+    def _switch_media_state(self, desired_state, input_locator=None, profile="prompt"):
+        profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
+        desired_state = "video" if str(desired_state).strip().lower() == "video" else "image"
+        current_state = self.current_media_state or "image"
+        if current_state == desired_state:
+            self.log(f"ℹ️ 생성 모드 유지: {desired_state}")
+            return True
+
+        open_loc, open_sel = self._resolve_saved_panel_button(profile, current_state)
+        if open_loc is None:
+            self.log(f"⚠️ {profile} {current_state} 패널 버튼 저장값을 찾지 못했습니다.")
+            return False
+        if not self._click_with_actor_fallback(open_loc, f"{current_state} 패널 열기"):
+            self.log(f"⚠️ {current_state} 패널 열기 실패")
+            return False
+        time.sleep(0.5)
+
+        media_loc, media_sel = self._resolve_best_locator(
+            self._panel_media_tab_candidates(desired_state),
+            near_locator=input_locator if input_locator is not None else None,
+            timeout_ms=1400,
+            prefer_enabled=False,
+        )
+        if media_loc is None:
+            self.log(f"⚠️ {desired_state} 선택 버튼을 찾지 못했습니다.")
+            return False
+        if not self._click_with_actor_fallback(media_loc, f"{desired_state} 선택"):
+            self.log(f"⚠️ {desired_state} 선택 클릭 실패")
+            return False
+        self.log(f"🎛️ 생성 모드 전환: {current_state} -> {desired_state} ({media_sel or '텍스트 버튼'})")
+        time.sleep(0.5)
+
+        close_loc, close_sel = self._resolve_saved_panel_button(profile, desired_state)
+        if close_loc is None:
+            self.log(f"⚠️ {profile} {desired_state} 패널 버튼 저장값을 찾지 못했습니다.")
+            return False
+        if not self._click_with_actor_fallback(close_loc, f"{desired_state} 패널 닫기"):
+            self.log(f"⚠️ {desired_state} 패널 닫기 실패")
+            return False
+        time.sleep(0.4)
+        self.current_media_state = desired_state
+        return True
 
     def _close_prompt_generation_panel(self, input_locator=None, opener=None, opener_desc=None):
         target = opener
@@ -4662,26 +4744,62 @@ class FlowVisionApp:
             if input_locator is None:
                 self.log("ℹ️ 프롬프트 입력칸 미탐지 상태 - 생성 옵션만 전역 탐색으로 계속 진행합니다.")
 
-            found, used, opener, opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
-                input_locator=input_locator,
-                profile="prompt",
-            )
-            self._apply_prompt_preset_used_selectors(used, profile="prompt")
+            image_button, _ = self._resolve_prompt_preset_toggle_button(input_locator=input_locator)
+            image_panel_selector = self._locator_to_button_selector(image_button)
+            if not image_panel_selector:
+                raise RuntimeError("이미지 패널 버튼을 찾지 못했습니다.")
 
-            media_ok = found.get("media") is not None
-            orientation_ok = found.get("orientation") is not None
-            variant_ok = found.get("variant") is not None
+            if not self._click_with_actor_fallback(image_button, "이미지 패널 열기"):
+                raise RuntimeError("이미지 패널 열기 클릭 실패")
+            time.sleep(0.5)
+
+            video_button, video_media_selector = self._resolve_best_locator(
+                self._panel_media_tab_candidates("video"),
+                near_locator=input_locator if input_locator is not None else None,
+                timeout_ms=1500,
+                prefer_enabled=False,
+            )
+            if video_button is None:
+                raise RuntimeError("Video 버튼을 찾지 못했습니다.")
+            if not self._click_with_actor_fallback(video_button, "Video 선택"):
+                raise RuntimeError("Video 선택 클릭 실패")
+            time.sleep(0.5)
+
+            video_panel_button, _ = self._resolve_prompt_preset_toggle_button(input_locator=input_locator)
+            video_panel_selector = self._locator_to_button_selector(video_panel_button)
+            if not video_panel_selector:
+                raise RuntimeError("동영상 패널 버튼을 찾지 못했습니다.")
+
+            self.cfg[self._panel_selector_key("prompt", "image")] = image_panel_selector
+            self.cfg[self._panel_selector_key("prompt", "video")] = video_panel_selector
+            self.cfg[self._preset_cfg_key("prompt", "media_mode_selector")] = video_media_selector or ""
+            self.current_media_state = "video"
+            self.save_config()
+            self._refresh_prompt_preset_selector_label()
+
+            # 이미지 기본값으로 복원
+            if video_panel_button is not None:
+                self._click_with_actor_fallback(video_panel_button, "동영상 패널 열기")
+                time.sleep(0.4)
+                image_tab, _ = self._resolve_best_locator(
+                    self._panel_media_tab_candidates("image"),
+                    near_locator=input_locator if input_locator is not None else None,
+                    timeout_ms=1500,
+                    prefer_enabled=False,
+                )
+                if image_tab is not None:
+                    self._click_with_actor_fallback(image_tab, "Image 선택")
+                    time.sleep(0.4)
+                    image_panel_loc, _ = self._resolve_saved_panel_button("prompt", "image")
+                    if image_panel_loc is not None:
+                        self._click_with_actor_fallback(image_panel_loc, "이미지 패널 닫기")
+                        self.current_media_state = "image"
 
             self.log(
-                f"🔍 생성 옵션 자동탐색 결과 | 모드({used.get('media') or '-'})={'OK' if media_ok else 'FAIL'} | "
-                f"방향({used.get('orientation') or '-'})={'OK' if orientation_ok else 'FAIL'} | "
-                f"개수({used.get('variant') or '-'})={'OK' if variant_ok else 'FAIL'}"
+                f"🔍 생성 옵션 자동탐색 결과 | 이미지 패널({image_panel_selector})=OK | "
+                f"동영상 패널({video_panel_selector})=OK | Video({video_media_selector or '-'})=OK"
             )
-            if media_ok and orientation_ok and variant_ok:
-                self.update_status_label("✅ 생성 옵션 selector 자동찾기 완료", self.color_success)
-            else:
-                self.update_status_label("⚠️ 생성 옵션 selector 일부 미탐지", self.color_error)
-            self._close_prompt_generation_panel(input_locator=input_locator, opener=opener, opener_desc=opener_desc)
+            self.update_status_label("✅ 생성 옵션 selector 자동찾기 완료", self.color_success)
         except Exception as e:
             self.log(f"❌ 생성 옵션 selector 자동찾기 실패: {e}")
             self.update_status_label("❌ 생성 옵션 selector 자동찾기 실패", self.color_error)
@@ -4704,26 +4822,61 @@ class FlowVisionApp:
             if input_locator is None:
                 self.log("ℹ️ S입력칸 미탐지 상태 - 생성 옵션만 전역 탐색으로 계속 진행합니다.")
 
-            found, used, opener, opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
-                input_locator=input_locator,
-                profile="asset",
-            )
-            self._apply_prompt_preset_used_selectors(used, profile="asset")
+            image_button, _ = self._resolve_prompt_preset_toggle_button(input_locator=input_locator)
+            image_panel_selector = self._locator_to_button_selector(image_button)
+            if not image_panel_selector:
+                raise RuntimeError("이미지 패널 버튼을 찾지 못했습니다.")
 
-            media_ok = found.get("media") is not None
-            orientation_ok = found.get("orientation") is not None
-            variant_ok = found.get("variant") is not None
+            if not self._click_with_actor_fallback(image_button, "이미지 패널 열기"):
+                raise RuntimeError("이미지 패널 열기 클릭 실패")
+            time.sleep(0.5)
+
+            video_button, video_media_selector = self._resolve_best_locator(
+                self._panel_media_tab_candidates("video"),
+                near_locator=input_locator if input_locator is not None else None,
+                timeout_ms=1500,
+                prefer_enabled=False,
+            )
+            if video_button is None:
+                raise RuntimeError("Video 버튼을 찾지 못했습니다.")
+            if not self._click_with_actor_fallback(video_button, "Video 선택"):
+                raise RuntimeError("Video 선택 클릭 실패")
+            time.sleep(0.5)
+
+            video_panel_button, _ = self._resolve_prompt_preset_toggle_button(input_locator=input_locator)
+            video_panel_selector = self._locator_to_button_selector(video_panel_button)
+            if not video_panel_selector:
+                raise RuntimeError("동영상 패널 버튼을 찾지 못했습니다.")
+
+            self.cfg[self._panel_selector_key("asset", "image")] = image_panel_selector
+            self.cfg[self._panel_selector_key("asset", "video")] = video_panel_selector
+            self.cfg[self._preset_cfg_key("asset", "media_mode_selector")] = video_media_selector or ""
+            self.current_media_state = "video"
+            self.save_config()
+            self._refresh_prompt_preset_selector_label()
+
+            if video_panel_button is not None:
+                self._click_with_actor_fallback(video_panel_button, "동영상 패널 열기")
+                time.sleep(0.4)
+                image_tab, _ = self._resolve_best_locator(
+                    self._panel_media_tab_candidates("image"),
+                    near_locator=input_locator if input_locator is not None else None,
+                    timeout_ms=1500,
+                    prefer_enabled=False,
+                )
+                if image_tab is not None:
+                    self._click_with_actor_fallback(image_tab, "Image 선택")
+                    time.sleep(0.4)
+                    image_panel_loc, _ = self._resolve_saved_panel_button("asset", "image")
+                    if image_panel_loc is not None:
+                        self._click_with_actor_fallback(image_panel_loc, "이미지 패널 닫기")
+                        self.current_media_state = "image"
 
             self.log(
-                f"🔍 S 생성 옵션 자동탐색 결과 | 모드({used.get('media') or '-'})={'OK' if media_ok else 'FAIL'} | "
-                f"방향({used.get('orientation') or '-'})={'OK' if orientation_ok else 'FAIL'} | "
-                f"개수({used.get('variant') or '-'})={'OK' if variant_ok else 'FAIL'}"
+                f"🔍 S 생성 옵션 자동탐색 결과 | 이미지 패널({image_panel_selector})=OK | "
+                f"동영상 패널({video_panel_selector})=OK | Video({video_media_selector or '-'})=OK"
             )
-            if media_ok and orientation_ok and variant_ok:
-                self.update_status_label("✅ S 생성 옵션 selector 자동찾기 완료", self.color_success)
-            else:
-                self.update_status_label("⚠️ S 생성 옵션 selector 일부 미탐지", self.color_error)
-            self._close_prompt_generation_panel(input_locator=input_locator, opener=opener, opener_desc=opener_desc)
+            self.update_status_label("✅ S 생성 옵션 selector 자동찾기 완료", self.color_success)
         except Exception as e:
             self.log(f"❌ S 생성 옵션 selector 자동찾기 실패: {e}")
             self.update_status_label("❌ S 생성 옵션 selector 자동찾기 실패", self.color_error)
@@ -4760,33 +4913,24 @@ class FlowVisionApp:
             if input_locator is None:
                 self.log("ℹ️ 프롬프트 입력칸 미탐지 상태 - 생성 옵션만 전역 탐색으로 테스트합니다.")
 
-            found, used, opener, opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
-                input_locator=input_locator,
-                profile="prompt",
-            )
-            self._apply_prompt_preset_used_selectors(used, profile="prompt")
+            image_sel = str(self.cfg.get(self._panel_selector_key("prompt", "image"), "") or "").strip()
+            video_sel = str(self.cfg.get(self._panel_selector_key("prompt", "video"), "") or "").strip()
+            if not image_sel or not video_sel:
+                raise RuntimeError("프롬프트 생성 옵션 자동찾기를 먼저 실행해주세요.")
 
-            self._apply_prompt_generation_preset(input_locator=input_locator, profile="prompt")
-            found_after, _used_after, opener_after, opener_desc_after, _opened_after = self._ensure_prompt_generation_panel_open(
-                input_locator=input_locator,
-                profile="prompt",
-            )
-
-            media_ok = found_after.get("media") is not None
-            orientation_ok = found_after.get("orientation") is not None
-            variant_ok = found_after.get("variant") is not None
-            all_ok = media_ok and orientation_ok and variant_ok
+            self.current_media_state = "image"
+            video_ok = self._switch_media_state("video", input_locator=input_locator, profile="prompt")
+            image_ok = self._switch_media_state("image", input_locator=input_locator, profile="prompt")
 
             self.log(
-                f"🧪 생성 옵션 테스트 | 모드={'OK' if media_ok else 'FAIL'} | "
-                f"방향={'OK' if orientation_ok else 'FAIL'} | "
-                f"개수={'OK' if variant_ok else 'FAIL'}"
+                f"🧪 생성 옵션 테스트 | 이미지패널={'OK' if bool(image_sel) else 'FAIL'} | "
+                f"동영상패널={'OK' if bool(video_sel) else 'FAIL'} | "
+                f"전환={'OK' if (video_ok and image_ok) else 'FAIL'}"
             )
-            if all_ok:
+            if video_ok and image_ok:
                 self.update_status_label("✅ 생성 옵션 테스트 통과", self.color_success)
             else:
                 self.update_status_label("⚠️ 생성 옵션 확인 필요", self.color_error)
-            self._close_prompt_generation_panel(input_locator=input_locator, opener=opener_after or opener, opener_desc=opener_desc_after or opener_desc)
         except Exception as e:
             self.log(f"❌ 생성 옵션 테스트 실패: {e}")
             self.update_status_label("❌ 생성 옵션 테스트 실패", self.color_error)
@@ -4809,33 +4953,24 @@ class FlowVisionApp:
             if input_locator is None:
                 self.log("ℹ️ S입력칸 미탐지 상태 - 생성 옵션만 전역 탐색으로 테스트합니다.")
 
-            found, used, opener, opener_desc, _opened_now = self._ensure_prompt_generation_panel_open(
-                input_locator=input_locator,
-                profile="asset",
-            )
-            self._apply_prompt_preset_used_selectors(used, profile="asset")
+            image_sel = str(self.cfg.get(self._panel_selector_key("asset", "image"), "") or "").strip()
+            video_sel = str(self.cfg.get(self._panel_selector_key("asset", "video"), "") or "").strip()
+            if not image_sel or not video_sel:
+                raise RuntimeError("S 생성 옵션 자동찾기를 먼저 실행해주세요.")
 
-            self._apply_prompt_generation_preset(input_locator=input_locator, profile="asset")
-            found_after, _used_after, opener_after, opener_desc_after, _opened_after = self._ensure_prompt_generation_panel_open(
-                input_locator=input_locator,
-                profile="asset",
-            )
-
-            media_ok = found_after.get("media") is not None
-            orientation_ok = found_after.get("orientation") is not None
-            variant_ok = found_after.get("variant") is not None
-            all_ok = media_ok and orientation_ok and variant_ok
+            self.current_media_state = "image"
+            video_ok = self._switch_media_state("video", input_locator=input_locator, profile="asset")
+            image_ok = self._switch_media_state("image", input_locator=input_locator, profile="asset")
 
             self.log(
-                f"🧪 S 생성 옵션 테스트 | 모드={'OK' if media_ok else 'FAIL'} | "
-                f"방향={'OK' if orientation_ok else 'FAIL'} | "
-                f"개수={'OK' if variant_ok else 'FAIL'}"
+                f"🧪 S 생성 옵션 테스트 | 이미지패널={'OK' if bool(image_sel) else 'FAIL'} | "
+                f"동영상패널={'OK' if bool(video_sel) else 'FAIL'} | "
+                f"전환={'OK' if (video_ok and image_ok) else 'FAIL'}"
             )
-            if all_ok:
+            if video_ok and image_ok:
                 self.update_status_label("✅ S 생성 옵션 테스트 통과", self.color_success)
             else:
                 self.update_status_label("⚠️ S 생성 옵션 확인 필요", self.color_error)
-            self._close_prompt_generation_panel(input_locator=input_locator, opener=opener_after or opener, opener_desc=opener_desc_after or opener_desc)
         except Exception as e:
             self.log(f"❌ S 생성 옵션 테스트 실패: {e}")
             self.update_status_label("❌ S 생성 옵션 테스트 실패", self.color_error)
