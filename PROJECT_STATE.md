@@ -1,48 +1,72 @@
-# 🏗️ Project State: Flow Veo Vision Bot
+# PROJECT STATE - Flow Classic Plus
 
-> **Last Updated:** 2026-02-28 (Sat) - Reserved Start Strict Wait
-> **Current Stage:** 🛠️ Scheduling Precision Update
-> **Latest Handoff Doc:** `CODEX_연속작업_인수인계_20260304.md`
+- 마지막 업데이트: 2026-03-10
+- 현재 단계: 핵심 기능 안정화 완료, UI/UX 정리 단계
+- 기준 문서: `CODEX_연속작업_인수인계_20260304.md`
 
-## 📊 Project Overview
-- **Type:** Desktop Automation Tool (Python, Tkinter, PyAutoGUI)
-- **Goal:** Automate prompt submission to AI interfaces with extreme human-like behavior and anti-detection.
-- **Key Stack:** Python 3.12+, Tkinter (UI), PyAutoGUI (Control), Pyperclip (Safe Input), Pillow (Icon).
+## 1. 현재 실제 상태
+- 프롬프트 자동화: 사용자 실사용 확인 완료
+- S001~S### 자동 반복: 사용자 실사용 확인 완료
+- 다운로드 자동화: 사용자 실사용 확인 완료
+- 생성 옵션 자동찾기/테스트:
+  - 프롬프트 자동화용 성공 확인
+  - S자동화용 성공 확인
 
-## 🧩 Current Decisions & Architecture
-- **Navigation Overhaul**: Added `First`, `Last`, and `Jump-to-Index` (via label click) for managing large prompt lists (60+ items).
-- **Slot Management**: Implemented a renaming feature for prompt slots to allow user personalization.
-- **Strict Input Safety**: 
-  - **Zero-Click Typing**: Clicks are strictly forbidden during the typing phase.
-  - **IME-Safe Keys**: `Shift+Space` for spaces and `Shift+Enter` for newlines to prevent common automation errors.
-- **HUD Interface**: Real-time monitoring of internal humanization metrics (Fatigue, Typo Probability, etc.).
-- **Prompt Slot Auto Sync**:
-  - New button scans `flow` folder for `flow_prompts_slot_숫자.txt` and `flow_prompts_slot숫자.txt`.
-  - Newly found files are automatically added to `prompt_slots`.
-- **One-time Reservation Start (Specific Date/Time)**:
-  - Supports delayed start at exact reserved datetime.
-  - Reservation is persisted in config and resumed on app restart.
-  - While waiting for reserved time, mouse stays still (no AFK wander before start).
-- **Calendar-based Reservation UX**:
-  - Removed hard manual typing dependency.
-  - Date is picked from calendar, time via hour/minute selectors.
+## 2. 지금 버전에서 중요한 결정
+- 원본 클래식은 보존하고, `Flow Classic Plus`에서만 개선 작업 진행
+- 기능은 클래식 기반을 유지하고, 필요한 기능만 하나씩 추가
+- 가장 어려운 `이어달리기`는 맨 마지막에 작업
+- 프롬프트 자동화 기본 기준 상태: 이미지
+- S자동화 기본 기준 상태: 동영상
+- 프롬프트/S자동화 생성 옵션은 분리해서 관리
 
-## ✅ Resolved (Today's Fixes)
-- **[Fix] Reserved Start Strict Wait:** During reservation wait, no mouse movement occurs; automation starts only at reserved time.
-- **[Feature] Slot File Auto Sync:** Added one-click sync to register newly added slot files automatically.
-- **[Feature] One-time Reserved Start:** Added wait-until-reserved-time execution mode.
-- **[UX] Calendar Reservation Picker:** Added calendar popup to select date/time without typing format manually.
-- **[Feature] Jump to Number:** Clicking the navigation status label now opens a dialog to jump to any specific prompt number.
-- **[Feature] First/Last Navigation:** Added ⏮ and ⏭ buttons for quick boundary navigation.
-- **[Feature] Slot Renaming:** Added a ✏️ button to rename prompt slots, updating both the config and the UI.
-- **[Fix] Input Safety Logic:** Verified that all random clicks are removed from typing/idle routines. Newline now correctly uses `Shift+Enter`.
+## 3. 사용자가 헷갈릴 수 있는 핵심 개념
+### 3-1. `모드`
+- 이번 실행에서 최종적으로 무엇을 만들지 고르는 값
+- 프롬프트 자동화에서는 `Image` 또는 `Video`
 
-## 🚧 Next Steps
-- **Optional UX**:
-  - Increase calendar button/font size for accessibility.
-  - Add "everyday repeating reservation" as separate mode if requested.
-- **Maintenance**:
-  - Continue prompt file updates and use slot sync button when new files are added.
+### 3-2. `기본값 이미지 맞춤 완료` / `기본값 동영상 맞춤 완료`
+- 자동화 시작 전에 사용자가 Flow 작업창 상태를 한 번 맞춰줬다는 확인 버튼
+- 쉽게 말해:
+  - `기본값` = 출발점
+  - `모드` = 이번 작업 목표
 
-## 🐛 Known Issues
-- None. This is the Final Gold Edition.
+예시:
+- 프롬프트 자동화
+  - 기본값: 이미지로 맞춰둠
+  - 모드: 이미지면 그대로 시작
+  - 모드: 영상이면 시작 전에 영상으로 한 번 전환
+- S자동화
+  - 기본값: 동영상으로 맞춰둠
+  - 항상 영상 작업 기준으로 진행
+
+## 4. 최근 핵심 추가 사항
+- 큰 아이콘 메인 메뉴 추가
+- 원본과 헷갈리지 않도록 Classic Plus 전용 다크 테마 적용
+- 봇 작업창 열기 버튼 추가
+- 프롬프트 자동화 생성 옵션 자동찾기/테스트 추가
+- S자동화 생성 옵션 자동찾기/테스트 추가
+- 타이핑 속도 슬라이더(x1~x20) 추가
+- 번호 이동 입력칸 가독성 개선
+- 입력 방식 저장 유지 보강
+- preset 자동찾기/테스트 로그 파일 저장 보강
+
+## 5. 다음 작업 우선순위
+1. 입력 방식/시작 번호/S설정 저장 유지 최종 점검
+2. 다운로드 실패 대기시간 설정 추가
+3. 다운로드 로그를 더 짧고 깔끔하게 정리
+4. 폰트 크기/가독성 개선
+5. 반응형 레이아웃
+6. 노트북용 봇 작업창 크기/비율 축소
+7. 바탕화면 바로가기와 실행 동선 정리
+8. 이어달리기 기능은 마지막에 별도 설계 후 진행
+
+## 6. 지금 당장 건드리지 않을 것
+- 원본 클래식 구조 전체 갈아엎기
+- 이어달리기 대공사
+- 과한 UI 전면 재설계
+
+## 7. 운영 원칙
+- 한 번에 많이 바꾸지 말고, 기능 단위로 하나씩 수정
+- 수정 후 바로 실사용 점검
+- `flow/flow_config.json`은 사용자 설정 파일이므로 Git 커밋 제외 유지
