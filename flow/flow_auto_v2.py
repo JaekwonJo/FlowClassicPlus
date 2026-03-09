@@ -142,6 +142,8 @@ DEFAULT_CONFIG = {
     "download_image_quality_selector": "",
     "download_output_dir": "",
     "download_human_slowdown": 1.35,
+    "ui_window_width": 0,
+    "ui_window_height": 0,
     "enter_submit_rate": 0.5,
     "use_ref_images": False,
     "ref_image_count": 1,
@@ -407,6 +409,8 @@ class FlowVisionApp:
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_rowconfigure(1, weight=1)
         self.root.protocol("WM_DELETE_WINDOW", self.on_window_close)
+        self.root.bind("<Configure>", self._on_root_configure)
+        self._geometry_save_after = None
         
         # [NEW] Log Window Instance
         self.log_window = LogWindow(self.root, self)
@@ -489,12 +493,64 @@ class FlowVisionApp:
     def _set_initial_window_size(self):
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        w = min(1120, max(940, int(sw * 0.86)))
-        h = min(840, max(700, int(sh * 0.80)))
+        try:
+            saved_w = int(self.cfg.get("ui_window_width", 0) or 0)
+            saved_h = int(self.cfg.get("ui_window_height", 0) or 0)
+        except Exception:
+            saved_w = 0
+            saved_h = 0
+        if saved_w > 0 and saved_h > 0:
+            w = min(sw - 40, max(860, saved_w))
+            h = min(sh - 60, max(620, saved_h))
+        elif sw <= 1600 or sh <= 900:
+            w = min(1120, max(900, int(sw * 0.80)))
+            h = min(840, max(660, int(sh * 0.84)))
+        else:
+            w = min(1220, max(980, int(sw * 0.74)))
+            h = min(900, max(720, int(sh * 0.80)))
         x = max((sw - w) // 2, 0)
         y = max((sh - h) // 2, 0)
         self.root.geometry(f"{w}x{h}+{x}+{y}")
-        self.root.minsize(900, 620)
+        self.root.minsize(860, 620)
+
+    def _persist_window_geometry(self):
+        try:
+            if str(self.root.state()) != "normal":
+                return
+            w = int(self.root.winfo_width())
+            h = int(self.root.winfo_height())
+            if w >= 860 and h >= 620:
+                self.cfg["ui_window_width"] = w
+                self.cfg["ui_window_height"] = h
+                self.save_config()
+        except Exception:
+            pass
+
+    def _on_root_configure(self, _event=None):
+        try:
+            if self._geometry_save_after:
+                self.root.after_cancel(self._geometry_save_after)
+        except Exception:
+            pass
+        try:
+            self._geometry_save_after = self.root.after(500, self._persist_window_geometry)
+        except Exception:
+            self._persist_window_geometry()
+
+    def _compute_browser_window_size(self):
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        if sw <= 1600 or sh <= 900:
+            win_w = max(1080, int(sw * 0.72))
+            win_h = max(720, int(sh * 0.82))
+        else:
+            win_w = max(1200, int(sw * 0.68))
+            win_h = max(780, int(sh * 0.86))
+        win_w = min(win_w, sw - 40)
+        win_h = min(win_h, sh - 80)
+        viewport_w = max(1024, win_w - 24)
+        viewport_h = max(680, win_h - 100)
+        return win_w, win_h, viewport_w, viewport_h
 
     def _init_body_sash(self):
         try:
@@ -581,8 +637,7 @@ class FlowVisionApp:
 
         channel = (self.cfg.get("browser_channel") or "chrome").strip() or None
         headless = bool(self.cfg.get("browser_headless", False))
-        viewport_w = random.randint(1366, 1720)
-        viewport_h = random.randint(820, 980)
+        win_w, win_h, viewport_w, viewport_h = self._compute_browser_window_size()
 
         def _launch_with(_profile_path, _channel):
             return self.playwright.chromium.launch_persistent_context(
@@ -593,7 +648,7 @@ class FlowVisionApp:
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",
-                    "--start-maximized",
+                    f"--window-size={win_w},{win_h}",
                 ],
             )
 
