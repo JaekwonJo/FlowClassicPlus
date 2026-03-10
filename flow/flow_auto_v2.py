@@ -558,12 +558,6 @@ class FlowVisionApp:
 
     def _apply_ui_zoom_fonts(self, force=False):
         scale = self._effective_ui_scale()
-        tk_scale = max(0.95, min(1.75, 1.02 * scale))
-        try:
-            if force or abs(float(self.root.tk.call("tk", "scaling")) - tk_scale) >= 0.05:
-                self.root.tk.call("tk", "scaling", tk_scale)
-        except Exception:
-            pass
 
         self.font_title.configure(size=self._font_px("title"))
         self.font_subtitle.configure(size=self._font_px("subtitle"))
@@ -608,6 +602,12 @@ class FlowVisionApp:
             pad_y = 4 if compact else 6
             self.btn_log.config(font=self.font_body_bold, padx=10 if compact else 14, pady=pad_y)
             self.btn_refresh_big.config(font=self.font_body_bold, padx=10 if compact else 14, pady=pad_y)
+        for btn_name in ("btn_start_prompt", "btn_start_asset", "btn_start_download", "btn_pause", "btn_resume", "btn_stop"):
+            if hasattr(self, btn_name):
+                try:
+                    getattr(self, btn_name).config(style="Action.TButton" if "start" in btn_name else "TButton")
+                except Exception:
+                    pass
         if hasattr(self, "lbl_header_progress"):
             self.lbl_header_progress.config(font=(self.font_mono_family, max(12, self._font_px("mono")), "bold"))
         if hasattr(self, "lbl_main_status"):
@@ -3292,15 +3292,24 @@ class FlowVisionApp:
 
         tk.Frame(left_card, height=12, bg=self.color_bg).pack()
 
-        # --- Right: Dashboard (HUD Design) ---
+        # --- Right: Dashboard (HUD Design, Scrollable) ---
         right_panel = tk.Frame(self.body_pane, bg=self.color_bg)
+        right_canvas = tk.Canvas(right_panel, bg=self.color_bg, highlightthickness=0)
+        right_scrollbar = ttk.Scrollbar(right_panel, orient="vertical", command=right_canvas.yview)
+        right_scrollable = tk.Frame(right_canvas, bg=self.color_bg)
+        right_scrollable.bind("<Configure>", lambda e: right_canvas.configure(scrollregion=right_canvas.bbox("all")))
+        right_canvas_window = right_canvas.create_window((0, 0), window=right_scrollable, anchor="nw")
+        right_canvas.bind("<Configure>", lambda e: right_canvas.itemconfigure(right_canvas_window, width=max(e.width - 2, 220)))
+        right_canvas.configure(yscrollcommand=right_scrollbar.set)
+        right_canvas.pack(side="left", fill="both", expand=True)
+        right_scrollbar.pack(side="right", fill="y")
 
         self.body_pane.add(self.left_container, weight=7)
         self.body_pane.add(right_panel, weight=3)
         self.root.after(120, self._init_body_sash)
         
         # 1. Progress Card
-        prog_card = ttk.LabelFrame(right_panel, text=" 📊 진행 상황 ", padding=8)
+        prog_card = ttk.LabelFrame(right_scrollable, text=" 📊 진행 상황 ", padding=8)
         prog_card.pack(fill="x", pady=(0, 8))
         
         self.progress_var = tk.DoubleVar()
@@ -3315,7 +3324,7 @@ class FlowVisionApp:
         self.lbl_eta.pack(side="right", pady=4)
         
         # 2. Mini HUD (핵심 정보만 표시)
-        mon_card = ttk.LabelFrame(right_panel, text=" ⚡ Mini HUD ", padding=8)
+        mon_card = ttk.LabelFrame(right_scrollable, text=" ⚡ Mini HUD ", padding=8)
         mon_card.pack(fill="x", pady=(0, 8))
 
         top_line = tk.Frame(mon_card, bg=self.color_bg)
@@ -3373,7 +3382,7 @@ class FlowVisionApp:
         self.lbl_hud_trait.pack(anchor="w", pady=(4, 0))
         self._set_mini_hud_collapsed(True)
 
-        ctrl_card = ttk.LabelFrame(right_panel, text=" ▶ 실행 컨트롤 ", padding=8)
+        ctrl_card = ttk.LabelFrame(right_scrollable, text=" ▶ 실행 컨트롤 ", padding=8)
         ctrl_card.pack(fill="x", pady=(0, 8))
         self.btn_start_prompt = ttk.Button(
             ctrl_card,
@@ -3385,12 +3394,14 @@ class FlowVisionApp:
         self.btn_start_asset = ttk.Button(
             ctrl_card,
             text="▶ S반복 자동화 시작",
+            style="Action.TButton",
             command=self.on_start_asset,
         )
         self.btn_start_asset.pack(fill="x", ipady=6, pady=(6, 0))
         self.btn_start_download = ttk.Button(
             ctrl_card,
             text="▶ 다운로드 자동화 시작",
+            style="Action.TButton",
             command=self.on_start_download,
         )
         self.btn_start_download.pack(fill="x", ipady=6, pady=(6, 0))
