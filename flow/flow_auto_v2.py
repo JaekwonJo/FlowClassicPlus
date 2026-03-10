@@ -418,6 +418,9 @@ class FlowVisionApp:
         self.root.grid_rowconfigure(1, weight=1)
         self.root.protocol("WM_DELETE_WINDOW", self.on_window_close)
         self.root.bind("<Configure>", self._on_root_configure)
+        self.root.bind_all("<MouseWheel>", self._on_global_mousewheel, add="+")
+        self.root.bind_all("<Button-4>", self._on_global_mousewheel, add="+")
+        self.root.bind_all("<Button-5>", self._on_global_mousewheel, add="+")
         self._geometry_save_after = None
         
         # [NEW] Log Window Instance
@@ -499,6 +502,10 @@ class FlowVisionApp:
         # Big Action Button
         self.style.configure("Action.TButton", background=self.color_accent, foreground="white", font=(self.font_ui_family, 15, "bold"), padding=10)
         self.style.map("Action.TButton", background=[('active', '#1B78D0'), ('disabled', '#5A6982')])
+        self.style.configure("ActionCompact.TButton", background=self.color_accent, foreground="white", font=(self.font_ui_family, 13, "bold"), padding=6)
+        self.style.map("ActionCompact.TButton", background=[('active', '#1B78D0'), ('disabled', '#5A6982')])
+        self.style.configure("ControlCompact.TButton", background="#294162", foreground=self.color_text, borderwidth=1, font=self.font_body_bold, padding=4)
+        self.style.map("ControlCompact.TButton", background=[('active', '#37557D')], foreground=[('active', self.color_text)])
 
         self._ensure_prompt_slots()
         self._build_ui()
@@ -528,7 +535,7 @@ class FlowVisionApp:
         self.root.geometry(f"{w}x{h}+{x}+{y}")
         self.root.minsize(860, 620)
 
-    def _clamp_percent(self, value, default=100, minimum=70, maximum=140):
+    def _clamp_percent(self, value, default=100, minimum=50, maximum=150):
         try:
             pct = int(str(value).strip())
         except Exception:
@@ -536,8 +543,8 @@ class FlowVisionApp:
         return max(minimum, min(maximum, pct))
 
     def _effective_ui_scale(self):
-        ui_zoom = self._clamp_percent(self.cfg.get("ui_zoom_percent", 100), default=100, minimum=85, maximum=150) / 100.0
-        return max(0.85, min(1.50, ui_zoom))
+        ui_zoom = self._clamp_percent(self.cfg.get("ui_zoom_percent", 100), default=100, minimum=50, maximum=150) / 100.0
+        return max(0.50, min(1.50, ui_zoom))
 
     def _font_px(self, key):
         base = int(self.base_font_sizes.get(key, 12))
@@ -561,10 +568,12 @@ class FlowVisionApp:
         self.style.configure("TCombobox", fieldbackground=self.color_input_bg, foreground=self.color_input_fg, padding=max(4, int(4 * scale)))
         self.style.configure("TButton", background="#294162", foreground=self.color_text, borderwidth=1, font=self.font_body_bold, padding=max(5, int(6 * scale)))
         self.style.configure("Action.TButton", background=self.color_accent, foreground="white", font=(self.font_ui_family, action_size, "bold"), padding=max(8, int(10 * scale)))
+        self.style.configure("ActionCompact.TButton", background=self.color_accent, foreground="white", font=(self.font_ui_family, max(11, action_size - 2), "bold"), padding=max(5, int(6 * scale)))
+        self.style.configure("ControlCompact.TButton", background="#294162", foreground=self.color_text, borderwidth=1, font=(self.font_ui_family, max(10, self._font_px("body") - 1), "bold"), padding=max(3, int(4 * scale)))
 
     def _set_ui_zoom_percent(self, delta=0, absolute=None):
-        current = self._clamp_percent(self.cfg.get("ui_zoom_percent", 100), default=100, minimum=85, maximum=150)
-        target = self._clamp_percent(absolute if absolute is not None else current + delta, default=current, minimum=85, maximum=150)
+        current = self._clamp_percent(self.cfg.get("ui_zoom_percent", 100), default=100, minimum=50, maximum=150)
+        target = self._clamp_percent(absolute if absolute is not None else current + delta, default=current, minimum=50, maximum=150)
         self.cfg["ui_zoom_percent"] = target
         self.save_config()
         self._apply_ui_zoom_fonts(force=True)
@@ -635,6 +644,48 @@ class FlowVisionApp:
         except Exception:
             return
 
+    def _resolve_scroll_canvas(self, widget):
+        current = widget
+        while current is not None:
+            target = getattr(current, "_scroll_canvas_target", None)
+            if target is not None:
+                return target
+            try:
+                parent_name = current.winfo_parent()
+            except Exception:
+                parent_name = ""
+            if not parent_name:
+                break
+            try:
+                current = current.nametowidget(parent_name)
+            except Exception:
+                break
+        return None
+
+    def _on_global_mousewheel(self, event):
+        try:
+            widget = self.root.winfo_containing(event.x_root, event.y_root)
+        except Exception:
+            widget = getattr(event, "widget", None)
+        canvas = self._resolve_scroll_canvas(widget)
+        if canvas is None:
+            return
+        if getattr(event, "num", None) == 4:
+            delta = -3
+        elif getattr(event, "num", None) == 5:
+            delta = 3
+        else:
+            raw = int(getattr(event, "delta", 0) or 0)
+            if raw == 0:
+                return
+            steps = max(1, int(abs(raw) / 120)) if abs(raw) >= 120 else 1
+            delta = (-steps * 3) if raw > 0 else (steps * 3)
+        try:
+            canvas.yview_scroll(delta, "units")
+            return "break"
+        except Exception:
+            return
+
     def _refresh_responsive_layout(self):
         width = max(int(self.root.winfo_width() or 0), 1)
         height = max(int(self.root.winfo_height() or 0), 1)
@@ -649,16 +700,49 @@ class FlowVisionApp:
             if compact:
                 target_width = 500
             if narrow:
-                target_width = 450
+                target_width = 420
             self.left_container.config(width=target_width)
+        if hasattr(self, "body_pane") and hasattr(self, "left_container") and hasattr(self, "right_panel"):
+            total_w = max(int(self.body_pane.winfo_width() or 0), 0)
+            left_min = 320 if narrow else 360
+            right_min = 240 if narrow else (280 if compact else 320)
+            try:
+                self.body_pane.paneconfigure(self.left_container, minsize=left_min)
+                self.body_pane.paneconfigure(self.right_panel, minsize=right_min)
+            except Exception:
+                pass
+            if total_w > (left_min + right_min):
+                desired_left = target_width if hasattr(self, "left_container") else int(total_w * 0.60)
+                desired_left = min(desired_left, total_w - right_min)
+                desired_left = max(left_min, desired_left)
+                try:
+                    self.body_pane.sashpos(0, desired_left)
+                except Exception:
+                    pass
         if hasattr(self, "btn_log") and hasattr(self, "btn_refresh_big"):
             pad_y = 4 if compact else 6
             self.btn_log.config(font=self.font_body_bold, padx=10 if compact else 14, pady=pad_y)
             self.btn_refresh_big.config(font=self.font_body_bold, padx=10 if compact else 14, pady=pad_y)
-        for btn_name in ("btn_start_prompt", "btn_start_asset", "btn_start_download", "btn_pause", "btn_resume", "btn_stop"):
+        action_style = "ActionCompact.TButton" if compact else "Action.TButton"
+        control_style = "ControlCompact.TButton" if compact else "TButton"
+        btn_text_map = {
+            "btn_start_prompt": "▶ 프롬프트 시작" if compact else "▶ 프롬프트 자동화 시작",
+            "btn_start_asset": "▶ S반복 시작" if compact else "▶ S반복 자동화 시작",
+            "btn_start_download": "▶ 다운로드 시작" if compact else "▶ 다운로드 자동화 시작",
+            "btn_pause": "⏸ 일시정지",
+            "btn_resume": "▶ 재개",
+            "btn_stop": "⏹ 완전중지" if compact else "⏹ 완전중지(브라우저 종료)",
+        }
+        for btn_name in ("btn_start_prompt", "btn_start_asset", "btn_start_download"):
             if hasattr(self, btn_name):
                 try:
-                    getattr(self, btn_name).config(style="Action.TButton" if "start" in btn_name else "TButton")
+                    getattr(self, btn_name).config(style=action_style, text=btn_text_map[btn_name])
+                except Exception:
+                    pass
+        for btn_name in ("btn_pause", "btn_resume", "btn_stop"):
+            if hasattr(self, btn_name):
+                try:
+                    getattr(self, btn_name).config(style=control_style, text=btn_text_map[btn_name])
                 except Exception:
                     pass
         if hasattr(self, "lbl_header_progress"):
@@ -686,6 +770,11 @@ class FlowVisionApp:
             self.lbl_prompt_preset_selector.config(wraplength=max(360, width - 620))
         if hasattr(self, "lbl_asset_prompt_preset_selector"):
             self.lbl_asset_prompt_preset_selector.config(wraplength=max(360, width - 620))
+        right_wrap = max(180, min(520, width - 760))
+        if hasattr(self, "lbl_hud_trait"):
+            self.lbl_hud_trait.config(wraplength=right_wrap)
+        if hasattr(self, "btn_toggle_hud"):
+            self.btn_toggle_hud.config(width=6 if compact else 8)
 
     def _persist_window_geometry(self):
         try:
@@ -723,23 +812,23 @@ class FlowVisionApp:
     def _compute_browser_window_size(self):
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        browser_scale = self._clamp_percent(self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=70, maximum=120) / 100.0
+        browser_scale = self._clamp_percent(self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=50, maximum=150) / 100.0
         if sw <= 1600 or sh <= 900:
-            win_w = max(900, int(sw * 0.72 * browser_scale))
-            win_h = max(640, int(sh * 0.82 * browser_scale))
+            win_w = max(560, int(sw * 0.72 * browser_scale))
+            win_h = max(420, int(sh * 0.82 * browser_scale))
         else:
-            win_w = max(1020, int(sw * 0.68 * browser_scale))
-            win_h = max(720, int(sh * 0.86 * browser_scale))
+            win_w = max(640, int(sw * 0.68 * browser_scale))
+            win_h = max(480, int(sh * 0.86 * browser_scale))
         win_w = min(win_w, sw - 40)
         win_h = min(win_h, sh - 80)
-        viewport_w = max(1024, win_w - 24)
-        viewport_h = max(680, win_h - 100)
+        viewport_w = max(640, win_w - 24)
+        viewport_h = max(400, win_h - 100)
         return win_w, win_h, viewport_w, viewport_h
 
     def _apply_browser_zoom(self):
         if not self.page:
             return
-        zoom_pct = self._clamp_percent(self.cfg.get("browser_zoom_percent", 100), default=100, minimum=70, maximum=130)
+        zoom_pct = self._clamp_percent(self.cfg.get("browser_zoom_percent", 100), default=100, minimum=50, maximum=150)
         zoom_value = f"{zoom_pct}%"
         script = f"""
         (() => {{
@@ -889,7 +978,7 @@ class FlowVisionApp:
             self.log(f"⚠️ stealth 적용 실패(계속 진행): {e}")
 
         self.actor.set_page(self.page)
-        zoom_pct = self._clamp_percent(self.cfg.get("browser_zoom_percent", 100), default=100, minimum=70, maximum=130)
+        zoom_pct = self._clamp_percent(self.cfg.get("browser_zoom_percent", 100), default=100, minimum=50, maximum=150)
         zoom_value = f"{zoom_pct}%"
         try:
             self.browser_context.add_init_script(
@@ -2707,10 +2796,10 @@ class FlowVisionApp:
         # 마우스 휠 지원
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
         left_card = ttk.LabelFrame(scrollable_frame, text=" ⚙️ 기본 설정 ", padding=12)
         left_card.pack(fill="x", padx=4, pady=4)
+        canvas._scroll_canvas_target = canvas
+        scrollable_frame._scroll_canvas_target = canvas
         
         # Playwright Target Settings
         tk.Label(left_card, text="1. 브라우저 대상 설정 (필수)", font=self.font_section, fg=self.color_text).pack(anchor="w", pady=(0, 5))
@@ -2724,26 +2813,26 @@ class FlowVisionApp:
         browser_scale_f = tk.Frame(left_card, bg=self.color_bg)
         browser_scale_f.pack(fill="x", pady=(0, 8))
         tk.Label(browser_scale_f, text="봇 작업창 크기", bg=self.color_bg, font=self.font_small).pack(side="left")
-        self.browser_window_scale_var = tk.StringVar(value=str(self._clamp_percent(self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=70, maximum=120)))
+        self.browser_window_scale_var = tk.StringVar(value=str(self._clamp_percent(self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=50, maximum=150)))
         self.combo_browser_window_scale = ttk.Combobox(
             browser_scale_f,
             textvariable=self.browser_window_scale_var,
             state="readonly",
             width=6,
-            values=("70", "80", "90", "100", "110", "120"),
+            values=("50", "60", "70", "80", "90", "100", "110", "120", "130", "140", "150"),
             font=self.font_small,
         )
         self.combo_browser_window_scale.pack(side="left", padx=(6, 14))
         self.combo_browser_window_scale.bind("<<ComboboxSelected>>", self.on_option_toggle)
 
         tk.Label(browser_scale_f, text="브라우저 배율", bg=self.color_bg, font=self.font_small).pack(side="left")
-        self.browser_zoom_var = tk.StringVar(value=str(self._clamp_percent(self.cfg.get("browser_zoom_percent", 100), default=100, minimum=70, maximum=130)))
+        self.browser_zoom_var = tk.StringVar(value=str(self._clamp_percent(self.cfg.get("browser_zoom_percent", 100), default=100, minimum=50, maximum=150)))
         self.combo_browser_zoom = ttk.Combobox(
             browser_scale_f,
             textvariable=self.browser_zoom_var,
             state="readonly",
             width=6,
-            values=("70", "80", "90", "100", "110", "120", "130"),
+            values=("50", "60", "70", "80", "90", "100", "110", "120", "130", "140", "150"),
             font=self.font_small,
         )
         self.combo_browser_zoom.pack(side="left", padx=(6, 0))
@@ -3354,13 +3443,19 @@ class FlowVisionApp:
 
         # --- Right: Dashboard (HUD Design, Scrollable) ---
         right_panel = tk.Frame(self.body_pane, bg=self.color_bg)
+        self.right_panel = right_panel
         right_canvas = tk.Canvas(right_panel, bg=self.color_bg, highlightthickness=0)
+        self.right_canvas = right_canvas
         right_scrollbar = ttk.Scrollbar(right_panel, orient="vertical", command=right_canvas.yview)
+        self.right_scrollbar = right_scrollbar
         right_scrollable = tk.Frame(right_canvas, bg=self.color_bg)
+        self.right_scrollable = right_scrollable
         right_scrollable.bind("<Configure>", lambda e: right_canvas.configure(scrollregion=right_canvas.bbox("all")))
         right_canvas_window = right_canvas.create_window((0, 0), window=right_scrollable, anchor="nw")
         right_canvas.bind("<Configure>", lambda e: right_canvas.itemconfigure(right_canvas_window, width=max(e.width - 2, 220)))
         right_canvas.configure(yscrollcommand=right_scrollbar.set)
+        right_canvas._scroll_canvas_target = right_canvas
+        right_scrollable._scroll_canvas_target = right_canvas
         right_canvas.pack(side="left", fill="both", expand=True)
         right_scrollbar.pack(side="right", fill="y")
 
@@ -3444,6 +3539,7 @@ class FlowVisionApp:
 
         ctrl_card = ttk.LabelFrame(right_scrollable, text=" ▶ 실행 컨트롤 ", padding=8)
         ctrl_card.pack(fill="x", pady=(0, 8))
+        self.ctrl_card = ctrl_card
         self.btn_start_prompt = ttk.Button(
             ctrl_card,
             text="▶ 프롬프트 자동화 시작",
@@ -3984,9 +4080,9 @@ class FlowVisionApp:
         self.cfg["new_project_selector"] = self.new_project_selector_var.get().strip() if hasattr(self, "new_project_selector_var") else self.cfg.get("new_project_selector", "")
         self.cfg["browser_headless"] = self.browser_headless_var.get() if hasattr(self, "browser_headless_var") else self.cfg.get("browser_headless", False)
         self.cfg["browser_channel"] = self.browser_channel_var.get().strip() if hasattr(self, "browser_channel_var") else self.cfg.get("browser_channel", "chrome")
-        self.cfg["browser_window_scale_percent"] = self._clamp_percent(self.browser_window_scale_var.get() if hasattr(self, "browser_window_scale_var") else self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=70, maximum=120)
-        self.cfg["browser_zoom_percent"] = self._clamp_percent(self.browser_zoom_var.get() if hasattr(self, "browser_zoom_var") else self.cfg.get("browser_zoom_percent", 100), default=100, minimum=70, maximum=130)
-        self.cfg["ui_zoom_percent"] = self._clamp_percent(self.cfg.get("ui_zoom_percent", 100), default=100, minimum=85, maximum=150)
+        self.cfg["browser_window_scale_percent"] = self._clamp_percent(self.browser_window_scale_var.get() if hasattr(self, "browser_window_scale_var") else self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=50, maximum=150)
+        self.cfg["browser_zoom_percent"] = self._clamp_percent(self.browser_zoom_var.get() if hasattr(self, "browser_zoom_var") else self.cfg.get("browser_zoom_percent", 100), default=100, minimum=50, maximum=150)
+        self.cfg["ui_zoom_percent"] = self._clamp_percent(self.cfg.get("ui_zoom_percent", 100), default=100, minimum=50, maximum=150)
         self.cfg["prompt_image_baseline_ready"] = bool(self.prompt_image_baseline_ready)
         self.cfg["asset_image_baseline_ready"] = bool(self.asset_image_baseline_ready)
         self.cfg["current_media_state"] = self.current_media_state or ""
