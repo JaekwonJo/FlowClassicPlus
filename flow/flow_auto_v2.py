@@ -432,14 +432,14 @@ class FlowVisionApp:
 
         self.font_ui_family = "Segoe UI"
         self.font_mono_family = "Consolas"
-        self.font_title = (self.font_ui_family, 21, "bold")
-        self.font_subtitle = (self.font_ui_family, 11)
-        self.font_section = (self.font_ui_family, 12, "bold")
-        self.font_body = (self.font_ui_family, 11)
-        self.font_body_bold = (self.font_ui_family, 11, "bold")
-        self.font_small = (self.font_ui_family, 10)
-        self.font_mono = (self.font_mono_family, 11)
-        self.font_mono_small = (self.font_mono_family, 10)
+        self.font_title = (self.font_ui_family, 22, "bold")
+        self.font_subtitle = (self.font_ui_family, 12)
+        self.font_section = (self.font_ui_family, 14, "bold")
+        self.font_body = (self.font_ui_family, 12)
+        self.font_body_bold = (self.font_ui_family, 12, "bold")
+        self.font_small = (self.font_ui_family, 11)
+        self.font_mono = (self.font_mono_family, 12)
+        self.font_mono_small = (self.font_mono_family, 11)
 
         self.color_bg = "#0E1728"
         self.color_card = "#182741"
@@ -2260,10 +2260,10 @@ class FlowVisionApp:
             self.lbl_hud_state.config(text=f"상태: {text}", fg=color)
 
     def _create_collapsible_section(self, parent, title, opened=False):
-        wrap = tk.Frame(parent, bg=self.color_bg, highlightbackground="#E9ECEF", highlightthickness=1)
+        wrap = tk.Frame(parent, bg=self.color_bg, highlightbackground="#4D6F9E", highlightthickness=1)
         wrap.pack(fill="x", pady=(6, 6))
 
-        head = tk.Frame(wrap, bg=self.color_bg)
+        head = tk.Frame(wrap, bg=self.color_card)
         head.pack(fill="x")
 
         state = {"open": bool(opened)}
@@ -2275,13 +2275,13 @@ class FlowVisionApp:
             anchor="w",
             relief="flat",
             borderwidth=0,
-            bg=self.color_bg,
-            activebackground=self.color_bg,
-            fg=self.color_text,
-            font=self.font_body_bold,
+            bg=self.color_card,
+            activebackground=self.color_card,
+            fg=self.color_accent,
+            font=self.font_section,
             cursor="hand2",
             padx=8,
-            pady=6,
+            pady=8,
         )
         btn.pack(fill="x")
 
@@ -2555,7 +2555,7 @@ class FlowVisionApp:
 
         speed_f = tk.Frame(left_card, bg=self.color_bg)
         speed_f.pack(fill="x", pady=(0, 8))
-        tk.Label(speed_f, text="⚡ 타이핑 속도", bg=self.color_bg, font=("Malgun Gothic", 10, "bold")).pack(anchor="w")
+        tk.Label(speed_f, text="⚡ 타이핑 속도", bg=self.color_bg, font=self.font_body_bold).pack(anchor="w")
         speed_default = str(self.cfg.get("typing_speed_profile", "x5")).strip().lower() or "x5"
         legacy_speed_map = {"slow": "x2", "normal": "x5", "fast": "x10", "turbo": "x16"}
         speed_default = legacy_speed_map.get(speed_default, speed_default)
@@ -2580,7 +2580,7 @@ class FlowVisionApp:
             highlightthickness=0,
             troughcolor="#24324B",
             activebackground=self.color_accent,
-            font=("Consolas", 9),
+            font=self.font_mono_small,
             length=220,
         )
         self.scale_typing_speed.pack(side="left", fill="x", expand=True)
@@ -2589,7 +2589,7 @@ class FlowVisionApp:
             text=f"x{speed_level}",
             bg=self.color_bg,
             fg=self.color_accent,
-            font=("Consolas", 12, "bold"),
+            font=(self.font_mono_family, 13, "bold"),
             width=5,
         )
         self.lbl_typing_speed_value.pack(side="left", padx=(10, 0))
@@ -2606,14 +2606,14 @@ class FlowVisionApp:
             variable=self.prompt_mode_preset_enabled_var,
             command=self.on_option_toggle,
             bg=self.color_bg,
-            font=("Malgun Gothic", 10),
+            font=self.font_body,
             activebackground=self.color_bg,
         ).pack(anchor="w")
 
         preset_row = tk.Frame(preset_f, bg=self.color_bg)
         preset_row.pack(fill="x", pady=(8, 4))
 
-        tk.Label(preset_row, text="모드", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        tk.Label(preset_row, text="모드", bg=self.color_bg, font=self.font_small).pack(side="left")
         media_label = PROMPT_MEDIA_LABELS.get(self.cfg.get("prompt_media_mode", "image"), "이미지")
         self.prompt_media_mode_var = tk.StringVar(value=media_label)
         self.combo_prompt_media_mode = ttk.Combobox(
@@ -2622,7 +2622,7 @@ class FlowVisionApp:
             state="readonly",
             width=8,
             values=tuple(PROMPT_MEDIA_VALUES.keys()),
-            font=("Malgun Gothic", 9),
+            font=self.font_small,
         )
         self.combo_prompt_media_mode.pack(side="left", padx=(6, 12))
         self.combo_prompt_media_mode.bind("<<ComboboxSelected>>", self.on_option_toggle)
@@ -2644,7 +2644,7 @@ class FlowVisionApp:
             text="기본값 이미지 확인 필요",
             bg=self.color_bg,
             fg=self.color_error,
-            font=("Malgun Gothic", 9, "bold"),
+            font=self.font_body_bold,
         )
         self.lbl_prompt_baseline_ready.pack(side="left", padx=(10, 0))
 
@@ -2657,14 +2657,14 @@ class FlowVisionApp:
             text=self._preset_selector_summary("prompt"),
             bg=self.color_bg,
             fg=self.color_info,
-            font=("Consolas", 8),
+            font=self.font_mono_small,
             justify="left",
             wraplength=560,
         )
         self.lbl_prompt_preset_selector.pack(anchor="w", pady=(8, 0))
         self._refresh_manual_baseline_labels()
 
-        asset_body, _set_asset_open = self._create_collapsible_section(left_card, "S001~S### 에셋 자동 반복", opened=False)
+        asset_body, _set_asset_open = self._create_collapsible_section(left_card, "S001~S### 에셋 자동 반복", opened=True)
         self._set_asset_open = _set_asset_open
         asset_f = tk.Frame(asset_body, bg=self.color_bg)
         asset_f.pack(fill="x", pady=6)
@@ -2675,7 +2675,7 @@ class FlowVisionApp:
             variable=self.asset_loop_var,
             command=self.on_option_toggle,
             bg=self.color_bg,
-            font=("Malgun Gothic", 10),
+            font=self.font_body,
             activebackground=self.color_bg,
         ).pack(anchor="w")
         tk.Label(
@@ -2683,12 +2683,12 @@ class FlowVisionApp:
             text="동작: 시작 클릭 -> 에셋 검색에 S번호 입력 -> 프롬프트 입력",
             bg=self.color_bg,
             fg=self.color_text_sec,
-            font=("Malgun Gothic", 9),
+            font=self.font_small,
         ).pack(anchor="w", pady=(2, 6))
 
         asset_range_f = tk.Frame(asset_f, bg=self.color_bg)
         asset_range_f.pack(fill="x", pady=(0, 6))
-        tk.Label(asset_range_f, text="시작 번호", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        tk.Label(asset_range_f, text="시작 번호", bg=self.color_bg, font=self.font_small).pack(side="left")
         self.asset_loop_start_var = tk.StringVar(value=str(self.cfg.get("asset_loop_start", 1)))
         self.spin_asset_start = tk.Spinbox(
             asset_range_f,
@@ -2705,7 +2705,7 @@ class FlowVisionApp:
         self.spin_asset_start.bind("<Return>", self.on_option_toggle)
         self.spin_asset_start.bind("<KeyRelease>", self.on_option_toggle)
 
-        tk.Label(asset_range_f, text="끝 번호", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        tk.Label(asset_range_f, text="끝 번호", bg=self.color_bg, font=self.font_small).pack(side="left")
         self.asset_loop_end_var = tk.StringVar(value=str(self.cfg.get("asset_loop_end", 1)))
         self.spin_asset_end = tk.Spinbox(
             asset_range_f,
@@ -2724,13 +2724,13 @@ class FlowVisionApp:
 
         asset_prefix_f = tk.Frame(asset_f, bg=self.color_bg)
         asset_prefix_f.pack(fill="x", pady=(0, 6))
-        tk.Label(asset_prefix_f, text="접두어", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        tk.Label(asset_prefix_f, text="접두어", bg=self.color_bg, font=self.font_small).pack(side="left")
         self.asset_loop_prefix_var = tk.StringVar(value=self.cfg.get("asset_loop_prefix", "S"))
         self.entry_asset_prefix = tk.Entry(asset_prefix_f, textvariable=self.asset_loop_prefix_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10), width=8)
         self.entry_asset_prefix.pack(side="left", padx=(6, 0))
         self.entry_asset_prefix.bind("<FocusOut>", self.on_option_toggle)
 
-        tk.Label(asset_f, text="프롬프트 템플릿 ({tag}=S001/S002... 로 치환)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
+        tk.Label(asset_f, text="프롬프트 템플릿 ({tag}=S001/S002... 로 치환)", bg=self.color_bg, font=self.font_small).pack(anchor="w")
         self.asset_loop_template_var = tk.StringVar(
             value=self.cfg.get("asset_loop_prompt_template", "{tag} : Naturally Seamless Loop animation.")
         )
@@ -2750,7 +2750,7 @@ class FlowVisionApp:
             text="S자동화 전용 생성 옵션",
             bg=self.color_bg,
             fg=self.color_text,
-            font=("Malgun Gothic", 10, "bold"),
+            font=self.font_body_bold,
             padx=8,
             pady=6,
         )
@@ -2765,14 +2765,14 @@ class FlowVisionApp:
             variable=self.asset_prompt_mode_preset_enabled_var,
             command=self.on_option_toggle,
             bg=self.color_bg,
-            font=("Malgun Gothic", 10),
+            font=self.font_body,
             activebackground=self.color_bg,
         ).pack(anchor="w")
 
         asset_preset_row = tk.Frame(asset_preset_box, bg=self.color_bg)
         asset_preset_row.pack(fill="x", pady=(8, 4))
 
-        tk.Label(asset_preset_row, text="모드", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        tk.Label(asset_preset_row, text="모드", bg=self.color_bg, font=self.font_small).pack(side="left")
         asset_media_label = PROMPT_MEDIA_LABELS.get(self.cfg.get("asset_prompt_media_mode", "video"), "영상")
         self.asset_prompt_media_mode_var = tk.StringVar(value=asset_media_label)
         self.combo_asset_prompt_media_mode = ttk.Combobox(
@@ -2781,7 +2781,7 @@ class FlowVisionApp:
             state="readonly",
             width=8,
             values=tuple(PROMPT_MEDIA_VALUES.keys()),
-            font=("Malgun Gothic", 9),
+            font=self.font_small,
         )
         self.combo_asset_prompt_media_mode.pack(side="left", padx=(6, 12))
         self.combo_asset_prompt_media_mode.bind("<<ComboboxSelected>>", self.on_option_toggle)
@@ -2803,7 +2803,7 @@ class FlowVisionApp:
             text="기본값 동영상 확인 필요",
             bg=self.color_bg,
             fg=self.color_error,
-            font=("Malgun Gothic", 9, "bold"),
+            font=self.font_body_bold,
         )
         self.lbl_asset_baseline_ready.pack(side="left", padx=(10, 0))
 
@@ -2816,7 +2816,7 @@ class FlowVisionApp:
             text=self._preset_selector_summary("asset"),
             bg=self.color_bg,
             fg=self.color_info,
-            font=("Consolas", 8),
+            font=self.font_mono_small,
             justify="left",
             wraplength=560,
         )
@@ -2846,14 +2846,14 @@ class FlowVisionApp:
         ttk.Button(asset_btn_f, text="🔍 에셋 selector 자동찾기", command=self.on_auto_detect_asset_selectors).pack(side="left")
         ttk.Button(asset_btn_f, text="🧪 에셋 selector 테스트", command=self.on_test_asset_selectors).pack(side="left", padx=6)
 
-        dl_body, _set_dl_open = self._create_collapsible_section(left_card, "다운로드 자동화", opened=False)
+        dl_body, _set_dl_open = self._create_collapsible_section(left_card, "다운로드 자동화", opened=True)
         self._set_dl_open = _set_dl_open
         dl_f = tk.Frame(dl_body, bg=self.color_bg)
         dl_f.pack(fill="x", pady=6)
 
         mode_f = tk.Frame(dl_f, bg=self.color_bg)
         mode_f.pack(fill="x", pady=(0, 6))
-        tk.Label(mode_f, text="모드", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        tk.Label(mode_f, text="모드", bg=self.color_bg, font=self.font_small).pack(side="left")
         self.download_mode_var = tk.StringVar(value=self.cfg.get("download_mode", "video"))
         self.combo_download_mode = ttk.Combobox(
             mode_f,
@@ -2861,14 +2861,14 @@ class FlowVisionApp:
             state="readonly",
             width=10,
             values=("video", "image"),
-            font=("Malgun Gothic", 9),
+            font=self.font_small,
         )
         self.combo_download_mode.pack(side="left", padx=(6, 0))
         self.combo_download_mode.bind("<<ComboboxSelected>>", self.on_option_toggle)
 
         q_f = tk.Frame(dl_f, bg=self.color_bg)
         q_f.pack(fill="x", pady=(0, 6))
-        tk.Label(q_f, text="영상 품질", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        tk.Label(q_f, text="영상 품질", bg=self.color_bg, font=self.font_small).pack(side="left")
         self.download_video_quality_var = tk.StringVar(value=self.cfg.get("download_video_quality", "1080P"))
         self.combo_download_video_quality = ttk.Combobox(
             q_f,
@@ -2876,12 +2876,12 @@ class FlowVisionApp:
             state="readonly",
             width=8,
             values=("1080P", "720P", "4K"),
-            font=("Malgun Gothic", 9),
+            font=self.font_small,
         )
         self.combo_download_video_quality.pack(side="left", padx=(6, 12))
         self.combo_download_video_quality.bind("<<ComboboxSelected>>", self.on_option_toggle)
 
-        tk.Label(q_f, text="이미지 품질", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        tk.Label(q_f, text="이미지 품질", bg=self.color_bg, font=self.font_small).pack(side="left")
         self.download_image_quality_var = tk.StringVar(value=self.cfg.get("download_image_quality", "4K"))
         self.combo_download_image_quality = ttk.Combobox(
             q_f,
@@ -2889,14 +2889,14 @@ class FlowVisionApp:
             state="readonly",
             width=6,
             values=("4K", "2K", "1K"),
-            font=("Malgun Gothic", 9),
+            font=self.font_small,
         )
         self.combo_download_image_quality.pack(side="left", padx=(6, 0))
         self.combo_download_image_quality.bind("<<ComboboxSelected>>", self.on_option_toggle)
 
         wait_f = tk.Frame(dl_f, bg=self.color_bg)
         wait_f.pack(fill="x", pady=(0, 6))
-        tk.Label(wait_f, text="실패 판단 대기(초)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        tk.Label(wait_f, text="실패 판단 대기(초)", bg=self.color_bg, font=self.font_small).pack(side="left")
         self.download_wait_seconds_var = tk.StringVar(value=str(self.cfg.get("download_wait_seconds", 20)))
         self.entry_download_wait = tk.Entry(
             wait_f,
@@ -2915,12 +2915,12 @@ class FlowVisionApp:
             text="재시도 없이 이 시간 뒤 다음 항목으로 넘어갑니다.",
             bg=self.color_bg,
             fg=self.color_text_sec,
-            font=("Malgun Gothic", 9),
+            font=self.font_small,
         ).pack(side="left")
 
         out_f = tk.Frame(dl_f, bg=self.color_bg)
         out_f.pack(fill="x", pady=(0, 6))
-        tk.Label(out_f, text="저장 폴더", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left")
+        tk.Label(out_f, text="저장 폴더", bg=self.color_bg, font=self.font_small).pack(side="left")
         self.download_output_dir_var = tk.StringVar(value=self.cfg.get("download_output_dir", ""))
         self.entry_download_output_dir = tk.Entry(
             out_f,
@@ -2934,19 +2934,19 @@ class FlowVisionApp:
         self.entry_download_output_dir.bind("<FocusOut>", self.on_option_toggle)
         ttk.Button(out_f, text="폴더선택", command=self.on_pick_download_output_dir).pack(side="left")
 
-        tk.Label(dl_f, text="검색 입력 selector(공통)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
+        tk.Label(dl_f, text="검색 입력 selector(공통)", bg=self.color_bg, font=self.font_small).pack(anchor="w")
         self.download_search_input_selector_var = tk.StringVar(value=self.cfg.get("download_search_input_selector", ""))
         self.entry_download_search = tk.Entry(dl_f, textvariable=self.download_search_input_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
         self.entry_download_search.pack(fill="x", ipady=3, pady=(2, 4))
         self.entry_download_search.bind("<FocusOut>", self.on_option_toggle)
 
-        tk.Label(dl_f, text="영상 필터 selector", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
+        tk.Label(dl_f, text="영상 필터 selector", bg=self.color_bg, font=self.font_small).pack(anchor="w")
         self.download_video_filter_selector_var = tk.StringVar(value=self.cfg.get("download_video_filter_selector", ""))
         self.entry_download_video_filter = tk.Entry(dl_f, textvariable=self.download_video_filter_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
         self.entry_download_video_filter.pack(fill="x", ipady=3, pady=(2, 4))
         self.entry_download_video_filter.bind("<FocusOut>", self.on_option_toggle)
 
-        tk.Label(dl_f, text="이미지 필터 selector", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
+        tk.Label(dl_f, text="이미지 필터 selector", bg=self.color_bg, font=self.font_small).pack(anchor="w")
         self.download_image_filter_selector_var = tk.StringVar(value=self.cfg.get("download_image_filter_selector", ""))
         self.entry_download_image_filter = tk.Entry(dl_f, textvariable=self.download_image_filter_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
         self.entry_download_image_filter.pack(fill="x", ipady=3, pady=(2, 4))
@@ -3231,10 +3231,10 @@ class FlowVisionApp:
             btn_nav,
             text="0 / 0",
             width=10,
-            fg=self.color_text,
+            fg=self.color_input_fg,
             font=(self.font_mono_family, 11, "bold"),
             cursor="hand2",
-            bg=self.color_input_soft,
+            bg=self.color_accent,
             relief="flat",
         )
         self.lbl_nav_status.pack(side="left", padx=5)
