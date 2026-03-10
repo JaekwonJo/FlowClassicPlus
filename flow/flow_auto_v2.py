@@ -573,6 +573,68 @@ class FlowVisionApp:
         self._refresh_responsive_layout()
         self.log(f"🔎 UI 확대 비율 적용: {target}%")
 
+    def _draw_header_progress_bar(self, pct=0.0):
+        if not hasattr(self, "header_progress_canvas"):
+            return
+        try:
+            canvas = self.header_progress_canvas
+            canvas.update_idletasks()
+            width = max(int(canvas.winfo_width() or 0), 140)
+            height = max(int(canvas.winfo_height() or 0), 18)
+            pad = 2
+            inner_w = max(width - (pad * 2), 1)
+            pct = max(0.0, min(100.0, float(pct)))
+            fill_w = pad + int(inner_w * (pct / 100.0))
+
+            canvas.delete("all")
+            canvas.create_rectangle(
+                pad,
+                pad,
+                width - pad,
+                height - pad,
+                fill="#142236",
+                outline="#2B3E5D",
+                width=1,
+            )
+            for idx in range(1, 5):
+                x = pad + int(inner_w * (idx / 5))
+                canvas.create_line(x, pad + 2, x, height - pad - 2, fill="#23344F", width=1)
+            if fill_w > pad:
+                canvas.create_rectangle(
+                    pad,
+                    pad,
+                    fill_w,
+                    height - pad,
+                    fill="#1E90FF",
+                    outline="",
+                )
+                canvas.create_rectangle(
+                    pad,
+                    pad,
+                    fill_w,
+                    max(pad + 1, (height // 2) + 1),
+                    fill="#81D8FF",
+                    outline="",
+                    stipple="gray25",
+                )
+                canvas.create_line(
+                    fill_w,
+                    pad + 1,
+                    fill_w,
+                    height - pad - 1,
+                    fill="#EAF8FF",
+                    width=2,
+                )
+            canvas.create_text(
+                width // 2,
+                height // 2,
+                text=f"{pct:.1f}%",
+                fill="#F4FAFF",
+                font=(self.font_mono_family, max(9, self._font_px("mono_small")), "bold"),
+            )
+        except Exception:
+            return
+
     def _refresh_responsive_layout(self):
         width = max(int(self.root.winfo_width() or 0), 1)
         height = max(int(self.root.winfo_height() or 0), 1)
@@ -603,6 +665,13 @@ class FlowVisionApp:
             self.lbl_header_progress.config(font=(self.font_mono_family, max(12, self._font_px("mono")), "bold"))
         if hasattr(self, "lbl_main_status"):
             self.lbl_main_status.config(font=(self.font_ui_family, max(15, self._font_px("hud")), "bold"))
+        if hasattr(self, "header_progress_canvas"):
+            bar_height = 16 if compact else 18
+            if narrow:
+                bar_height = 14
+            self.header_progress_canvas.config(height=bar_height)
+            pct = float(self.progress_var.get()) if hasattr(self, "progress_var") else 0.0
+            self._draw_header_progress_bar(pct)
         if hasattr(self, "lbl_prog_text"):
             self.lbl_prog_text.config(font=(self.font_mono_family, max(12, self._font_px("mono")), "bold"))
         if hasattr(self, "lbl_eta"):
@@ -2590,22 +2659,23 @@ class FlowVisionApp:
         tk.Label(title_f, text="클래식 개선판", font=self.font_subtitle, bg=self.color_header, fg=self.color_text_sec).pack(anchor="w")
 
         center_f = tk.Frame(header, bg=self.color_header)
-        center_f.pack(side="left", fill="both", expand=True, padx=10)
-        tk.Label(center_f, text="진행 상황", font=self.font_small, bg=self.color_header, fg=self.color_text_sec).pack(anchor="center", pady=(8, 0))
-        self.lbl_header_progress = tk.Label(center_f, text="0 / 0 (0.0%)", font=(self.font_mono_family, 13, "bold"), bg=self.color_header, fg=self.color_accent)
-        self.lbl_header_progress.pack(anchor="center")
+        center_f.pack(side="left", fill="both", expand=True, padx=12, pady=8)
+        header_progress_card = tk.Frame(center_f, bg="#18283D", highlightbackground="#304663", highlightthickness=1)
+        header_progress_card.pack(fill="x", expand=True, padx=(0, 8))
+        tk.Label(header_progress_card, text="진행 상황", font=self.font_small, bg="#18283D", fg=self.color_text_sec).pack(anchor="center", pady=(6, 0))
+        self.lbl_header_progress = tk.Label(header_progress_card, text="0 / 0 (0.0%)", font=(self.font_mono_family, 13, "bold"), bg="#18283D", fg=self.color_accent)
+        self.lbl_header_progress.pack(anchor="center", pady=(0, 3))
+        self.header_progress_canvas = tk.Canvas(header_progress_card, height=18, bg="#18283D", highlightthickness=0, bd=0)
+        self.header_progress_canvas.pack(fill="x", padx=12, pady=(0, 8))
+        self.root.after(120, self._draw_header_progress_bar)
 
-        nav_f = tk.Frame(header, bg=self.color_header)
-        nav_f.pack(side="right", padx=12, pady=12)
-        ttk.Button(nav_f, text="A-", width=4, command=lambda: self._set_ui_zoom_percent(delta=-10)).pack(side="left", padx=(0, 4))
-        self.lbl_zoom_state = tk.Label(nav_f, text=f"{self._clamp_percent(self.cfg.get('ui_zoom_percent', 100), default=100)}%", font=self.font_small, bg=self.color_header, fg=self.color_info)
-        self.lbl_zoom_state.pack(side="left", padx=(0, 4))
-        ttk.Button(nav_f, text="A+", width=4, command=lambda: self._set_ui_zoom_percent(delta=10)).pack(side="left", padx=(0, 8))
-        self.btn_go_home = ttk.Button(nav_f, text="🏠 메인 메뉴", command=self.show_home_menu)
-        self.btn_go_home.pack(side="left", padx=(0, 8))
+        right_f = tk.Frame(header, bg=self.color_header)
+        right_f.pack(side="right", padx=14, pady=10)
+        self.btn_go_home = ttk.Button(right_f, text="🏠 메인 메뉴", command=self.show_home_menu)
+        self.btn_go_home.pack(side="left", padx=(0, 10))
 
-        status_f = tk.Frame(header, bg=self.color_header)
-        status_f.pack(side="right", padx=14, fill="y")
+        status_f = tk.Frame(right_f, bg=self.color_header)
+        status_f.pack(side="left")
         tk.Label(status_f, text="현재 상태", font=self.font_small, bg=self.color_header, fg=self.color_text_sec).pack(anchor="e")
         self.lbl_main_status = tk.Label(status_f, text="준비 완료", font=(self.font_ui_family, 16, "bold"), bg=self.color_header, fg=self.color_success)
         self.lbl_main_status.pack(anchor="e")
@@ -3410,32 +3480,41 @@ class FlowVisionApp:
         
         file_top = tk.Frame(bottom, bg=self.color_bg)
         file_top.pack(fill="x", pady=5)
-        tk.Label(file_top, text="📁 프롬프트 파일 선택:", font=self.font_section, fg=self.color_text).pack(side="left")
+        file_actions_f = tk.Frame(file_top, bg=self.color_bg)
+        file_actions_f.pack(side="left", fill="x", expand=True)
+        tk.Label(file_actions_f, text="📁 프롬프트 파일 선택:", font=self.font_section, fg=self.color_text).pack(side="left")
         
         self.slot_var = tk.StringVar()
-        self.combo_slots = ttk.Combobox(file_top, textvariable=self.slot_var, state="readonly", width=12, font=self.font_body)
+        self.combo_slots = ttk.Combobox(file_actions_f, textvariable=self.slot_var, state="readonly", width=12, font=self.font_body)
         self.combo_slots.pack(side="left", padx=10)
         self.combo_slots.bind("<<ComboboxSelected>>", self.on_slot_change)
         
         # [NEW] Rename Button
-        ttk.Button(file_top, text="✏️", width=3, command=self.on_rename_slot).pack(side="left", padx=2)
+        ttk.Button(file_actions_f, text="✏️", width=3, command=self.on_rename_slot).pack(side="left", padx=2)
         
         # [NEW] Add Slot Button
-        btn_add = ttk.Button(file_top, text="➕", width=3, command=self.on_add_slot)
+        btn_add = ttk.Button(file_actions_f, text="➕", width=3, command=self.on_add_slot)
         btn_add.pack(side="left", padx=2)
         ToolTip(btn_add, "새로운 프롬프트 슬롯 추가")
 
         # [NEW] Delete Slot Button
-        btn_del = ttk.Button(file_top, text="🗑️", width=3, command=self.on_delete_slot)
+        btn_del = ttk.Button(file_actions_f, text="🗑️", width=3, command=self.on_delete_slot)
         btn_del.pack(side="left", padx=2)
         ToolTip(btn_del, "현재 프롬프트 슬롯 삭제")
 
-        btn_sync = ttk.Button(file_top, text="🔄 슬롯 동기화", command=self.on_sync_slots)
+        btn_sync = ttk.Button(file_actions_f, text="🔄 슬롯 동기화", command=self.on_sync_slots)
         btn_sync.pack(side="left", padx=(6, 2))
         ToolTip(btn_sync, "flow_prompts_slot 숫자 파일을 자동으로 슬롯에 추가")
 
-        ttk.Button(file_top, text="📂 파일 열기", command=self.on_open_prompts).pack(side="right", padx=5)
-        ttk.Button(file_top, text="🔄 새로고침", command=self.on_reload).pack(side="right")
+        ttk.Button(file_actions_f, text="🔄 새로고침", command=self.on_reload).pack(side="left", padx=(8, 2))
+        ttk.Button(file_actions_f, text="📂 파일 열기", command=self.on_open_prompts).pack(side="left", padx=(2, 0))
+
+        zoom_f = tk.Frame(file_top, bg=self.color_bg)
+        zoom_f.pack(side="right")
+        ttk.Button(zoom_f, text="A-", width=4, command=lambda: self._set_ui_zoom_percent(delta=-10)).pack(side="left", padx=(0, 4))
+        self.lbl_zoom_state = tk.Label(zoom_f, text=f"{self._clamp_percent(self.cfg.get('ui_zoom_percent', 100), default=100)}%", font=self.font_small, bg=self.color_bg, fg=self.color_info)
+        self.lbl_zoom_state.pack(side="left", padx=(0, 4))
+        ttk.Button(zoom_f, text="A+", width=4, command=lambda: self._set_ui_zoom_percent(delta=10)).pack(side="left")
 
         file_nav = tk.Frame(bottom, bg=self.color_bg)
         file_nav.pack(fill="x", pady=(2, 0))
@@ -5837,11 +5916,13 @@ class FlowVisionApp:
             self.lbl_prog_text.config(text=f"{min(current, total)} / {total} ({pct:.1f}%)")
             if hasattr(self, "lbl_header_progress"):
                 self.lbl_header_progress.config(text=f"{min(current, total)} / {total} ({pct:.1f}%)")
+            self._draw_header_progress_bar(pct)
         else:
             self.progress_var.set(0)
             self.lbl_prog_text.config(text="0 / 0 (0%)")
             if hasattr(self, "lbl_header_progress"):
                 self.lbl_header_progress.config(text="0 / 0 (0.0%)")
+            self._draw_header_progress_bar(0)
         if hasattr(self, "lbl_hud_progress"):
             try:
                 processed = getattr(self.actor, "processed_count", 0)
