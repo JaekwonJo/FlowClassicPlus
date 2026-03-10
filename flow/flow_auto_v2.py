@@ -19,6 +19,7 @@ except ImportError:
     WINSOUND_AVAILABLE = False
 
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 
@@ -144,6 +145,12 @@ DEFAULT_CONFIG = {
     "download_human_slowdown": 1.35,
     "ui_window_width": 0,
     "ui_window_height": 0,
+    "ui_zoom_percent": 100,
+    "browser_window_scale_percent": 100,
+    "browser_zoom_percent": 100,
+    "prompt_image_baseline_ready": False,
+    "asset_image_baseline_ready": False,
+    "current_media_state": "",
     "enter_submit_rate": 0.5,
     "use_ref_images": False,
     "ref_image_count": 1,
@@ -393,9 +400,10 @@ class FlowVisionApp:
         self.download_session_log = []
         self.download_report_path = None
         self.completion_summary_path = None
-        self.prompt_image_baseline_ready = False
-        self.asset_image_baseline_ready = False
-        self.current_media_state = None
+        self.prompt_image_baseline_ready = bool(self.cfg.get("prompt_image_baseline_ready", False))
+        self.asset_image_baseline_ready = bool(self.cfg.get("asset_image_baseline_ready", False))
+        current_media_state = str(self.cfg.get("current_media_state", "") or "").strip().lower()
+        self.current_media_state = current_media_state if current_media_state in ("image", "video") else None
 
         self.actor = HumanActor(action_logger=self._action_log, status_callback=self._actor_status)
         self.actor.language_mode = self.cfg.get("language_mode", "en")
@@ -425,21 +433,27 @@ class FlowVisionApp:
         self.style = ttk.Style()
         self.style.theme_use('clam')
 
-        try:
-            self.root.tk.call("tk", "scaling", 1.08)
-        except Exception:
-            pass
-
         self.font_ui_family = "Segoe UI"
         self.font_mono_family = "Consolas"
-        self.font_title = (self.font_ui_family, 22, "bold")
-        self.font_subtitle = (self.font_ui_family, 12)
-        self.font_section = (self.font_ui_family, 14, "bold")
-        self.font_body = (self.font_ui_family, 12)
-        self.font_body_bold = (self.font_ui_family, 12, "bold")
-        self.font_small = (self.font_ui_family, 11)
-        self.font_mono = (self.font_mono_family, 12)
-        self.font_mono_small = (self.font_mono_family, 11)
+        self.base_font_sizes = {
+            "title": 22,
+            "subtitle": 12,
+            "section": 14,
+            "body": 12,
+            "small": 11,
+            "mono": 12,
+            "mono_small": 11,
+            "hud": 16,
+            "action": 15,
+        }
+        self.font_title = tkfont.Font(family=self.font_ui_family, size=22, weight="bold")
+        self.font_subtitle = tkfont.Font(family=self.font_ui_family, size=12)
+        self.font_section = tkfont.Font(family=self.font_ui_family, size=14, weight="bold")
+        self.font_body = tkfont.Font(family=self.font_ui_family, size=12)
+        self.font_body_bold = tkfont.Font(family=self.font_ui_family, size=12, weight="bold")
+        self.font_small = tkfont.Font(family=self.font_ui_family, size=11)
+        self.font_mono = tkfont.Font(family=self.font_mono_family, size=12)
+        self.font_mono_small = tkfont.Font(family=self.font_mono_family, size=11)
 
         self.color_bg = "#0E1728"
         self.color_card = "#182741"
@@ -454,6 +468,7 @@ class FlowVisionApp:
         self.color_input_fg = "#10203A"
         self.color_input_soft = "#D7E1F0"
         self.root.configure(bg=self.color_bg)
+        self._apply_ui_zoom_fonts(force=True)
         self.root.option_add("*Font", self.font_body)
         self.root.option_add("*Label.Foreground", self.color_text)
         self.root.option_add("*Label.Background", self.color_bg)
@@ -513,6 +528,105 @@ class FlowVisionApp:
         self.root.geometry(f"{w}x{h}+{x}+{y}")
         self.root.minsize(860, 620)
 
+    def _clamp_percent(self, value, default=100, minimum=70, maximum=140):
+        try:
+            pct = int(str(value).strip())
+        except Exception:
+            pct = int(default)
+        return max(minimum, min(maximum, pct))
+
+    def _effective_ui_scale(self):
+        ui_zoom = self._clamp_percent(self.cfg.get("ui_zoom_percent", 100), default=100, minimum=85, maximum=150) / 100.0
+        try:
+            width = max(int(self.root.winfo_width()), 1)
+            height = max(int(self.root.winfo_height()), 1)
+        except Exception:
+            width = int(self.cfg.get("ui_window_width", 0) or 0) or self.root.winfo_screenwidth()
+            height = int(self.cfg.get("ui_window_height", 0) or 0) or self.root.winfo_screenheight()
+        responsive = 1.0
+        if width < 1180 or height < 760:
+            responsive = 0.95
+        if width < 1020 or height < 700:
+            responsive = 0.90
+        if width < 900 or height < 650:
+            responsive = 0.84
+        return max(0.78, min(1.55, ui_zoom * responsive))
+
+    def _font_px(self, key):
+        base = int(self.base_font_sizes.get(key, 12))
+        return max(9, int(round(base * self._effective_ui_scale())))
+
+    def _apply_ui_zoom_fonts(self, force=False):
+        scale = self._effective_ui_scale()
+        tk_scale = max(0.95, min(1.75, 1.02 * scale))
+        try:
+            if force or abs(float(self.root.tk.call("tk", "scaling")) - tk_scale) >= 0.05:
+                self.root.tk.call("tk", "scaling", tk_scale)
+        except Exception:
+            pass
+
+        self.font_title.configure(size=self._font_px("title"))
+        self.font_subtitle.configure(size=self._font_px("subtitle"))
+        self.font_section.configure(size=self._font_px("section"))
+        self.font_body.configure(size=self._font_px("body"))
+        self.font_body_bold.configure(size=self._font_px("body"))
+        self.font_small.configure(size=self._font_px("small"))
+        self.font_mono.configure(size=self._font_px("mono"))
+        self.font_mono_small.configure(size=self._font_px("mono_small"))
+
+        action_size = max(12, self._font_px("action"))
+        self.style.configure("TLabelframe.Label", background=self.color_bg, foreground=self.color_accent, font=self.font_section)
+        self.style.configure("TLabel", background=self.color_bg, foreground=self.color_text, font=self.font_body)
+        self.style.configure("TCombobox", fieldbackground=self.color_input_bg, foreground=self.color_input_fg, padding=max(4, int(4 * scale)))
+        self.style.configure("TButton", background="#294162", foreground=self.color_text, borderwidth=1, font=self.font_body_bold, padding=max(5, int(6 * scale)))
+        self.style.configure("Action.TButton", background=self.color_accent, foreground="white", font=(self.font_ui_family, action_size, "bold"), padding=max(8, int(10 * scale)))
+
+    def _set_ui_zoom_percent(self, delta=0, absolute=None):
+        current = self._clamp_percent(self.cfg.get("ui_zoom_percent", 100), default=100, minimum=85, maximum=150)
+        target = self._clamp_percent(absolute if absolute is not None else current + delta, default=current, minimum=85, maximum=150)
+        self.cfg["ui_zoom_percent"] = target
+        self.save_config()
+        self._apply_ui_zoom_fonts(force=True)
+        if hasattr(self, "lbl_zoom_state"):
+            self.lbl_zoom_state.config(text=f"{target}%")
+        self._refresh_responsive_layout()
+        self.log(f"🔎 UI 확대 비율 적용: {target}%")
+
+    def _refresh_responsive_layout(self):
+        self._apply_ui_zoom_fonts()
+        width = max(int(self.root.winfo_width() or 0), 1)
+        compact = width < 1040
+        narrow = width < 930
+        if hasattr(self, "left_container"):
+            target_width = 560
+            if compact:
+                target_width = 500
+            if narrow:
+                target_width = 450
+            self.left_container.config(width=target_width)
+        if hasattr(self, "btn_log") and hasattr(self, "btn_refresh_big"):
+            pad_y = 4 if compact else 6
+            self.btn_log.config(font=self.font_body_bold, padx=10 if compact else 14, pady=pad_y)
+            self.btn_refresh_big.config(font=self.font_body_bold, padx=10 if compact else 14, pady=pad_y)
+        if hasattr(self, "lbl_header_progress"):
+            self.lbl_header_progress.config(font=(self.font_mono_family, max(12, self._font_px("mono")), "bold"))
+        if hasattr(self, "lbl_main_status"):
+            self.lbl_main_status.config(font=(self.font_ui_family, max(15, self._font_px("hud")), "bold"))
+        if hasattr(self, "lbl_prog_text"):
+            self.lbl_prog_text.config(font=(self.font_mono_family, max(12, self._font_px("mono")), "bold"))
+        if hasattr(self, "lbl_eta"):
+            self.lbl_eta.config(font=self.font_body)
+        if hasattr(self, "lbl_nav_status"):
+            self.lbl_nav_status.config(font=(self.font_mono_family, max(11, self._font_px("mono_small")), "bold"))
+        if hasattr(self, "ent_jump"):
+            self.ent_jump.config(font=self.font_mono)
+        if hasattr(self, "btn_go_home"):
+            self.btn_go_home.config(style="TButton")
+        if hasattr(self, "lbl_prompt_preset_selector"):
+            self.lbl_prompt_preset_selector.config(wraplength=max(360, width - 620))
+        if hasattr(self, "lbl_asset_prompt_preset_selector"):
+            self.lbl_asset_prompt_preset_selector.config(wraplength=max(360, width - 620))
+
     def _persist_window_geometry(self):
         try:
             if str(self.root.state()) != "normal":
@@ -536,21 +650,59 @@ class FlowVisionApp:
             self._geometry_save_after = self.root.after(500, self._persist_window_geometry)
         except Exception:
             self._persist_window_geometry()
+        try:
+            if getattr(self, "_responsive_after", None):
+                self.root.after_cancel(self._responsive_after)
+        except Exception:
+            pass
+        try:
+            self._responsive_after = self.root.after(120, self._refresh_responsive_layout)
+        except Exception:
+            self._refresh_responsive_layout()
 
     def _compute_browser_window_size(self):
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
+        browser_scale = self._clamp_percent(self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=70, maximum=120) / 100.0
         if sw <= 1600 or sh <= 900:
-            win_w = max(1080, int(sw * 0.72))
-            win_h = max(720, int(sh * 0.82))
+            win_w = max(900, int(sw * 0.72 * browser_scale))
+            win_h = max(640, int(sh * 0.82 * browser_scale))
         else:
-            win_w = max(1200, int(sw * 0.68))
-            win_h = max(780, int(sh * 0.86))
+            win_w = max(1020, int(sw * 0.68 * browser_scale))
+            win_h = max(720, int(sh * 0.86 * browser_scale))
         win_w = min(win_w, sw - 40)
         win_h = min(win_h, sh - 80)
         viewport_w = max(1024, win_w - 24)
         viewport_h = max(680, win_h - 100)
         return win_w, win_h, viewport_w, viewport_h
+
+    def _apply_browser_zoom(self):
+        if not self.page:
+            return
+        zoom_pct = self._clamp_percent(self.cfg.get("browser_zoom_percent", 100), default=100, minimum=70, maximum=130)
+        zoom_value = f"{zoom_pct}%"
+        script = f"""
+        (() => {{
+            const applyZoom = () => {{
+                try {{
+                    document.documentElement.style.zoom = "{zoom_value}";
+                    if (document.body) {{
+                        document.body.style.zoom = "{zoom_value}";
+                    }}
+                }} catch (_e) {{}}
+            }};
+            applyZoom();
+            document.addEventListener('DOMContentLoaded', applyZoom, {{ once: true }});
+            window.addEventListener('load', applyZoom, {{ once: true }});
+            setTimeout(applyZoom, 350);
+            setTimeout(applyZoom, 900);
+        }})();
+        """
+        try:
+            self.page.evaluate(script)
+            self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 브라우저 페이지 배율 적용: {zoom_pct}%")
+        except Exception as e:
+            self.log(f"⚠️ 브라우저 배율 적용 실패(계속 진행): {e}")
 
     def _init_body_sash(self):
         try:
@@ -677,6 +829,27 @@ class FlowVisionApp:
             self.log(f"⚠️ stealth 적용 실패(계속 진행): {e}")
 
         self.actor.set_page(self.page)
+        zoom_pct = self._clamp_percent(self.cfg.get("browser_zoom_percent", 100), default=100, minimum=70, maximum=130)
+        zoom_value = f"{zoom_pct}%"
+        try:
+            self.browser_context.add_init_script(
+                """
+                (() => {
+                    const apply = () => {
+                        try {
+                            document.documentElement.style.zoom = "__ZOOM__";
+                            if (document.body) document.body.style.zoom = "__ZOOM__";
+                        } catch (_e) {}
+                    };
+                    apply();
+                    document.addEventListener('DOMContentLoaded', apply);
+                    window.addEventListener('load', apply);
+                })();
+                """.replace("__ZOOM__", zoom_value)
+            )
+        except Exception:
+            pass
+        self._apply_browser_zoom()
         self.log("🌐 Playwright 브라우저 세션 연결 완료")
         self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 브라우저 세션 생성")
 
@@ -709,6 +882,7 @@ class FlowVisionApp:
                 self.log(f"🌐 봇 작업창 이동: {start_url}")
                 self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
                 time.sleep(random.uniform(1.0, 2.0))
+            self._apply_browser_zoom()
             try:
                 self.page.bring_to_front()
             except Exception:
@@ -2260,10 +2434,26 @@ class FlowVisionApp:
             self.lbl_hud_state.config(text=f"상태: {text}", fg=color)
 
     def _create_collapsible_section(self, parent, title, opened=False):
-        wrap = tk.Frame(parent, bg=self.color_bg, highlightbackground="#4D6F9E", highlightthickness=1)
+        title_key = str(title or "")
+        head_bg = self.color_card
+        head_fg = self.color_accent
+        if "프롬프트 자동화 전용 생성 옵션" in title_key:
+            head_bg = "#16304F"
+            head_fg = "#8AD7FF"
+        elif "S001~S###" in title_key:
+            head_bg = "#1D3048"
+            head_fg = "#7CD9FF"
+        elif "다운로드 자동화" in title_key:
+            head_bg = "#1E3156"
+            head_fg = "#8FD8FF"
+        elif "이어달리기" in title_key:
+            head_bg = "#24324B"
+            head_fg = "#B8C6DD"
+
+        wrap = tk.Frame(parent, bg=self.color_bg, highlightbackground=head_fg, highlightthickness=1)
         wrap.pack(fill="x", pady=(6, 6))
 
-        head = tk.Frame(wrap, bg=self.color_card)
+        head = tk.Frame(wrap, bg=head_bg)
         head.pack(fill="x")
 
         state = {"open": bool(opened)}
@@ -2275,13 +2465,13 @@ class FlowVisionApp:
             anchor="w",
             relief="flat",
             borderwidth=0,
-            bg=self.color_card,
-            activebackground=self.color_card,
-            fg=self.color_accent,
+            bg=head_bg,
+            activebackground=head_bg,
+            fg=head_fg,
             font=self.font_section,
             cursor="hand2",
             padx=8,
-            pady=8,
+            pady=10,
         )
         btn.pack(fill="x")
 
@@ -2368,29 +2558,39 @@ class FlowVisionApp:
     def on_mark_prompt_image_baseline_ready(self):
         self.prompt_image_baseline_ready = True
         self.current_media_state = "image"
+        self.cfg["prompt_image_baseline_ready"] = True
+        self.cfg["current_media_state"] = "image"
+        self.save_config()
         self._refresh_manual_baseline_labels()
         self.log("✅ 프롬프트 자동화 기본값 이미지 확인 완료")
 
     def on_reset_prompt_image_baseline_ready(self):
         self.prompt_image_baseline_ready = False
+        self.cfg["prompt_image_baseline_ready"] = False
+        self.save_config()
         self._refresh_manual_baseline_labels()
         self.log("ℹ️ 프롬프트 자동화 기본값 이미지 확인 해제")
 
     def on_mark_asset_image_baseline_ready(self):
         self.asset_image_baseline_ready = True
         self.current_media_state = "video"
+        self.cfg["asset_image_baseline_ready"] = True
+        self.cfg["current_media_state"] = "video"
+        self.save_config()
         self._refresh_manual_baseline_labels()
         self.log("✅ S자동화 기본값 동영상 확인 완료")
 
     def on_reset_asset_image_baseline_ready(self):
         self.asset_image_baseline_ready = False
+        self.cfg["asset_image_baseline_ready"] = False
+        self.save_config()
         self._refresh_manual_baseline_labels()
         self.log("ℹ️ S자동화 기본값 동영상 확인 해제")
 
     def _build_ui(self):
         # 1. Header (High Visibility)
         header = tk.Frame(self.root, bg=self.color_header, height=64, highlightbackground="#24324B", highlightthickness=1)
-        header.pack(fill="x", side="top")
+        header.grid(row=0, column=0, sticky="ew")
         self.header = header
         
         title_f = tk.Frame(header, bg=self.color_header)
@@ -2406,6 +2606,10 @@ class FlowVisionApp:
 
         nav_f = tk.Frame(header, bg=self.color_header)
         nav_f.pack(side="right", padx=12, pady=12)
+        ttk.Button(nav_f, text="A-", width=4, command=lambda: self._set_ui_zoom_percent(delta=-10)).pack(side="left", padx=(0, 4))
+        self.lbl_zoom_state = tk.Label(nav_f, text=f"{self._clamp_percent(self.cfg.get('ui_zoom_percent', 100), default=100)}%", font=self.font_small, bg=self.color_header, fg=self.color_info)
+        self.lbl_zoom_state.pack(side="left", padx=(0, 4))
+        ttk.Button(nav_f, text="A+", width=4, command=lambda: self._set_ui_zoom_percent(delta=10)).pack(side="left", padx=(0, 8))
         self.btn_go_home = ttk.Button(nav_f, text="🏠 메인 메뉴", command=self.show_home_menu)
         self.btn_go_home.pack(side="left", padx=(0, 8))
 
@@ -2417,7 +2621,7 @@ class FlowVisionApp:
 
         # 2. Body
         mid_frame = tk.Frame(self.root, bg=self.color_bg, pady=6)
-        mid_frame.pack(side="top", fill="both", expand=True, padx=6)
+        mid_frame.grid(row=1, column=0, sticky="nsew", padx=6, pady=(6, 2))
         self.mid_frame = mid_frame
 
         self.body_pane = ttk.Panedwindow(mid_frame, orient="horizontal")
@@ -2456,6 +2660,34 @@ class FlowVisionApp:
         self.entry_start_url = tk.Entry(left_card, textvariable=self.start_url_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono)
         self.entry_start_url.pack(fill="x", ipady=4, pady=(2, 8))
         self.entry_start_url.bind("<FocusOut>", self.on_option_toggle)
+
+        browser_scale_f = tk.Frame(left_card, bg=self.color_bg)
+        browser_scale_f.pack(fill="x", pady=(0, 8))
+        tk.Label(browser_scale_f, text="봇 작업창 크기", bg=self.color_bg, font=self.font_small).pack(side="left")
+        self.browser_window_scale_var = tk.StringVar(value=str(self._clamp_percent(self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=70, maximum=120)))
+        self.combo_browser_window_scale = ttk.Combobox(
+            browser_scale_f,
+            textvariable=self.browser_window_scale_var,
+            state="readonly",
+            width=6,
+            values=("70", "80", "90", "100", "110", "120"),
+            font=self.font_small,
+        )
+        self.combo_browser_window_scale.pack(side="left", padx=(6, 14))
+        self.combo_browser_window_scale.bind("<<ComboboxSelected>>", self.on_option_toggle)
+
+        tk.Label(browser_scale_f, text="브라우저 배율", bg=self.color_bg, font=self.font_small).pack(side="left")
+        self.browser_zoom_var = tk.StringVar(value=str(self._clamp_percent(self.cfg.get("browser_zoom_percent", 100), default=100, minimum=70, maximum=130)))
+        self.combo_browser_zoom = ttk.Combobox(
+            browser_scale_f,
+            textvariable=self.browser_zoom_var,
+            state="readonly",
+            width=6,
+            values=("70", "80", "90", "100", "110", "120", "130"),
+            font=self.font_small,
+        )
+        self.combo_browser_zoom.pack(side="left", padx=(6, 0))
+        self.combo_browser_zoom.bind("<<ComboboxSelected>>", self.on_option_toggle)
 
         tk.Label(left_card, text="입력창 CSS Selector", bg=self.color_bg, font=self.font_small).pack(anchor="w")
         self.input_selector_var = tk.StringVar(value=self.cfg.get("input_selector", "textarea, [contenteditable='true']"))
@@ -3171,7 +3403,7 @@ class FlowVisionApp:
 
         # 3. Bottom
         bottom = tk.Frame(self.root, bg=self.color_bg)
-        bottom.pack(side="bottom", fill="x", expand=False, padx=20, pady=(0, 16))
+        bottom.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 12))
         self.bottom_frame = bottom
         
         file_top = tk.Frame(bottom, bg=self.color_bg)
@@ -3257,6 +3489,7 @@ class FlowVisionApp:
             relief="raised",
             borderwidth=3,
         )
+        self.btn_log = btn_log
         btn_log.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=6)
 
         btn_refresh_big = tk.Button(
@@ -3269,9 +3502,11 @@ class FlowVisionApp:
             relief="raised",
             borderwidth=3,
         )
+        self.btn_refresh_big = btn_refresh_big
         btn_refresh_big.pack(side="left", fill="x", expand=True, padx=(5, 0), ipady=6)
 
         self._build_home_menu()
+        self.root.after(80, self._refresh_responsive_layout)
 
     def _build_home_menu(self):
         self.home_overlay = tk.Frame(self.root, bg=self.color_bg)
@@ -3669,6 +3904,12 @@ class FlowVisionApp:
         self.cfg["new_project_selector"] = self.new_project_selector_var.get().strip() if hasattr(self, "new_project_selector_var") else self.cfg.get("new_project_selector", "")
         self.cfg["browser_headless"] = self.browser_headless_var.get() if hasattr(self, "browser_headless_var") else self.cfg.get("browser_headless", False)
         self.cfg["browser_channel"] = self.browser_channel_var.get().strip() if hasattr(self, "browser_channel_var") else self.cfg.get("browser_channel", "chrome")
+        self.cfg["browser_window_scale_percent"] = self._clamp_percent(self.browser_window_scale_var.get() if hasattr(self, "browser_window_scale_var") else self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=70, maximum=120)
+        self.cfg["browser_zoom_percent"] = self._clamp_percent(self.browser_zoom_var.get() if hasattr(self, "browser_zoom_var") else self.cfg.get("browser_zoom_percent", 100), default=100, minimum=70, maximum=130)
+        self.cfg["ui_zoom_percent"] = self._clamp_percent(self.cfg.get("ui_zoom_percent", 100), default=100, minimum=85, maximum=150)
+        self.cfg["prompt_image_baseline_ready"] = bool(self.prompt_image_baseline_ready)
+        self.cfg["asset_image_baseline_ready"] = bool(self.asset_image_baseline_ready)
+        self.cfg["current_media_state"] = self.current_media_state or ""
         if hasattr(self, "lbl_coords"):
             self.lbl_coords.config(text=self._get_coord_text())
         try: self.cfg["relay_count"] = int(self.relay_cnt_var.get())
@@ -3687,6 +3928,8 @@ class FlowVisionApp:
             self.actor.set_typing_speed_profile(self.cfg.get("typing_speed_profile", "normal"))
         if hasattr(self, "lbl_hud_mode"):
             self.lbl_hud_mode.config(text=f"입력: {self.cfg['input_mode']}")
+        if self.page:
+            self._apply_browser_zoom()
         self.log(f"⚙️ 설정 동기화 완료 (입력방식: {self.cfg['input_mode']})")
 
     def _pick_first_visible_selector(self, candidates):
@@ -6232,6 +6475,7 @@ class FlowVisionApp:
                 self.log(f"🌐 페이지 이동: {start_url}")
                 self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
                 self.actor.random_action_delay("페이지 로딩 안정화", 1.0, 3.0)
+                self._apply_browser_zoom()
 
             prompt = self.prompts[self.index]
             asset_tag = None
