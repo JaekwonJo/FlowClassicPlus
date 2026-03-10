@@ -71,7 +71,7 @@ class HumanActor:
             self.status_callback(text)
 
     def _get_random_batch_size(self):
-        return random.randint(15, 30)
+        return random.randint(30, 50)
 
     def update_batch_size(self):
         self.current_batch_size = self._get_random_batch_size()
@@ -108,8 +108,8 @@ class HumanActor:
             "mouse_leave_rate": 0.0,
             "enter_submit_rate": random.uniform(0.25, 0.75),
             "gaze_simulation": random.uniform(0.1, 0.3),
-            "bio_break_interval": random.randint(15, 30),
-            "long_break_duration": (180, 300),
+            "bio_break_interval": random.randint(30, 50),
+            "long_break_duration": (300, 1200),
         }
 
         traits = []
