@@ -537,20 +537,7 @@ class FlowVisionApp:
 
     def _effective_ui_scale(self):
         ui_zoom = self._clamp_percent(self.cfg.get("ui_zoom_percent", 100), default=100, minimum=85, maximum=150) / 100.0
-        try:
-            width = max(int(self.root.winfo_width()), 1)
-            height = max(int(self.root.winfo_height()), 1)
-        except Exception:
-            width = int(self.cfg.get("ui_window_width", 0) or 0) or self.root.winfo_screenwidth()
-            height = int(self.cfg.get("ui_window_height", 0) or 0) or self.root.winfo_screenheight()
-        responsive = 1.0
-        if width < 1180 or height < 760:
-            responsive = 0.95
-        if width < 1020 or height < 700:
-            responsive = 0.90
-        if width < 900 or height < 650:
-            responsive = 0.84
-        return max(0.78, min(1.55, ui_zoom * responsive))
+        return max(0.85, min(1.50, ui_zoom))
 
     def _font_px(self, key):
         base = int(self.base_font_sizes.get(key, 12))
@@ -587,10 +574,14 @@ class FlowVisionApp:
         self.log(f"🔎 UI 확대 비율 적용: {target}%")
 
     def _refresh_responsive_layout(self):
-        self._apply_ui_zoom_fonts()
         width = max(int(self.root.winfo_width() or 0), 1)
+        height = max(int(self.root.winfo_height() or 0), 1)
         compact = width < 1040
         narrow = width < 930
+        layout_key = (compact, narrow, height < 720, self._clamp_percent(self.cfg.get("ui_zoom_percent", 100), default=100))
+        if getattr(self, "_last_layout_key", None) == layout_key:
+            return
+        self._last_layout_key = layout_key
         if hasattr(self, "left_container"):
             target_width = 560
             if compact:
