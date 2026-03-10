@@ -2671,14 +2671,13 @@ class FlowVisionApp:
 
         right_f = tk.Frame(header, bg=self.color_header)
         right_f.pack(side="right", padx=14, pady=10)
-        self.btn_go_home = ttk.Button(right_f, text="🏠 메인 메뉴", command=self.show_home_menu)
-        self.btn_go_home.pack(side="left", padx=(0, 10))
-
         status_f = tk.Frame(right_f, bg=self.color_header)
-        status_f.pack(side="left")
+        status_f.pack(side="left", padx=(0, 10))
         tk.Label(status_f, text="현재 상태", font=self.font_small, bg=self.color_header, fg=self.color_text_sec).pack(anchor="e")
         self.lbl_main_status = tk.Label(status_f, text="준비 완료", font=(self.font_ui_family, 16, "bold"), bg=self.color_header, fg=self.color_success)
         self.lbl_main_status.pack(anchor="e")
+        self.btn_go_home = ttk.Button(right_f, text="🏠 메인 메뉴", command=self.show_home_menu)
+        self.btn_go_home.pack(side="left")
 
         # 2. Body
         mid_frame = tk.Frame(self.root, bg=self.color_bg, pady=6)
