@@ -35,6 +35,14 @@
 1. `1_필수라이브러리_설치.bat`
 2. `2_오토_프로그램_실행.bat`
 
+## 노트북에서 다운로드 후 실행 순서
+1. `git clone git@github.com:JaekwonJo/FlowClassicPlus.git`
+2. `cd FlowClassicPlus`
+3. `git checkout complete-2026-03-10`
+4. 처음 1회만 `1_필수라이브러리_설치.bat` 실행
+5. 그 다음 `2_오토_프로그램_실행.bat` 실행
+6. 테스트할 때는 `Flow Classic Plus` 기준으로 확인
+
 ## 다음 예정 작업
 - 이어달리기 기능 마무리
 - 잘 쓰지 않는 기능/고급 설정을 설정창으로 정리
