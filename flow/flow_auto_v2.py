@@ -408,6 +408,7 @@ class FlowVisionApp:
         self.current_selection_summary = ""
         self.current_selection_input = ""
         self.home_window = None
+        self.pipeline_window = None
         self.prompt_image_baseline_ready = bool(self.cfg.get("prompt_image_baseline_ready", False))
         self.asset_image_baseline_ready = bool(self.cfg.get("asset_image_baseline_ready", False))
         current_media_state = str(self.cfg.get("current_media_state", "") or "").strip().lower()
@@ -4118,13 +4119,15 @@ class FlowVisionApp:
         grid.pack(fill="both", expand=True)
         for col in range(2):
             grid.grid_columnconfigure(col, weight=1, uniform="home")
-        for row in range(2):
+        for row in range(3):
             grid.grid_rowconfigure(row, weight=1, uniform="home")
 
         self._make_home_card(grid, 0, 0, "🛠 작업창 열기", "기존 자동화 기능 전체가 들어 있는 작업창을 엽니다.", lambda: self.open_home_target("all"))
-        self._make_home_card(grid, 0, 1, "📝 프롬프트 자동화", "작업창을 열고 프롬프트 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("prompt"))
-        self._make_home_card(grid, 1, 0, "🔁 S001 자동화", "작업창을 열고 S001 반복 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("asset"))
-        self._make_home_card(grid, 1, 1, "⬇ 다운로드 자동화", "작업창을 열고 다운로드 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("download"))
+        self._make_home_card(grid, 0, 1, "🏃 이어달리기", "새 이어달리기 전용 창으로 들어갑니다.", lambda: self.open_home_target("relay"))
+        self._make_home_card(grid, 1, 0, "📝 프롬프트 자동화", "작업창을 열고 프롬프트 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("prompt"))
+        self._make_home_card(grid, 1, 1, "🔁 S001 자동화", "작업창을 열고 S001 반복 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("asset"))
+        self._make_home_card(grid, 2, 0, "⬇ 다운로드 자동화", "작업창을 열고 다운로드 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("download"))
+        self._make_home_card(grid, 2, 1, "⚙ 전체 설정 보기", "작업창 전체 설정 화면을 바로 엽니다.", lambda: self.open_home_target("all"))
         self.root.withdraw()
         self.home_window.deiconify()
         self.home_window.lift()
@@ -4157,6 +4160,7 @@ class FlowVisionApp:
             self.on_exit()
 
     def show_home_menu(self):
+        self.hide_pipeline_window()
         if self.home_window and self.home_window.winfo_exists():
             try:
                 self.root.withdraw()
@@ -4173,8 +4177,160 @@ class FlowVisionApp:
             except Exception:
                 pass
 
+    def _build_pipeline_window(self):
+        if self.pipeline_window and self.pipeline_window.winfo_exists():
+            return
+        self.pipeline_window = tk.Toplevel(self.root)
+        self.pipeline_window.title(f"{APP_NAME} - 이어달리기창")
+        self.pipeline_window.configure(bg=self.color_bg)
+        self.pipeline_window.minsize(980, 680)
+        try:
+            icon_path = self.base.parent / "icon.ico"
+            if icon_path.exists():
+                self.pipeline_window.iconbitmap(str(icon_path))
+        except Exception:
+            pass
+        self.pipeline_window.protocol("WM_DELETE_WINDOW", self.show_home_menu)
+        self._position_pipeline_window()
+
+        outer = tk.Frame(self.pipeline_window, bg=self.color_bg)
+        outer.pack(fill="both", expand=True, padx=18, pady=18)
+
+        header = tk.Frame(outer, bg=self.color_header, highlightbackground="#24324B", highlightthickness=1)
+        header.pack(fill="x", pady=(0, 14))
+        top_left = tk.Frame(header, bg=self.color_header)
+        top_left.pack(side="left", fill="both", expand=True, padx=16, pady=12)
+        tk.Label(top_left, text="이어달리기", font=self.font_title, bg=self.color_header, fg=self.color_text).pack(anchor="w")
+        tk.Label(
+            top_left,
+            text="작업 1번, 2번, 3번을 단계별로 저장해서 이어서 돌리는 전용 창입니다.",
+            font=self.font_small,
+            bg=self.color_header,
+            fg=self.color_text_sec,
+        ).pack(anchor="w", pady=(4, 0))
+        top_right = tk.Frame(header, bg=self.color_header)
+        top_right.pack(side="right", padx=14, pady=12)
+        ttk.Button(top_right, text="🛠 작업창 열기", command=lambda: self.open_home_target("all")).pack(side="left", padx=(0, 6))
+        ttk.Button(top_right, text="🏠 메인창", command=self.show_home_menu).pack(side="left")
+
+        body = ttk.Panedwindow(outer, orient="horizontal")
+        body.pack(fill="both", expand=True)
+
+        left = tk.Frame(body, bg=self.color_bg)
+        right = tk.Frame(body, bg=self.color_bg)
+        body.add(left, weight=1)
+        body.add(right, weight=2)
+
+        left_card = tk.Frame(left, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
+        left_card.pack(fill="both", expand=True)
+        tk.Label(left_card, text="작업 단계 목록", font=self.font_section, bg=self.color_card, fg=self.color_text).pack(anchor="w", padx=16, pady=(16, 8))
+        tk.Label(
+            left_card,
+            text="여기에 1번 작업, 2번 작업, 3번 작업이 순서대로 들어가게 만들 예정입니다.",
+            font=self.font_small,
+            bg=self.color_card,
+            fg=self.color_text_sec,
+            wraplength=280,
+            justify="left",
+        ).pack(anchor="w", padx=16)
+        self.pipeline_step_listbox = tk.Listbox(
+            left_card,
+            bg="#0F1B2E",
+            fg=self.color_text,
+            selectbackground="#1B78D0",
+            selectforeground="white",
+            font=self.font_body,
+            borderwidth=0,
+            relief="flat",
+            highlightthickness=0,
+        )
+        self.pipeline_step_listbox.pack(fill="both", expand=True, padx=16, pady=(12, 10))
+        self.pipeline_step_listbox.insert("end", "1. 이어달리기 작업 추가 예정")
+        self.pipeline_step_listbox.insert("end", "2. 프롬프트 / S반복 / 다운로드 단계 저장 예정")
+        self.pipeline_step_listbox.insert("end", "3. 단계별 수정 / 삭제 / 순서 변경 예정")
+
+        left_btns = tk.Frame(left_card, bg=self.color_card)
+        left_btns.pack(fill="x", padx=16, pady=(0, 16))
+        ttk.Button(left_btns, text="➕ 작업 추가", state="disabled").pack(side="left")
+        ttk.Button(left_btns, text="📄 복제", state="disabled").pack(side="left", padx=6)
+        ttk.Button(left_btns, text="🗑 삭제", state="disabled").pack(side="left")
+
+        right_card = tk.Frame(right, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
+        right_card.pack(fill="both", expand=True)
+        tk.Label(right_card, text="이어달리기 설계 화면", font=self.font_section, bg=self.color_card, fg=self.color_text).pack(anchor="w", padx=18, pady=(16, 8))
+        tk.Label(
+            right_card,
+            text="이번 단계는 기능을 안 건드리고 창만 먼저 분리했습니다. 다음 단계에서 프로젝트 목록, 단계 설정, 시작/일시정지/재개를 붙일 예정입니다.",
+            font=self.font_body,
+            bg=self.color_card,
+            fg=self.color_text_sec,
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w", padx=18, pady=(0, 16))
+
+        info_box = tk.Frame(right_card, bg="#13233A", highlightbackground="#28405F", highlightthickness=1)
+        info_box.pack(fill="x", padx=18, pady=(0, 14))
+        tk.Label(info_box, text="다음에 붙일 핵심 기능", font=self.font_body_bold, bg="#13233A", fg=self.color_info).pack(anchor="w", padx=14, pady=(12, 6))
+        for text in (
+            "프로젝트 목록 저장: URL + 프로젝트 이름 저장 / 추가 / 삭제 / 이름 변경",
+            "작업 단계 저장: 프롬프트, S반복, 다운로드를 1번/2번/3번으로 묶기",
+            "단계별 모드 전환: 이미지 기본값 / 동영상 기본값 자동 적용",
+            "이어달리기 실행: 시작 / 일시정지 / 수정 후 이어서 시작",
+        ):
+            tk.Label(info_box, text=f"• {text}", font=self.font_small, bg="#13233A", fg=self.color_text).pack(anchor="w", padx=14, pady=2)
+
+        preview_box = tk.Frame(right_card, bg=self.color_bg, highlightbackground="#24324B", highlightthickness=1)
+        preview_box.pack(fill="both", expand=True, padx=18, pady=(0, 14))
+        tk.Label(preview_box, text="예상 실행 흐름", font=self.font_body_bold, bg=self.color_bg, fg=self.color_accent).pack(anchor="w", padx=14, pady=(12, 8))
+        preview_text = (
+            "1. 1번 작업: 프롬프트 자동화 (이미지)\n"
+            "2. 2번 작업: S반복 자동화 (동영상)\n"
+            "3. 3번 작업: 다운로드 자동화 (동영상)\n\n"
+            "이 흐름을 저장해두고, 이어달리기 시작 버튼으로 한 번에 돌리는 구조로 갈 예정입니다."
+        )
+        tk.Label(preview_box, text=preview_text, font=self.font_small, bg=self.color_bg, fg=self.color_text_sec, justify="left").pack(anchor="w", padx=14, pady=(0, 14))
+
+        bottom = tk.Frame(right_card, bg=self.color_card)
+        bottom.pack(fill="x", padx=18, pady=(0, 16))
+        ttk.Button(bottom, text="💾 이어달리기 저장", state="disabled").pack(side="left")
+        ttk.Button(bottom, text="▶ 이어달리기 시작", state="disabled").pack(side="left", padx=6)
+        ttk.Button(bottom, text="⏸ 일시정지", state="disabled").pack(side="left")
+
+    def _position_pipeline_window(self):
+        if not (self.pipeline_window and self.pipeline_window.winfo_exists()):
+            return
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        w = min(1320, max(1020, int(sw * 0.76)))
+        h = min(860, max(720, int(sh * 0.82)))
+        x = max((sw - w) // 2, 0)
+        y = max((sh - h) // 2, 0)
+        self.pipeline_window.geometry(f"{w}x{h}+{x}+{y}")
+
+    def show_pipeline_window(self):
+        self._build_pipeline_window()
+        if self.pipeline_window and self.pipeline_window.winfo_exists():
+            try:
+                self.root.withdraw()
+            except Exception:
+                pass
+            self.pipeline_window.deiconify()
+            self.pipeline_window.lift()
+            self.pipeline_window.focus_force()
+
+    def hide_pipeline_window(self):
+        if self.pipeline_window and self.pipeline_window.winfo_exists():
+            try:
+                self.pipeline_window.withdraw()
+            except Exception:
+                pass
+
     def open_home_target(self, target):
         self.hide_home_menu()
+        if target == "relay":
+            self.show_pipeline_window()
+            return
+        self.hide_pipeline_window()
         try:
             self.root.deiconify()
             self.root.lift()
@@ -7033,6 +7189,11 @@ class FlowVisionApp:
         self._stop_tray_icon()
         self.run_input_mode = None
         self.current_run_mode = None
+        if self.pipeline_window and self.pipeline_window.winfo_exists():
+            try:
+                self.pipeline_window.destroy()
+            except Exception:
+                pass
         if self.home_window and self.home_window.winfo_exists():
             try:
                 self.home_window.destroy()
