@@ -601,6 +601,67 @@ class FlowVisionApp:
         self._refresh_responsive_layout()
         self.log(f"🔎 UI 확대 비율 적용: {target}%")
 
+    def _apply_browser_window_scale_live(self):
+        if not self.page:
+            return
+        try:
+            win_w, win_h, viewport_w, viewport_h = self._compute_browser_window_size()
+            try:
+                self.page.set_viewport_size({"width": viewport_w, "height": viewport_h})
+            except Exception:
+                pass
+            cdp_owner = getattr(self.page, "context", None) or self.browser_context
+            if cdp_owner and hasattr(cdp_owner, "new_cdp_session"):
+                session = cdp_owner.new_cdp_session(self.page)
+                info = session.send("Browser.getWindowForTarget")
+                window_id = (info or {}).get("windowId")
+                if window_id:
+                    session.send("Browser.setWindowBounds", {"windowId": window_id, "bounds": {"width": win_w, "height": win_h}})
+            self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 브라우저 창 크기 적용: {self.cfg.get('browser_window_scale_percent', 100)}%")
+        except Exception as e:
+            self.log(f"⚠️ 봇 작업창 크기 실시간 적용 실패(계속 진행): {e}")
+
+    def _set_browser_window_scale_percent(self, delta=0, absolute=None):
+        current = self._clamp_percent(self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=50, maximum=150)
+        target = self._clamp_percent(absolute if absolute is not None else current + delta, default=current, minimum=50, maximum=150)
+        self.cfg["browser_window_scale_percent"] = target
+        if hasattr(self, "browser_window_scale_var"):
+            self.browser_window_scale_var.set(str(target))
+        if hasattr(self, "lbl_browser_window_scale_state"):
+            self.lbl_browser_window_scale_state.config(text=f"{target}%")
+        self.save_config()
+        self._apply_browser_window_scale_live()
+        self.log(f"🪟 봇 작업창 크기 적용: {target}%")
+
+    def _set_browser_zoom_percent(self, delta=0, absolute=None):
+        current = self._clamp_percent(self.cfg.get("browser_zoom_percent", 100), default=100, minimum=50, maximum=150)
+        target = self._clamp_percent(absolute if absolute is not None else current + delta, default=current, minimum=50, maximum=150)
+        self.cfg["browser_zoom_percent"] = target
+        if hasattr(self, "browser_zoom_var"):
+            self.browser_zoom_var.set(str(target))
+        if hasattr(self, "lbl_browser_zoom_state"):
+            self.lbl_browser_zoom_state.config(text=f"{target}%")
+        self.save_config()
+        self._apply_browser_zoom()
+        self.log(f"🔎 브라우저 배율 적용: {target}%")
+
+    def _prepare_page_for_selector_detection(self):
+        if not self.page:
+            return
+        try:
+            self._apply_browser_window_scale_live()
+        except Exception:
+            pass
+        try:
+            self._apply_browser_zoom()
+        except Exception:
+            pass
+        try:
+            self.page.evaluate("window.scrollTo(0, 0)")
+        except Exception:
+            pass
+        time.sleep(0.35)
+
     def _draw_header_progress_bar(self, pct=0.0):
         if not hasattr(self, "header_progress_canvas"):
             return
@@ -3190,6 +3251,7 @@ class FlowVisionApp:
         if (not self.page) or (not asset_tag):
             return
 
+        self._prepare_page_for_selector_detection()
         self.log(f"🔁 S반복 사전단계 시작: {asset_tag}")
         start_locator, start_selector = self._wait_best_locator(
             self._asset_start_button_candidates(),
@@ -4070,29 +4132,17 @@ class FlowVisionApp:
         browser_scale_f.pack(fill="x", pady=(0, 8))
         tk.Label(browser_scale_f, text="봇 작업창 크기", bg=self.color_bg, font=self.font_small).pack(side="left")
         self.browser_window_scale_var = tk.StringVar(value=str(self._clamp_percent(self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=50, maximum=150)))
-        self.combo_browser_window_scale = ttk.Combobox(
-            browser_scale_f,
-            textvariable=self.browser_window_scale_var,
-            state="readonly",
-            width=6,
-            values=("50", "60", "70", "80", "90", "100", "110", "120", "130", "140", "150"),
-            font=self.font_small,
-        )
-        self.combo_browser_window_scale.pack(side="left", padx=(6, 14))
-        self.combo_browser_window_scale.bind("<<ComboboxSelected>>", self.on_option_toggle)
+        ttk.Button(browser_scale_f, text="-", width=3, command=lambda: self._set_browser_window_scale_percent(delta=-10)).pack(side="left", padx=(6, 4))
+        self.lbl_browser_window_scale_state = tk.Label(browser_scale_f, text=f"{self._clamp_percent(self.cfg.get('browser_window_scale_percent', 100), default=100)}%", bg=self.color_bg, fg=self.color_info, font=self.font_small, width=6)
+        self.lbl_browser_window_scale_state.pack(side="left", padx=(0, 6))
+        ttk.Button(browser_scale_f, text="+", width=3, command=lambda: self._set_browser_window_scale_percent(delta=10)).pack(side="left", padx=(0, 14))
 
         tk.Label(browser_scale_f, text="브라우저 배율", bg=self.color_bg, font=self.font_small).pack(side="left")
         self.browser_zoom_var = tk.StringVar(value=str(self._clamp_percent(self.cfg.get("browser_zoom_percent", 100), default=100, minimum=50, maximum=150)))
-        self.combo_browser_zoom = ttk.Combobox(
-            browser_scale_f,
-            textvariable=self.browser_zoom_var,
-            state="readonly",
-            width=6,
-            values=("50", "60", "70", "80", "90", "100", "110", "120", "130", "140", "150"),
-            font=self.font_small,
-        )
-        self.combo_browser_zoom.pack(side="left", padx=(6, 0))
-        self.combo_browser_zoom.bind("<<ComboboxSelected>>", self.on_option_toggle)
+        ttk.Button(browser_scale_f, text="-", width=3, command=lambda: self._set_browser_zoom_percent(delta=-10)).pack(side="left", padx=(6, 4))
+        self.lbl_browser_zoom_state = tk.Label(browser_scale_f, text=f"{self._clamp_percent(self.cfg.get('browser_zoom_percent', 100), default=100)}%", bg=self.color_bg, fg=self.color_info, font=self.font_small, width=6)
+        self.lbl_browser_zoom_state.pack(side="left", padx=(0, 6))
+        ttk.Button(browser_scale_f, text="+", width=3, command=lambda: self._set_browser_zoom_percent(delta=10)).pack(side="left")
 
         tk.Label(left_card, text="입력창 CSS Selector", bg=self.color_bg, font=self.font_small).pack(anchor="w")
         self.input_selector_var = tk.StringVar(value=self.cfg.get("input_selector", "textarea, [contenteditable='true']"))
@@ -4179,16 +4229,13 @@ class FlowVisionApp:
         
         # [NEW] Input Mode Selection
         tk.Label(left_card, text="⌨️ 입력 방식 선택", font=self.font_body_bold, bg=self.color_bg).pack(anchor="w", pady=(15, 0))
-        self.input_mode_var = tk.StringVar(value=self.cfg.get("input_mode", "typing"))
+        self.input_mode_var = tk.StringVar(value="typing")
         mode_f = tk.Frame(left_card, bg=self.color_bg)
         mode_f.pack(fill="x", pady=5)
-        
-        self.combo_input_mode = ttk.Combobox(mode_f, textvariable=self.input_mode_var, state="readonly", font=self.font_body)
-        self.combo_input_mode['values'] = ("typing", "paste", "mixed")
+        self.combo_input_mode = ttk.Combobox(mode_f, textvariable=self.input_mode_var, state="disabled", font=self.font_body, width=18)
+        self.combo_input_mode['values'] = ("typing",)
         self.combo_input_mode.pack(side="left", fill="x", expand=True)
-        self.combo_input_mode.bind("<<ComboboxSelected>>", self.on_option_toggle)
-
-        mode_map = {"typing": "⌨️ 타이핑", "paste": "📋 복사붙여넣기", "mixed": "🔀 혼용(랜덤)"}
+        tk.Label(mode_f, text="타이핑만 사용", bg=self.color_bg, fg=self.color_text_sec, font=self.font_small).pack(side="left", padx=(8, 0))
 
         speed_f = tk.Frame(left_card, bg=self.color_bg)
         speed_f.pack(fill="x", pady=(0, 8))
@@ -5752,15 +5799,12 @@ class FlowVisionApp:
         self.cfg["download_video_filter_selector"] = self.download_video_filter_selector_var.get().strip() if hasattr(self, "download_video_filter_selector_var") else self.cfg.get("download_video_filter_selector", "")
         self.cfg["download_image_filter_selector"] = self.download_image_filter_selector_var.get().strip() if hasattr(self, "download_image_filter_selector_var") else self.cfg.get("download_image_filter_selector", "")
         # 실행 중에는 시작 시 확정한 입력방식을 유지(중간 변경으로 typing/paste 뒤바뀜 방지)
-        if self.running and self.run_input_mode in ("typing", "paste", "mixed"):
-            self.cfg["input_mode"] = self.run_input_mode
-            try:
-                if self.input_mode_var.get() != self.run_input_mode:
-                    self.input_mode_var.set(self.run_input_mode)
-            except Exception:
-                pass
-        else:
-            self.cfg["input_mode"] = self.input_mode_var.get()
+        self.cfg["input_mode"] = "typing"
+        try:
+            if hasattr(self, "input_mode_var") and self.input_mode_var.get() != "typing":
+                self.input_mode_var.set("typing")
+        except Exception:
+            pass
         if hasattr(self, "typing_speed_scale_var"):
             try:
                 level = int(self.typing_speed_scale_var.get())
@@ -5785,6 +5829,10 @@ class FlowVisionApp:
         self.cfg["browser_channel"] = self.browser_channel_var.get().strip() if hasattr(self, "browser_channel_var") else self.cfg.get("browser_channel", "chrome")
         self.cfg["browser_window_scale_percent"] = self._clamp_percent(self.browser_window_scale_var.get() if hasattr(self, "browser_window_scale_var") else self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=50, maximum=150)
         self.cfg["browser_zoom_percent"] = self._clamp_percent(self.browser_zoom_var.get() if hasattr(self, "browser_zoom_var") else self.cfg.get("browser_zoom_percent", 100), default=100, minimum=50, maximum=150)
+        if hasattr(self, "lbl_browser_window_scale_state"):
+            self.lbl_browser_window_scale_state.config(text=f"{self.cfg['browser_window_scale_percent']}%")
+        if hasattr(self, "lbl_browser_zoom_state"):
+            self.lbl_browser_zoom_state.config(text=f"{self.cfg['browser_zoom_percent']}%")
         self.cfg["ui_zoom_percent"] = self._clamp_percent(self.cfg.get("ui_zoom_percent", 100), default=100, minimum=50, maximum=150)
         self.cfg["prompt_image_baseline_ready"] = bool(self.prompt_image_baseline_ready)
         self.cfg["asset_image_baseline_ready"] = bool(self.asset_image_baseline_ready)
@@ -7411,6 +7459,7 @@ class FlowVisionApp:
             if start_url and start_url not in (self.page.url or ""):
                 self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
             time.sleep(random.uniform(1.0, 2.3))
+            self._prepare_page_for_selector_detection()
 
             start_loc, start_sel = self._wait_best_locator(
                 self._asset_start_button_candidates(),
@@ -7495,6 +7544,7 @@ class FlowVisionApp:
             if start_url and start_url not in (self.page.url or ""):
                 self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
             time.sleep(random.uniform(0.8, 1.8))
+            self._prepare_page_for_selector_detection()
 
             start_candidates = self._normalize_candidate_list(self.cfg.get("asset_start_selector", "")) or self._asset_start_button_candidates()
             search_candidates = self._normalize_candidate_list(self.cfg.get("asset_search_button_selector", "")) or self._asset_search_button_candidates()
@@ -8023,9 +8073,7 @@ class FlowVisionApp:
             self.log(f"🚀 프롬프트 자동화 시작 | 선택={self.current_selection_summary}")
         if not is_download_mode:
             # 실행 시점 입력방식 고정: 중간에 설정이 바뀌어도 현재 런에는 영향 없게 한다.
-            self.run_input_mode = (self.cfg.get("input_mode", "typing") or "typing").strip().lower()
-            if self.run_input_mode not in ("typing", "paste", "mixed"):
-                self.run_input_mode = "typing"
+            self.run_input_mode = "typing"
             self.cfg["input_mode"] = self.run_input_mode
             self.input_mode_var.set(self.run_input_mode)
             self.save_config()
@@ -8478,7 +8526,7 @@ class FlowVisionApp:
             self.actor.set_page(self.page)
             start_url = (self.cfg.get("start_url") or "").strip()
             input_selector = (self.cfg.get("input_selector") or "").strip()
-            input_mode = self.run_input_mode if self.run_input_mode in ("typing", "paste", "mixed") else self.cfg.get("input_mode", "typing")
+            input_mode = "typing"
 
             if not (start_url and input_selector):
                 raise RuntimeError("URL 또는 입력 selector 설정이 비어 있습니다.")
@@ -8503,8 +8551,12 @@ class FlowVisionApp:
                     m = re.match(r"^\s*([A-Za-z]+[0-9]+)\s*:", prompt)
                     if m:
                         asset_tag = m.group(1)
+                try:
+                    self.update_status_label("🎛️ 생성 옵션 맞추는 중...", self.color_info)
+                    self._apply_prompt_generation_preset(input_locator=None, profile="asset")
+                except Exception as e:
+                    self.log(f"⚠️ 프롬프트 생성 옵션 자동 맞춤 실패: {e}")
                 if asset_tag:
-                    # S반복 모드는 Step1/Step2(시작/에셋검색)를 먼저 수행해야 입력창이 활성화되는 경우가 있다.
                     self.update_status_label(f"🔁 에셋 준비 중... ({asset_tag})", self.color_info)
                     self._run_asset_loop_prestep(asset_tag)
 
@@ -8550,12 +8602,12 @@ class FlowVisionApp:
             self.save_config()
             self.log(f"🧭 프롬프트 입력창 확정: {resolved_input_selector or '자동 탐색'}")
 
-            try:
-                self.update_status_label("🎛️ 생성 옵션 맞추는 중...", self.color_info)
-                preset_profile = "asset" if self.cfg.get("asset_loop_enabled") else "prompt"
-                self._apply_prompt_generation_preset(input_locator=input_locator, profile=preset_profile)
-            except Exception as e:
-                self.log(f"⚠️ 프롬프트 생성 옵션 자동 맞춤 실패: {e}")
+            if not self.cfg.get("asset_loop_enabled"):
+                try:
+                    self.update_status_label("🎛️ 생성 옵션 맞추는 중...", self.color_info)
+                    self._apply_prompt_generation_preset(input_locator=input_locator, profile="prompt")
+                except Exception as e:
+                    self.log(f"⚠️ 프롬프트 생성 옵션 자동 맞춤 실패: {e}")
 
             if self.cfg.get("afk_mode") and random.random() < 0.5:
                 self.actor.random_behavior_routine()
