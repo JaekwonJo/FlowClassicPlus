@@ -413,6 +413,9 @@ class FlowVisionApp:
         self.current_selection_input = ""
         self.home_window = None
         self.pipeline_window = None
+        self.pipeline_runtime_active = False
+        self.pipeline_run_order = []
+        self.pipeline_run_position = -1
         self.prompt_image_baseline_ready = bool(self.cfg.get("prompt_image_baseline_ready", False))
         self.asset_image_baseline_ready = bool(self.cfg.get("asset_image_baseline_ready", False))
         current_media_state = str(self.cfg.get("current_media_state", "") or "").strip().lower()
@@ -1593,6 +1596,222 @@ class FlowVisionApp:
         self.cfg["active_pipeline_step"] = target
         self.save_config()
         self._sync_pipeline_step_ui()
+
+    def _pipeline_prompt_selection_text(self, step):
+        raw = str(step.get("manual_selection", "") or "").strip()
+        if raw:
+            return raw
+        start = max(1, int(step.get("start", 1) or 1))
+        end = max(1, int(step.get("end", start) or start))
+        if start > end:
+            start, end = end, start
+        return f"{start}-{end}"
+
+    def _focus_work_target(self, target):
+        try:
+            if hasattr(self, "_set_asset_open"):
+                self._set_asset_open(target == "asset")
+            if hasattr(self, "_set_dl_open"):
+                self._set_dl_open(target == "download")
+            if hasattr(self, "_set_relay_open"):
+                self._set_relay_open(False)
+            if hasattr(self, "_set_sched_open"):
+                self._set_sched_open(False)
+            if hasattr(self, "left_canvas"):
+                if target == "prompt":
+                    self.left_canvas.yview_moveto(0.0)
+                elif target == "asset":
+                    self.left_canvas.yview_moveto(0.30)
+                elif target == "download":
+                    self.left_canvas.yview_moveto(0.52)
+                else:
+                    self.left_canvas.yview_moveto(0.0)
+        except Exception:
+            pass
+
+    def _apply_pipeline_step_to_work_config(self, step_index=None, open_root=True):
+        self.on_save_project_profile_detail()
+        self._save_pipeline_step_fields()
+        steps = self.cfg.get("pipeline_steps", [])
+        if not steps:
+            return None
+        active = self._clamp_pipeline_step_index(
+            self.cfg.get("active_pipeline_step", 0) if step_index is None else step_index
+        )
+        step = steps[active]
+        profiles = self.cfg.get("project_profiles", [])
+        profile_idx = self._clamp_project_profile_index(step.get("project_profile", 0))
+        profile = profiles[profile_idx] if profiles else self._default_project_profile()
+        target = str(step.get("type", "prompt") or "prompt").strip().lower()
+        if open_root:
+            try:
+                self.root.deiconify()
+                self.root.lift()
+                self.root.focus_force()
+            except Exception:
+                pass
+        if hasattr(self, "start_url_var"):
+            self.start_url_var.set(str(profile.get("url", "") or ""))
+        if hasattr(self, "entry_interval"):
+            try:
+                self.entry_interval.delete(0, "end")
+                self.entry_interval.insert(0, str(step.get("interval_seconds", self.cfg.get("interval_seconds", 180) or 180)))
+            except Exception:
+                pass
+        prompt_selection = self._pipeline_prompt_selection_text(step)
+        self.cfg["start_url"] = str(profile.get("url", "") or "").strip()
+        self.cfg["interval_seconds"] = int(step.get("interval_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
+        self.cfg["pipeline_last_project_name"] = str(profile.get("project_name", "") or "").strip()
+        self.cfg["asset_loop_start"] = max(1, int(step.get("start", 1) or 1))
+        self.cfg["asset_loop_end"] = max(1, int(step.get("end", self.cfg["asset_loop_start"]) or self.cfg["asset_loop_start"]))
+        if target == "prompt":
+            self._set_run_mode("prompt")
+            self.cfg["asset_loop_enabled"] = False
+            if hasattr(self, "asset_loop_var"):
+                self.asset_loop_var.set(False)
+            self.cfg["prompt_manual_selection"] = prompt_selection
+            if hasattr(self, "prompt_manual_selection_var"):
+                self.prompt_manual_selection_var.set(prompt_selection)
+            self.cfg["prompt_media_mode"] = str(step.get("media_mode", "image") or "image")
+            if hasattr(self, "prompt_media_mode_var"):
+                self.prompt_media_mode_var.set(PROMPT_MEDIA_LABELS.get(self.cfg["prompt_media_mode"], "이미지"))
+            target_key = "prompt"
+        elif target == "asset":
+            self._set_run_mode("asset")
+            self.cfg["asset_loop_enabled"] = True
+            if hasattr(self, "asset_loop_var"):
+                self.asset_loop_var.set(True)
+            manual_text = str(step.get("manual_selection", "") or "").strip()
+            self.cfg["asset_manual_selection"] = manual_text
+            if hasattr(self, "asset_manual_selection_var"):
+                self.asset_manual_selection_var.set(manual_text)
+            if hasattr(self, "asset_loop_start_var"):
+                self.asset_loop_start_var.set(self._format_asset_number_text(self.cfg["asset_loop_start"]))
+            if hasattr(self, "asset_loop_end_var"):
+                self.asset_loop_end_var.set(self._format_asset_number_text(self.cfg["asset_loop_end"]))
+            self.cfg["asset_prompt_media_mode"] = str(step.get("media_mode", "video") or "video")
+            if hasattr(self, "asset_prompt_media_mode_var"):
+                self.asset_prompt_media_mode_var.set(PROMPT_MEDIA_LABELS.get(self.cfg["asset_prompt_media_mode"], "영상"))
+            target_key = "asset"
+        else:
+            self._set_run_mode("download")
+            self.cfg["asset_loop_enabled"] = False
+            if hasattr(self, "asset_loop_var"):
+                self.asset_loop_var.set(False)
+            manual_text = str(step.get("manual_selection", "") or "").strip()
+            self.cfg["asset_manual_selection"] = manual_text
+            if hasattr(self, "asset_manual_selection_var"):
+                self.asset_manual_selection_var.set(manual_text)
+            if hasattr(self, "asset_loop_start_var"):
+                self.asset_loop_start_var.set(self._format_asset_number_text(self.cfg["asset_loop_start"]))
+            if hasattr(self, "asset_loop_end_var"):
+                self.asset_loop_end_var.set(self._format_asset_number_text(self.cfg["asset_loop_end"]))
+            self.cfg["download_mode"] = str(step.get("download_mode", "video") or "video")
+            if hasattr(self, "download_mode_var"):
+                self.download_mode_var.set(self.cfg["download_mode"])
+            quality = str(step.get("quality", "1080P") or "1080P").strip() or "1080P"
+            if self.cfg["download_mode"] == "video":
+                self.cfg["download_video_quality"] = quality
+                if hasattr(self, "download_video_quality_var"):
+                    self.download_video_quality_var.set(quality)
+            else:
+                self.cfg["download_image_quality"] = quality
+                if hasattr(self, "download_image_quality_var"):
+                    self.download_image_quality_var.set(quality)
+            self.cfg["download_output_dir"] = str(step.get("output_dir", "") or "").strip()
+            if hasattr(self, "download_output_dir_var"):
+                self.download_output_dir_var.set(self.cfg["download_output_dir"])
+            target_key = "download"
+        self.on_option_toggle()
+        if target_key != "download":
+            self.on_reload()
+        self._focus_work_target(target_key)
+        self.log(
+            f"🔗 이어달리기 작업 적용: {step.get('name', f'{active+1}번 작업')} | "
+            f"{self._pipeline_type_labels().get(target, target)} | 프로젝트={profile.get('project_name', '-') or '-'}"
+        )
+        if hasattr(self, "lbl_pipeline_runtime_status"):
+            self.lbl_pipeline_runtime_status.config(
+                text=f"적용 완료 | {step.get('name', f'{active+1}번 작업')} | 프로젝트={profile.get('project_name', '-') or '-'}"
+            )
+        return step
+
+    def on_apply_pipeline_step_to_work(self):
+        step = self._apply_pipeline_step_to_work_config(open_root=True)
+        if step is None:
+            messagebox.showwarning("안내", "적용할 이어달리기 작업이 없습니다.", parent=self.pipeline_window)
+            return
+
+    def _clear_pipeline_runtime(self, cancelled=False):
+        self.pipeline_runtime_active = False
+        self.pipeline_run_order = []
+        self.pipeline_run_position = -1
+        if hasattr(self, "btn_pipeline_start"):
+            self.btn_pipeline_start.config(state="normal")
+        if hasattr(self, "lbl_pipeline_runtime_status"):
+            self.lbl_pipeline_runtime_status.config(
+                text="이어달리기 중지됨" if cancelled else "이어달리기 대기 중"
+            )
+
+    def _run_pipeline_step_at(self, position):
+        if not self.pipeline_runtime_active:
+            return
+        if not (0 <= position < len(self.pipeline_run_order)):
+            self._clear_pipeline_runtime(cancelled=False)
+            return
+        self.pipeline_run_position = position
+        step_index = self.pipeline_run_order[position]
+        step = self._apply_pipeline_step_to_work_config(step_index=step_index, open_root=True)
+        if step is None:
+            self._clear_pipeline_runtime(cancelled=True)
+            return
+        step_name = str(step.get("name", "") or f"{position+1}번 작업")
+        if hasattr(self, "lbl_pipeline_runtime_status"):
+            self.lbl_pipeline_runtime_status.config(
+                text=f"실행 중 {position+1}/{len(self.pipeline_run_order)} | {step_name}"
+            )
+        target = str(step.get("type", "prompt") or "prompt").strip().lower()
+        runner = self.on_start_prompt
+        if target == "asset":
+            runner = self.on_start_asset
+        elif target == "download":
+            runner = self.on_start_download
+        self.root.after(250, lambda cb=runner, name=step_name: self._launch_pipeline_step_runner(cb, name))
+
+    def _launch_pipeline_step_runner(self, runner, step_name):
+        runner()
+        self.root.after(250, lambda: self._check_pipeline_step_started(step_name))
+
+    def _check_pipeline_step_started(self, step_name):
+        if not self.pipeline_runtime_active:
+            return
+        if self.running or self.is_processing or self.paused:
+            return
+        self._clear_pipeline_runtime(cancelled=True)
+        messagebox.showwarning("이어달리기 중단", f"'{step_name}' 작업이 시작되지 않았습니다.\n설정값이나 기본값 확인 문구를 먼저 확인해주세요.", parent=self.pipeline_window)
+
+    def on_start_pipeline_run(self):
+        if self.pipeline_runtime_active:
+            messagebox.showwarning("안내", "이어달리기가 이미 실행 중입니다.", parent=self.pipeline_window)
+            return
+        if self.running or self.is_processing or self.paused:
+            messagebox.showwarning("안내", "기존 자동화가 실행 중입니다. 먼저 완료 또는 중지 후 시작해주세요.", parent=self.pipeline_window)
+            return
+        self.on_save_project_profile_detail()
+        self._save_pipeline_step_fields()
+        steps = self.cfg.get("pipeline_steps", [])
+        if not steps:
+            messagebox.showwarning("안내", "이어달리기 작업이 없습니다.", parent=self.pipeline_window)
+            return
+        self.pipeline_runtime_active = True
+        self.pipeline_run_order = list(range(len(steps)))
+        self.pipeline_run_position = -1
+        if hasattr(self, "btn_pipeline_start"):
+            self.btn_pipeline_start.config(state="disabled")
+        if hasattr(self, "lbl_pipeline_runtime_status"):
+            self.lbl_pipeline_runtime_status.config(text=f"이어달리기 시작 준비 | 총 {len(steps)}개 작업")
+        self.log(f"🏃 이어달리기 시작 | 총 {len(steps)}개 작업")
+        self._run_pipeline_step_at(0)
 
     def _clamp_slot_index(self, idx, default=0):
         slots = self.cfg.get("prompt_slots", [])
@@ -3267,6 +3486,27 @@ class FlowVisionApp:
         except Exception as e:
             self.log(f"⚠️ 완료 요약 저장 실패: {e}")
 
+        if self.pipeline_runtime_active:
+            has_next = (self.pipeline_run_position + 1) < len(self.pipeline_run_order)
+
+            if has_next:
+                def _advance_ui():
+                    self.on_stop(pipeline_transition=True)
+                    self.update_status_label("🏃 다음 이어달리기 작업 준비 중...", self.color_info)
+                    self.root.after(500, lambda: self._run_pipeline_step_at(self.pipeline_run_position + 1))
+                self.root.after(0, _advance_ui)
+                return
+
+            def _done_pipeline_ui():
+                self.on_stop(pipeline_transition=True)
+                self._clear_pipeline_runtime(cancelled=False)
+                self.play_sound("finish")
+                self.update_status_label("🎉 이어달리기 전체 완료!", self.color_success)
+                messagebox.showinfo("이어달리기 완료", self._format_completion_popup_text(payload))
+
+            self.root.after(0, _done_pipeline_ui)
+            return
+
         def _done_ui():
             self.on_stop()
             self.play_sound("finish")
@@ -4908,9 +5148,12 @@ class FlowVisionApp:
 
         bottom = tk.Frame(right_card, bg=self.color_card)
         bottom.pack(fill="x", padx=18, pady=(0, 16))
-        ttk.Button(bottom, text="💾 이어달리기 저장", state="disabled").pack(side="left")
-        ttk.Button(bottom, text="▶ 이어달리기 시작", state="disabled").pack(side="left", padx=6)
-        ttk.Button(bottom, text="⏸ 일시정지", state="disabled").pack(side="left")
+        ttk.Button(bottom, text="💾 이어달리기 저장", command=lambda: (self.on_save_project_profile_detail(), self._save_pipeline_step_fields())).pack(side="left")
+        ttk.Button(bottom, text="🛠 작업창 적용", command=self.on_apply_pipeline_step_to_work).pack(side="left", padx=6)
+        self.btn_pipeline_start = ttk.Button(bottom, text="▶ 이어달리기 시작", command=self.on_start_pipeline_run)
+        self.btn_pipeline_start.pack(side="left")
+        self.lbl_pipeline_runtime_status = tk.Label(bottom, text="이어달리기 대기 중", font=self.font_small, bg=self.color_card, fg=self.color_text_sec)
+        self.lbl_pipeline_runtime_status.pack(side="left", padx=(10, 0))
 
     def _position_pipeline_window(self):
         if not (self.pipeline_window and self.pipeline_window.winfo_exists()):
@@ -4954,26 +5197,7 @@ class FlowVisionApp:
         except Exception:
             pass
         self.root.after(80, self._init_body_sash)
-        try:
-            if hasattr(self, "_set_asset_open"):
-                self._set_asset_open(target == "asset")
-            if hasattr(self, "_set_dl_open"):
-                self._set_dl_open(target == "download")
-            if hasattr(self, "_set_relay_open"):
-                self._set_relay_open(False)
-            if hasattr(self, "_set_sched_open"):
-                self._set_sched_open(False)
-            if hasattr(self, "left_canvas"):
-                if target == "prompt":
-                    self.left_canvas.yview_moveto(0.0)
-                elif target == "asset":
-                    self.left_canvas.yview_moveto(0.30)
-                elif target == "download":
-                    self.left_canvas.yview_moveto(0.52)
-                else:
-                    self.left_canvas.yview_moveto(0.0)
-        except Exception:
-            pass
+        self._focus_work_target(target)
 
     def on_fill_schedule_time(self, plus_minutes):
         try:
@@ -7579,7 +7803,7 @@ class FlowVisionApp:
         self.update_status_label("▶ 재개됨", self.color_success)
         self.log(f"▶ 자동화 재개 (다음 작업까지 약 {wait_sec}초)")
 
-    def on_stop(self):
+    def on_stop(self, pipeline_transition=False):
         prev_mode = self.current_run_mode
         self.running = False
         self.paused = False
@@ -7627,6 +7851,8 @@ class FlowVisionApp:
             self.on_reload()
         except Exception:
             pass
+        if self.pipeline_runtime_active and (not pipeline_transition):
+            self._clear_pipeline_runtime(cancelled=True)
 
     def _create_tray_image(self):
         if Image is None:
