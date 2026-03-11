@@ -1045,6 +1045,51 @@ class FlowVisionApp:
         profile_path.mkdir(parents=True, exist_ok=True)
         return profile_path
 
+    def _pick_primary_browser_page(self):
+        if not self.browser_context:
+            return None
+        pages = []
+        try:
+            pages = [p for p in self.browser_context.pages if p and (not p.is_closed())]
+        except Exception:
+            pages = []
+        if not pages:
+            return None
+
+        start_url = (self.cfg.get("start_url") or "").strip()
+        internal_prefixes = ("about:blank", "chrome://newtab", "edge://newtab", "chrome://new-tab-page", "edge://new-tab-page")
+
+        def _page_url(page):
+            try:
+                return str(page.url or "").strip()
+            except Exception:
+                return ""
+
+        preferred = None
+        if start_url:
+            for page in pages:
+                if start_url and start_url in _page_url(page):
+                    preferred = page
+                    break
+        if preferred is None:
+            for page in pages:
+                url = _page_url(page)
+                if not url or any(url.startswith(prefix) for prefix in internal_prefixes):
+                    continue
+                preferred = page
+                break
+        if preferred is None:
+            preferred = pages[0]
+
+        for page in pages:
+            if page == preferred:
+                continue
+            try:
+                page.close()
+            except Exception:
+                pass
+        return preferred
+
     def _ensure_browser_session(self):
         if self.page and not self.page.is_closed():
             return
@@ -1099,9 +1144,8 @@ class FlowVisionApp:
                 self.log(f"⚠️ 브라우저 실행 2차 실패, 임시 프로필 폴백 시도: {e2}")
                 self.browser_context = _launch_with(runtime_profile, None)
 
-        if self.browser_context.pages:
-            self.page = self.browser_context.pages[0]
-        else:
+        self.page = self._pick_primary_browser_page()
+        if self.page is None:
             self.page = self.browser_context.new_page()
 
         try:
@@ -2080,9 +2124,29 @@ class FlowVisionApp:
             runner = self.on_start_asset
         elif target == "download":
             runner = self.on_start_download
-        self.root.after(250, lambda cb=runner, name=step_name: self._launch_pipeline_step_runner(cb, name))
+        self.root.after(250, lambda cb=runner, name=step_name, step=step: self._launch_pipeline_step_runner(cb, name, step))
 
-    def _launch_pipeline_step_runner(self, runner, step_name):
+    def _prepare_pipeline_step_runtime(self, step):
+        if not isinstance(step, dict):
+            return
+        target = str(step.get("type", "prompt") or "prompt").strip().lower()
+        if target != "asset":
+            return
+        try:
+            self._ensure_browser_session()
+            self.actor.set_page(self.page)
+            start_url = (self.cfg.get("start_url") or "").strip()
+            if start_url and start_url not in (self.page.url or ""):
+                self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+                time.sleep(random.uniform(0.8, 1.8))
+            self.update_status_label("🎛️ 이어달리기 동영상 모드 맞추는 중...", self.color_info)
+            self._apply_prompt_generation_preset(input_locator=None, profile="asset")
+            self.log("🏃 이어달리기 사전준비 완료: 이미지→동영상 전환 확인")
+        except Exception as e:
+            self.log(f"⚠️ 이어달리기 S자동화 사전준비 실패(실행은 계속): {e}")
+
+    def _launch_pipeline_step_runner(self, runner, step_name, step=None):
+        self._prepare_pipeline_step_runtime(step)
         runner()
         self.root.after(250, lambda: self._check_pipeline_step_started(step_name))
 
