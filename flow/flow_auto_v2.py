@@ -88,6 +88,8 @@ DEFAULT_CONFIG = {
     "prompt_slots": [],
     "active_prompt_slot": 0,
     "sound_enabled": True,
+    "project_profiles": [],
+    "active_project_profile": 0,
     "relay_mode": False,
     "relay_count": 1,
     "relay_start_slot": None,
@@ -517,6 +519,7 @@ class FlowVisionApp:
         self.style.map("ControlCompact.TButton", background=[('active', '#37557D')], foreground=[('active', self.color_text)])
 
         self._ensure_prompt_slots()
+        self._ensure_project_profiles()
         self._build_ui()
         self.on_reload()
         self.root.after(1000, self._tick)
@@ -1131,6 +1134,191 @@ class FlowVisionApp:
 
         if changed:
             self.save_config()
+
+    def _default_project_profile(self):
+        return {
+            "name": "기본 프로젝트",
+            "url": str(self.cfg.get("start_url", "https://labs.google/flow") or "https://labs.google/flow").strip(),
+            "project_name": "",
+        }
+
+    def _clamp_project_profile_index(self, idx, default=0):
+        profiles = self.cfg.get("project_profiles", [])
+        if not profiles:
+            return 0
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            idx = default
+        return max(0, min(len(profiles) - 1, idx))
+
+    def _make_unique_project_profile_name(self, base_name):
+        base_name = str(base_name or "").strip() or "프로젝트"
+        existing = {str(item.get("name", "")).strip() for item in self.cfg.get("project_profiles", [])}
+        if base_name not in existing:
+            return base_name
+        suffix = 2
+        while True:
+            candidate = f"{base_name} ({suffix})"
+            if candidate not in existing:
+                return candidate
+            suffix += 1
+
+    def _ensure_project_profiles(self):
+        changed = False
+        raw_profiles = self.cfg.get("project_profiles", [])
+        normalized = []
+        if isinstance(raw_profiles, list):
+            for item in raw_profiles:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name", "") or "").strip()
+                url = str(item.get("url", "") or "").strip()
+                project_name = str(item.get("project_name", "") or "").strip()
+                if not name:
+                    name = self._make_unique_project_profile_name("프로젝트")
+                normalized.append({
+                    "name": name,
+                    "url": url,
+                    "project_name": project_name,
+                })
+        if not normalized:
+            normalized = [self._default_project_profile()]
+            changed = True
+        if raw_profiles != normalized:
+            self.cfg["project_profiles"] = normalized
+            changed = True
+        active = self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0))
+        if self.cfg.get("active_project_profile") != active:
+            self.cfg["active_project_profile"] = active
+            changed = True
+        if changed:
+            self.save_config()
+
+    def _project_profile_preview(self, item):
+        name = str(item.get("name", "") or "").strip() or "이름 없음"
+        project_name = str(item.get("project_name", "") or "").strip()
+        if project_name:
+            return f"{name} | 프로젝트: {project_name}"
+        return name
+
+    def _sync_project_profile_ui(self):
+        if not hasattr(self, "project_profile_listbox"):
+            return
+        profiles = self.cfg.get("project_profiles", [])
+        self.project_profile_listbox.delete(0, "end")
+        for item in profiles:
+            self.project_profile_listbox.insert("end", self._project_profile_preview(item))
+        active = self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0))
+        if profiles:
+            self.project_profile_listbox.selection_clear(0, "end")
+            self.project_profile_listbox.selection_set(active)
+            self.project_profile_listbox.activate(active)
+            self.project_profile_listbox.see(active)
+            profile = profiles[active]
+        else:
+            profile = {"name": "", "url": "", "project_name": ""}
+
+        if hasattr(self, "pipeline_profile_name_var"):
+            self.pipeline_profile_name_var.set(str(profile.get("name", "") or ""))
+        if hasattr(self, "pipeline_profile_url_var"):
+            self.pipeline_profile_url_var.set(str(profile.get("url", "") or ""))
+        if hasattr(self, "pipeline_profile_project_var"):
+            self.pipeline_profile_project_var.set(str(profile.get("project_name", "") or ""))
+        if hasattr(self, "lbl_pipeline_profile_status"):
+            count = len(profiles)
+            status = f"저장된 프로젝트 {count}개"
+            if count:
+                status += f" | 현재 선택: {self._project_profile_preview(profile)}"
+            self.lbl_pipeline_profile_status.config(text=status)
+
+    def _save_pipeline_profile_fields(self):
+        if not hasattr(self, "pipeline_profile_name_var"):
+            return
+        profiles = self.cfg.get("project_profiles", [])
+        if not profiles:
+            return
+        active = self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0))
+        profile = profiles[active]
+        name = str(self.pipeline_profile_name_var.get() or "").strip() or "프로젝트"
+        url = str(self.pipeline_profile_url_var.get() or "").strip()
+        project_name = str(self.pipeline_profile_project_var.get() or "").strip()
+        changed = False
+        if profile.get("name") != name:
+            profile["name"] = name
+            changed = True
+        if profile.get("url") != url:
+            profile["url"] = url
+            changed = True
+        if profile.get("project_name") != project_name:
+            profile["project_name"] = project_name
+            changed = True
+        if changed:
+            self.save_config()
+            self._sync_project_profile_ui()
+
+    def on_pipeline_profile_select(self, event=None):
+        if not hasattr(self, "project_profile_listbox"):
+            return
+        try:
+            selection = self.project_profile_listbox.curselection()
+            if not selection:
+                return
+            idx = int(selection[0])
+        except Exception:
+            return
+        self.cfg["active_project_profile"] = self._clamp_project_profile_index(idx)
+        self.save_config()
+        self._sync_project_profile_ui()
+
+    def on_add_project_profile(self):
+        base_name = simpledialog.askstring("프로젝트 추가", "새 프로젝트 목록 이름을 입력하세요:", parent=self.pipeline_window)
+        if base_name is None:
+            return
+        name = self._make_unique_project_profile_name(base_name)
+        profiles = self.cfg.get("project_profiles", [])
+        profiles.append({"name": name, "url": "", "project_name": ""})
+        self.cfg["active_project_profile"] = len(profiles) - 1
+        self.save_config()
+        self._sync_project_profile_ui()
+        self.log(f"📁 프로젝트 목록 추가: {name}")
+
+    def on_rename_project_profile(self):
+        profiles = self.cfg.get("project_profiles", [])
+        if not profiles:
+            return
+        active = self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0))
+        current_name = str(profiles[active].get("name", "") or "").strip() or "프로젝트"
+        new_name = simpledialog.askstring("이름 변경", "새 프로젝트 목록 이름을 입력하세요:", initialvalue=current_name, parent=self.pipeline_window)
+        if new_name is None:
+            return
+        new_name = self._make_unique_project_profile_name(new_name)
+        profiles[active]["name"] = new_name
+        self.save_config()
+        self._sync_project_profile_ui()
+        self.log(f"✏️ 프로젝트 목록 이름 변경: {current_name} -> {new_name}")
+
+    def on_delete_project_profile(self):
+        profiles = self.cfg.get("project_profiles", [])
+        if len(profiles) <= 1:
+            messagebox.showwarning("삭제 불가", "프로젝트 목록은 최소 1개 이상 있어야 합니다.", parent=self.pipeline_window)
+            return
+        active = self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0))
+        name = str(profiles[active].get("name", "") or "").strip() or "프로젝트"
+        if not messagebox.askyesno("삭제 확인", f"'{name}' 프로젝트 목록을 삭제할까요?", parent=self.pipeline_window):
+            return
+        profiles.pop(active)
+        self.cfg["active_project_profile"] = self._clamp_project_profile_index(active, default=0)
+        self.save_config()
+        self._sync_project_profile_ui()
+        self.log(f"🗑 프로젝트 목록 삭제: {name}")
+
+    def on_save_project_profile_detail(self, event=None):
+        self._save_pipeline_profile_fields()
+        if hasattr(self, "lbl_pipeline_profile_status"):
+            self.lbl_pipeline_profile_status.config(
+                text=f"저장 완료 | 현재 선택: {self._project_profile_preview(self.cfg['project_profiles'][self._clamp_project_profile_index(self.cfg.get('active_project_profile', 0))])}"
+            )
 
     def _clamp_slot_index(self, idx, default=0):
         slots = self.cfg.get("prompt_slots", [])
@@ -4267,6 +4455,84 @@ class FlowVisionApp:
             wraplength=620,
             justify="left",
         ).pack(anchor="w", padx=18, pady=(0, 16))
+
+        profile_card = tk.Frame(right_card, bg="#13233A", highlightbackground="#28405F", highlightthickness=1)
+        profile_card.pack(fill="x", padx=18, pady=(0, 14))
+        head_row = tk.Frame(profile_card, bg="#13233A")
+        head_row.pack(fill="x", padx=14, pady=(12, 6))
+        tk.Label(head_row, text="프로젝트 목록", font=self.font_body_bold, bg="#13233A", fg=self.color_info).pack(side="left")
+        ttk.Button(head_row, text="➕ 추가", command=self.on_add_project_profile).pack(side="right")
+        ttk.Button(head_row, text="🗑 삭제", command=self.on_delete_project_profile).pack(side="right", padx=(0, 6))
+        ttk.Button(head_row, text="✏ 이름변경", command=self.on_rename_project_profile).pack(side="right", padx=(0, 6))
+
+        profile_body = tk.Frame(profile_card, bg="#13233A")
+        profile_body.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+        profile_body.grid_columnconfigure(1, weight=1)
+
+        self.project_profile_listbox = tk.Listbox(
+            profile_body,
+            height=6,
+            bg="#0F1B2E",
+            fg=self.color_text,
+            selectbackground="#1B78D0",
+            selectforeground="white",
+            font=self.font_small,
+            borderwidth=0,
+            relief="flat",
+            highlightthickness=0,
+            exportselection=False,
+        )
+        self.project_profile_listbox.grid(row=0, column=0, rowspan=5, sticky="nsew", padx=(0, 12))
+        self.project_profile_listbox.bind("<<ListboxSelect>>", self.on_pipeline_profile_select)
+
+        tk.Label(profile_body, text="목록 이름", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=0, column=1, sticky="w")
+        self.pipeline_profile_name_var = tk.StringVar()
+        self.entry_pipeline_profile_name = tk.Entry(
+            profile_body,
+            textvariable=self.pipeline_profile_name_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_body,
+        )
+        self.entry_pipeline_profile_name.grid(row=1, column=1, sticky="ew", pady=(2, 8), ipady=3)
+        self.entry_pipeline_profile_name.bind("<FocusOut>", self.on_save_project_profile_detail)
+        self.entry_pipeline_profile_name.bind("<Return>", self.on_save_project_profile_detail)
+
+        tk.Label(profile_body, text="URL", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=2, column=1, sticky="w")
+        self.pipeline_profile_url_var = tk.StringVar()
+        self.entry_pipeline_profile_url = tk.Entry(
+            profile_body,
+            textvariable=self.pipeline_profile_url_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        )
+        self.entry_pipeline_profile_url.grid(row=3, column=1, sticky="ew", pady=(2, 8), ipady=3)
+        self.entry_pipeline_profile_url.bind("<FocusOut>", self.on_save_project_profile_detail)
+        self.entry_pipeline_profile_url.bind("<Return>", self.on_save_project_profile_detail)
+
+        tk.Label(profile_body, text="프로젝트 이름", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=4, column=1, sticky="w")
+        self.pipeline_profile_project_var = tk.StringVar()
+        self.entry_pipeline_profile_project = tk.Entry(
+            profile_body,
+            textvariable=self.pipeline_profile_project_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_body,
+        )
+        self.entry_pipeline_profile_project.grid(row=5, column=1, sticky="ew", pady=(2, 8), ipady=3)
+        self.entry_pipeline_profile_project.bind("<FocusOut>", self.on_save_project_profile_detail)
+        self.entry_pipeline_profile_project.bind("<Return>", self.on_save_project_profile_detail)
+
+        profile_btn_row = tk.Frame(profile_card, bg="#13233A")
+        profile_btn_row.pack(fill="x", padx=14, pady=(0, 10))
+        ttk.Button(profile_btn_row, text="💾 프로젝트 저장", command=self.on_save_project_profile_detail).pack(side="left")
+        self.lbl_pipeline_profile_status = tk.Label(profile_btn_row, text="", font=self.font_small, bg="#13233A", fg=self.color_text_sec)
+        self.lbl_pipeline_profile_status.pack(side="left", padx=(10, 0))
+        self._sync_project_profile_ui()
 
         info_box = tk.Frame(right_card, bg="#13233A", highlightbackground="#28405F", highlightthickness=1)
         info_box.pack(fill="x", padx=18, pady=(0, 14))
