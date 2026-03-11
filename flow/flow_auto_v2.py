@@ -1900,7 +1900,9 @@ class FlowVisionApp:
             if hasattr(self, "download_output_dir_var"):
                 self.download_output_dir_var.set(self.cfg["download_output_dir"])
             target_key = "download"
+            self.log(f"📁 이어달리기 다운로드 저장 폴더 적용: {self.cfg['download_output_dir'] or str(self._resolve_download_output_dir())}")
         self.on_option_toggle()
+        self.save_config()
         if target_key != "download":
             self.on_reload()
         self._focus_work_target(target_key)
@@ -1919,6 +1921,13 @@ class FlowVisionApp:
         if step is None:
             messagebox.showwarning("안내", "적용할 이어달리기 작업이 없습니다.", parent=self.pipeline_window)
             return
+
+    def on_open_pipeline_bot_work_window(self):
+        step = self._apply_pipeline_step_to_work_config(open_root=False)
+        if step is None:
+            messagebox.showwarning("안내", "먼저 이어달리기 작업을 하나 선택해주세요.", parent=self.pipeline_window)
+            return
+        self.on_open_bot_work_window()
 
     def _clear_pipeline_runtime(self, cancelled=False):
         self.pipeline_runtime_active = False
@@ -3998,6 +4007,8 @@ class FlowVisionApp:
         tk.Label(status_f, text="현재 상태", font=self.font_small, bg=self.color_header, fg=self.color_text_sec).pack(anchor="e")
         self.lbl_main_status = tk.Label(status_f, text="준비 완료", font=(self.font_ui_family, 16, "bold"), bg=self.color_header, fg=self.color_success)
         self.lbl_main_status.pack(anchor="e")
+        self.btn_go_pipeline = ttk.Button(right_f, text="🏃 이어달리기", command=self.show_pipeline_window)
+        self.btn_go_pipeline.pack(side="left", padx=(0, 6))
         self.btn_go_home = ttk.Button(right_f, text="🏠 메인 메뉴", command=self.show_home_menu)
         self.btn_go_home.pack(side="left")
 
@@ -5063,7 +5074,7 @@ class FlowVisionApp:
         self.pipeline_window = tk.Toplevel(self.root)
         self.pipeline_window.title(f"{APP_NAME} - 이어달리기창")
         self.pipeline_window.configure(bg=self.color_bg)
-        self.pipeline_window.minsize(980, 680)
+        self.pipeline_window.minsize(760, 620)
         try:
             icon_path = self.base.parent / "icon.ico"
             if icon_path.exists():
@@ -5090,31 +5101,42 @@ class FlowVisionApp:
         ).pack(anchor="w", pady=(4, 0))
         top_right = tk.Frame(header, bg=self.color_header)
         top_right.pack(side="right", padx=14, pady=12)
+        ttk.Button(top_right, text="🤖 봇작업창 열기", command=self.on_open_pipeline_bot_work_window).pack(side="left", padx=(0, 6))
         ttk.Button(top_right, text="🛠 작업창 열기", command=lambda: self.open_home_target("all")).pack(side="left", padx=(0, 6))
         ttk.Button(top_right, text="🏠 메인창", command=self.show_home_menu).pack(side="left")
 
-        body = ttk.Panedwindow(outer, orient="horizontal")
-        body.pack(fill="both", expand=True)
+        body_wrap = tk.Frame(outer, bg=self.color_bg)
+        body_wrap.pack(fill="both", expand=True)
 
-        left = tk.Frame(body, bg=self.color_bg)
-        right = tk.Frame(body, bg=self.color_bg)
-        body.add(left, weight=1)
-        body.add(right, weight=2)
+        body_canvas = tk.Canvas(body_wrap, bg=self.color_bg, highlightthickness=0)
+        body_scrollbar = ttk.Scrollbar(body_wrap, orient="vertical", command=body_canvas.yview)
+        body_scrollable = tk.Frame(body_canvas, bg=self.color_bg)
+        body_scrollable.bind("<Configure>", lambda e: body_canvas.configure(scrollregion=body_canvas.bbox("all")))
+        body_window = body_canvas.create_window((0, 0), window=body_scrollable, anchor="nw")
+        body_canvas.bind("<Configure>", lambda e: body_canvas.itemconfigure(body_window, width=max(e.width - 2, 420)))
+        body_canvas.configure(yscrollcommand=body_scrollbar.set)
+        body_canvas.pack(side="left", fill="both", expand=True)
+        body_scrollbar.pack(side="right", fill="y")
+        body_canvas._scroll_canvas_target = body_canvas
+        body_scrollable._scroll_canvas_target = body_canvas
 
-        left_card = tk.Frame(left, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
-        left_card.pack(fill="both", expand=True)
+        left_card = tk.Frame(body_scrollable, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
+        left_card.pack(fill="x", padx=2, pady=(0, 14))
         tk.Label(left_card, text="작업 단계 목록", font=self.font_section, bg=self.color_card, fg=self.color_text).pack(anchor="w", padx=16, pady=(16, 8))
         tk.Label(
             left_card,
-            text="여기에 1번 작업, 2번 작업, 3번 작업이 순서대로 들어가게 만들 예정입니다.",
+            text="작업 순서는 위에서 아래로 저장됩니다. 여기서 추가, 복제, 삭제, 순서 변경을 하면 됩니다.",
             font=self.font_small,
             bg=self.color_card,
             fg=self.color_text_sec,
-            wraplength=280,
+            wraplength=760,
             justify="left",
         ).pack(anchor="w", padx=16)
+        left_list_row = tk.Frame(left_card, bg=self.color_card)
+        left_list_row.pack(fill="x", padx=16, pady=(12, 10))
         self.pipeline_step_listbox = tk.Listbox(
-            left_card,
+            left_list_row,
+            height=6,
             bg="#0F1B2E",
             fg=self.color_text,
             selectbackground="#1B78D0",
@@ -5124,8 +5146,11 @@ class FlowVisionApp:
             relief="flat",
             highlightthickness=0,
         )
-        self.pipeline_step_listbox.pack(fill="both", expand=True, padx=16, pady=(12, 10))
+        self.pipeline_step_listbox.pack(side="left", fill="x", expand=True)
         self.pipeline_step_listbox.bind("<<ListboxSelect>>", self.on_pipeline_step_select)
+        pipeline_step_scroll = ttk.Scrollbar(left_list_row, orient="vertical", command=self.pipeline_step_listbox.yview)
+        pipeline_step_scroll.pack(side="right", fill="y")
+        self.pipeline_step_listbox.config(yscrollcommand=pipeline_step_scroll.set, exportselection=False)
 
         left_btns = tk.Frame(left_card, bg=self.color_card)
         left_btns.pack(fill="x", padx=16, pady=(0, 16))
@@ -5135,16 +5160,16 @@ class FlowVisionApp:
         ttk.Button(left_btns, text="▲", width=3, command=lambda: self.on_move_pipeline_step(-1)).pack(side="right")
         ttk.Button(left_btns, text="▼", width=3, command=lambda: self.on_move_pipeline_step(1)).pack(side="right", padx=(0, 6))
 
-        right_card = tk.Frame(right, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
-        right_card.pack(fill="both", expand=True)
+        right_card = tk.Frame(body_scrollable, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
+        right_card.pack(fill="x", padx=2, pady=(0, 14))
         tk.Label(right_card, text="이어달리기 설계 화면", font=self.font_section, bg=self.color_card, fg=self.color_text).pack(anchor="w", padx=18, pady=(16, 8))
         tk.Label(
             right_card,
-            text="이번 단계는 기존 기능은 건드리지 않고, 이어달리기 작업 단계 저장 UI만 먼저 붙였습니다.",
+            text="프롬프트 자동화, S반복 자동화, 다운로드 자동화를 원하는 순서대로 저장해두는 화면입니다.",
             font=self.font_body,
             bg=self.color_card,
             fg=self.color_text_sec,
-            wraplength=620,
+            wraplength=760,
             justify="left",
         ).pack(anchor="w", padx=18, pady=(0, 16))
 
@@ -5334,7 +5359,7 @@ class FlowVisionApp:
             tk.Label(info_box, text=f"• {text}", font=self.font_small, bg="#13233A", fg=self.color_text).pack(anchor="w", padx=14, pady=2)
 
         preview_box = tk.Frame(right_card, bg=self.color_bg, highlightbackground="#24324B", highlightthickness=1)
-        preview_box.pack(fill="both", expand=True, padx=18, pady=(0, 14))
+        preview_box.pack(fill="x", padx=18, pady=(0, 14))
         tk.Label(preview_box, text="예상 실행 흐름", font=self.font_body_bold, bg=self.color_bg, fg=self.color_accent).pack(anchor="w", padx=14, pady=(12, 8))
         preview_text = (
             "1. 1번 작업: 프롬프트 자동화 (이미지)\n"
@@ -5358,8 +5383,8 @@ class FlowVisionApp:
             return
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        w = min(1320, max(1020, int(sw * 0.76)))
-        h = min(860, max(720, int(sh * 0.82)))
+        w = min(1120, max(820, int(sw * 0.62)))
+        h = min(860, max(640, int(sh * 0.78)))
         x = max((sw - w) // 2, 0)
         y = max((sh - h) // 2, 0)
         self.pipeline_window.geometry(f"{w}x{h}+{x}+{y}")
@@ -6331,11 +6356,13 @@ class FlowVisionApp:
         ])
         return self._normalize_candidate_list(cands)
 
-    def _panel_media_tab_candidates(self, state):
+    def _panel_media_tab_candidates(self, state, profile="prompt"):
         state = "video" if str(state).strip().lower() == "video" else "image"
         target = "Video" if state == "video" else "Image"
         alt = "영상" if state == "video" else "이미지"
-        return self._normalize_candidate_list([
+        cands = []
+        cands.extend(self._normalize_candidate_list(self.cfg.get(self._preset_cfg_key(profile, "media_mode_selector"), "")))
+        cands.extend([
             f"button:text-is('{target}')",
             f"[role='button']:text-is('{target}')",
             f"button:has-text('{target}')",
@@ -6345,6 +6372,7 @@ class FlowVisionApp:
             f"button[aria-label*='{target.lower()}' i]",
             f"[role='button'][aria-label*='{target.lower()}' i]",
         ])
+        return self._normalize_candidate_list(cands)
 
     def _prompt_orientation_candidates(self, orientation, profile="prompt"):
         orientation = "portrait" if str(orientation).strip().lower() == "portrait" else "landscape"
@@ -6608,17 +6636,61 @@ class FlowVisionApp:
         loc, used = self._resolve_best_locator([selector], timeout_ms=1200, prefer_enabled=False)
         return loc, used or selector
 
+    def _resolve_saved_panel_button_any_profile(self, state, profile="prompt"):
+        primary = "asset" if str(profile).strip().lower() == "asset" else "prompt"
+        order = (primary, "prompt" if primary == "asset" else "asset")
+        for key in order:
+            loc, used = self._resolve_saved_panel_button(key, state)
+            if loc is not None:
+                return loc, used, key
+        return None, "", primary
+
+    def _infer_media_state_from_locator(self, locator):
+        if locator is None:
+            return None
+        meta = self._locator_meta_text(locator)
+        if not meta:
+            meta = ""
+        if any(x in meta for x in ("nano banana", "image", "이미지")):
+            return "image"
+        if any(x in meta for x in ("video", "동영상", "영상", "veo")):
+            return "video"
+        try:
+            box = locator.bounding_box()
+        except Exception:
+            box = None
+        if box:
+            if float(box.get("width", 0) or 0) >= 150:
+                return "image"
+            if 40 <= float(box.get("width", 0) or 0) <= 130:
+                return "video"
+        return None
+
+    def _resolve_current_media_panel_button(self, input_locator=None, profile="prompt"):
+        opener, opener_desc = self._resolve_prompt_preset_toggle_button(input_locator=input_locator)
+        opener_state = self._infer_media_state_from_locator(opener)
+        if opener is not None:
+            return opener, opener_desc or "", opener_state
+        for state in ("image", "video"):
+            loc, used, _profile_used = self._resolve_saved_panel_button_any_profile(state, profile=profile)
+            if loc is not None:
+                return loc, used or "", state
+        return None, "", None
+
     def _switch_media_state(self, desired_state, input_locator=None, profile="prompt"):
         profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
         desired_state = "video" if str(desired_state).strip().lower() == "video" else "image"
-        current_state = self.current_media_state or "image"
-        if current_state == desired_state:
+        open_loc, open_desc, inferred_state = self._resolve_current_media_panel_button(input_locator=input_locator, profile=profile)
+        current_state = inferred_state or self.current_media_state or "image"
+        if (inferred_state is not None) and current_state == desired_state:
             self.log(f"ℹ️ 생성 모드 유지: {desired_state}")
+            self.current_media_state = desired_state
+            self.cfg["current_media_state"] = desired_state
+            self.save_config()
             return True
 
-        open_loc, open_sel = self._resolve_saved_panel_button(profile, current_state)
         if open_loc is None:
-            self.log(f"⚠️ {profile} {current_state} 패널 버튼 저장값을 찾지 못했습니다.")
+            self.log(f"⚠️ 현재 생성 모드 버튼을 찾지 못했습니다. ({profile}/{current_state})")
             return False
         if not self._click_with_actor_fallback(open_loc, f"{current_state} 패널 열기"):
             self.log(f"⚠️ {current_state} 패널 열기 실패")
@@ -6626,7 +6698,7 @@ class FlowVisionApp:
         time.sleep(0.5)
 
         media_loc, media_sel = self._resolve_best_locator(
-            self._panel_media_tab_candidates(desired_state),
+            self._panel_media_tab_candidates(desired_state, profile=profile),
             near_locator=input_locator if input_locator is not None else None,
             timeout_ms=1400,
             prefer_enabled=False,
@@ -6640,15 +6712,19 @@ class FlowVisionApp:
         self.log(f"🎛️ 생성 모드 전환: {current_state} -> {desired_state} ({media_sel or '텍스트 버튼'})")
         time.sleep(0.5)
 
-        close_loc, close_sel = self._resolve_saved_panel_button(profile, desired_state)
+        close_loc, close_desc, inferred_close_state = self._resolve_current_media_panel_button(input_locator=input_locator, profile=profile)
         if close_loc is None:
-            self.log(f"⚠️ {profile} {desired_state} 패널 버튼 저장값을 찾지 못했습니다.")
-            return False
-        if not self._click_with_actor_fallback(close_loc, f"{desired_state} 패널 닫기"):
-            self.log(f"⚠️ {desired_state} 패널 닫기 실패")
-            return False
-        time.sleep(0.4)
+            close_loc, _close_sel, _close_profile = self._resolve_saved_panel_button_any_profile(desired_state, profile=profile)
+        if close_loc is not None:
+            if not self._click_with_actor_fallback(close_loc, f"{desired_state} 패널 닫기"):
+                self.log(f"⚠️ {desired_state} 패널 닫기 실패")
+            else:
+                time.sleep(0.4)
+        else:
+            self._close_prompt_generation_panel(input_locator=input_locator, opener=None, opener_desc=close_desc or inferred_close_state or desired_state)
         self.current_media_state = desired_state
+        self.cfg["current_media_state"] = desired_state
+        self.save_config()
         return True
 
     def _close_prompt_generation_panel(self, input_locator=None, opener=None, opener_desc=None):
@@ -7051,7 +7127,7 @@ class FlowVisionApp:
             time.sleep(0.5)
 
             video_button, video_media_selector = self._resolve_best_locator(
-                self._panel_media_tab_candidates("video"),
+                self._panel_media_tab_candidates("video", profile="prompt"),
                 near_locator=input_locator if input_locator is not None else None,
                 timeout_ms=1500,
                 prefer_enabled=False,
@@ -7079,7 +7155,7 @@ class FlowVisionApp:
                 self._click_with_actor_fallback(video_panel_button, "동영상 패널 열기")
                 time.sleep(0.4)
                 image_tab, _ = self._resolve_best_locator(
-                    self._panel_media_tab_candidates("image"),
+                    self._panel_media_tab_candidates("image", profile="prompt"),
                     near_locator=input_locator if input_locator is not None else None,
                     timeout_ms=1500,
                     prefer_enabled=False,
@@ -7132,7 +7208,7 @@ class FlowVisionApp:
             time.sleep(0.5)
 
             video_button, video_media_selector = self._resolve_best_locator(
-                self._panel_media_tab_candidates("video"),
+                self._panel_media_tab_candidates("video", profile="asset"),
                 near_locator=input_locator if input_locator is not None else None,
                 timeout_ms=1500,
                 prefer_enabled=False,
@@ -7159,7 +7235,7 @@ class FlowVisionApp:
                 self._click_with_actor_fallback(video_panel_button, "동영상 패널 열기")
                 time.sleep(0.4)
                 image_tab, _ = self._resolve_best_locator(
-                    self._panel_media_tab_candidates("image"),
+                    self._panel_media_tab_candidates("image", profile="asset"),
                     near_locator=input_locator if input_locator is not None else None,
                     timeout_ms=1500,
                     prefer_enabled=False,
@@ -7828,9 +7904,6 @@ class FlowVisionApp:
                 if str(self.cfg.get("asset_manual_selection", "") or "").strip() and asset_plan.get("invalid_tokens"):
                     messagebox.showwarning("주의", f"S 개별 번호 입력 형식을 확인해주세요.\n문제값: {', '.join(asset_plan['invalid_tokens'][:5])}")
                     return
-                if self.cfg.get("asset_prompt_mode_preset_enabled", True) and (not self.asset_image_baseline_ready):
-                    messagebox.showwarning("주의", "S자동화 시작 전, Flow 사이트 기본값을 동영상으로 맞춘 뒤\n'☑ 기본값 동영상 맞춤 완료' 버튼을 먼저 눌러주세요.")
-                    return
                 self.asset_loop_items = self._build_asset_loop_items()
                 self.prompts = [item["prompt"] for item in self.asset_loop_items]
                 self.current_selection_input = str(self.cfg.get("asset_manual_selection", "") or "").strip()
@@ -7846,9 +7919,6 @@ class FlowVisionApp:
                 prompt_numbers, prompt_info = self._build_prompt_run_numbers()
                 if prompt_info.get("invalid_tokens"):
                     messagebox.showwarning("주의", f"프롬프트 개별 번호 입력 형식을 확인해주세요.\n문제값: {', '.join(prompt_info['invalid_tokens'][:5])}")
-                    return
-                if self.cfg.get("prompt_mode_preset_enabled", True) and (not self.prompt_image_baseline_ready):
-                    messagebox.showwarning("주의", "프롬프트 자동화 시작 전, Flow 사이트 기본값을 이미지로 맞춘 뒤\n'☑ 기본값 이미지 맞춤 완료' 버튼을 먼저 눌러주세요.")
                     return
                 if str(self.cfg.get("prompt_manual_selection", "") or "").strip() and not prompt_numbers:
                     messagebox.showwarning("주의", "프롬프트 개별 실행 번호가 비어 있거나 범위를 벗어났습니다.")
