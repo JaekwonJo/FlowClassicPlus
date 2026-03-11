@@ -407,6 +407,7 @@ class FlowVisionApp:
         self.retry_error_log = []
         self.current_selection_summary = ""
         self.current_selection_input = ""
+        self.home_window = None
         self.prompt_image_baseline_ready = bool(self.cfg.get("prompt_image_baseline_ready", False))
         self.asset_image_baseline_ready = bool(self.cfg.get("asset_image_baseline_ready", False))
         current_media_state = str(self.cfg.get("current_media_state", "") or "").strip().lower()
@@ -417,7 +418,7 @@ class FlowVisionApp:
         self.actor.set_typing_speed_profile(self.cfg.get("typing_speed_profile", "x5"))
         
         self.root = tk.Tk()
-        self.root.title(APP_NAME)
+        self.root.title(f"{APP_NAME} - 작업창")
         self._set_initial_window_size()
         
         # [NEW] Responsive Grid Weight
@@ -4080,10 +4081,26 @@ class FlowVisionApp:
         self.root.after(80, self._refresh_responsive_layout)
 
     def _build_home_menu(self):
-        self.home_overlay = tk.Frame(self.root, bg=self.color_bg)
-        self.home_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        if self.home_window and self.home_window.winfo_exists():
+            try:
+                self.home_window.destroy()
+            except Exception:
+                pass
+        self.home_window = tk.Toplevel(self.root)
+        self.home_window.title(f"{APP_NAME} - 메인창")
+        self.home_window.configure(bg=self.color_bg)
+        self.home_window.resizable(True, True)
+        self.home_window.minsize(760, 560)
+        try:
+            icon_path = self.base.parent / "icon.ico"
+            if icon_path.exists():
+                self.home_window.iconbitmap(str(icon_path))
+        except Exception:
+            pass
+        self.home_window.protocol("WM_DELETE_WINDOW", self.on_home_window_close)
+        self._position_home_window()
 
-        wrap = tk.Frame(self.home_overlay, bg=self.color_bg)
+        wrap = tk.Frame(self.home_window, bg=self.color_bg)
         wrap.pack(fill="both", expand=True, padx=24, pady=108)
 
         top = tk.Frame(wrap, bg=self.color_bg)
@@ -4104,10 +4121,13 @@ class FlowVisionApp:
         for row in range(2):
             grid.grid_rowconfigure(row, weight=1, uniform="home")
 
-        self._make_home_card(grid, 0, 0, "📝 프롬프트 자동화", "일반 프롬프트 작업으로 바로 들어갑니다.", lambda: self.open_home_target("prompt"))
-        self._make_home_card(grid, 0, 1, "🔁 S001 자동화", "S001 형식 반복 작업 화면으로 들어갑니다.", lambda: self.open_home_target("asset"))
-        self._make_home_card(grid, 1, 0, "⬇ 다운로드 자동화", "이미지/영상 다운로드 설정으로 들어갑니다.", lambda: self.open_home_target("download"))
-        self._make_home_card(grid, 1, 1, "⚙ 전체 설정 보기", "클래식 전체 설정 화면을 그대로 엽니다.", lambda: self.open_home_target("all"))
+        self._make_home_card(grid, 0, 0, "🛠 작업창 열기", "기존 자동화 기능 전체가 들어 있는 작업창을 엽니다.", lambda: self.open_home_target("all"))
+        self._make_home_card(grid, 0, 1, "📝 프롬프트 자동화", "작업창을 열고 프롬프트 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("prompt"))
+        self._make_home_card(grid, 1, 0, "🔁 S001 자동화", "작업창을 열고 S001 반복 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("asset"))
+        self._make_home_card(grid, 1, 1, "⬇ 다운로드 자동화", "작업창을 열고 다운로드 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("download"))
+        self.root.withdraw()
+        self.home_window.deiconify()
+        self.home_window.lift()
 
     def _make_home_card(self, parent, row, col, title, desc, command):
         card = tk.Frame(parent, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1, cursor="hand2")
@@ -4121,17 +4141,46 @@ class FlowVisionApp:
         for widget in (card, inner):
             widget.bind("<Button-1>", lambda _e, cb=command: cb())
 
+    def _position_home_window(self):
+        if not (self.home_window and self.home_window.winfo_exists()):
+            return
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        w = min(1080, max(820, int(sw * 0.62)))
+        h = min(760, max(600, int(sh * 0.72)))
+        x = max((sw - w) // 2, 0)
+        y = max((sh - h) // 2, 0)
+        self.home_window.geometry(f"{w}x{h}+{x}+{y}")
+
+    def on_home_window_close(self):
+        if messagebox.askyesno("종료", "프로그램을 종료할까요?", parent=self.home_window):
+            self.on_exit()
+
     def show_home_menu(self):
-        if hasattr(self, "home_overlay"):
-            self.home_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
-            self.home_overlay.lift()
+        if self.home_window and self.home_window.winfo_exists():
+            try:
+                self.root.withdraw()
+            except Exception:
+                pass
+            self.home_window.deiconify()
+            self.home_window.lift()
+            self.home_window.focus_force()
 
     def hide_home_menu(self):
-        if hasattr(self, "home_overlay"):
-            self.home_overlay.place_forget()
+        if self.home_window and self.home_window.winfo_exists():
+            try:
+                self.home_window.withdraw()
+            except Exception:
+                pass
 
     def open_home_target(self, target):
         self.hide_home_menu()
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        except Exception:
+            pass
         self.root.after(80, self._init_body_sash)
         try:
             if hasattr(self, "_set_asset_open"):
@@ -6984,6 +7033,11 @@ class FlowVisionApp:
         self._stop_tray_icon()
         self.run_input_mode = None
         self.current_run_mode = None
+        if self.home_window and self.home_window.winfo_exists():
+            try:
+                self.home_window.destroy()
+            except Exception:
+                pass
         try:
             self.root.destroy()
         except Exception:
