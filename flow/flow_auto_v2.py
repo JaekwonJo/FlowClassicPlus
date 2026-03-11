@@ -1316,6 +1316,141 @@ class FlowVisionApp:
             preview += f" 외 {len(numbers) - max_preview}개"
         return f"{len(numbers)}개 선택: {preview}"
 
+    def _compress_numbers_to_spec(self, numbers, pad_width=0):
+        cleaned = []
+        seen = set()
+        for raw in numbers or []:
+            try:
+                value = int(raw)
+            except Exception:
+                continue
+            if value < 1 or value in seen:
+                continue
+            seen.add(value)
+            cleaned.append(value)
+        cleaned.sort()
+        if not cleaned:
+            return ""
+
+        def _fmt(value):
+            text = str(value)
+            return text.zfill(pad_width) if pad_width > 0 else text
+
+        parts = []
+        start = cleaned[0]
+        prev = cleaned[0]
+        for value in cleaned[1:]:
+            if value == prev + 1:
+                prev = value
+                continue
+            if start == prev:
+                parts.append(_fmt(start))
+            else:
+                parts.append(f"{_fmt(start)}-{_fmt(prev)}")
+            start = prev = value
+        if start == prev:
+            parts.append(_fmt(start))
+        else:
+            parts.append(f"{_fmt(start)}-{_fmt(prev)}")
+        return ",".join(parts)
+
+    def _latest_log_files(self, pattern):
+        try:
+            return sorted(self.logs_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+        except Exception:
+            return []
+
+    def _extract_numbers_from_retry_errors(self, retry_errors, expect_prefix=None):
+        numbers = []
+        seen = set()
+        for item in retry_errors or []:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            head = text.split("|", 1)[0].strip()
+            if expect_prefix:
+                m = re.match(rf"^\s*{re.escape(expect_prefix)}\s*0*([0-9]+)\s*$", head, re.IGNORECASE)
+            else:
+                m = re.match(r"^\s*0*([0-9]+)\s*$", head)
+            if not m:
+                continue
+            value = int(m.group(1))
+            if value < 1 or value in seen:
+                continue
+            seen.add(value)
+            numbers.append(value)
+        return numbers
+
+    def _load_recent_failed_prompt_numbers(self):
+        for path in self._latest_log_files("session_report_*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            numbers = []
+            seen = set()
+            for entry in payload.get("entries", []) or []:
+                if str(entry.get("status", "")).strip().lower() != "failed":
+                    continue
+                try:
+                    value = int(entry.get("source_no"))
+                except Exception:
+                    continue
+                if value >= 1 and value not in seen:
+                    seen.add(value)
+                    numbers.append(value)
+            if not numbers:
+                numbers = self._extract_numbers_from_retry_errors(payload.get("retry_errors", []), expect_prefix=None)
+            if numbers:
+                return numbers, path.name
+        return [], ""
+
+    def _load_recent_failed_asset_numbers(self):
+        prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
+        for path in self._latest_log_files("download_report_*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            numbers = []
+            seen = set()
+            for tag in payload.get("failed_tags", []) or []:
+                m = re.match(rf"^\s*{re.escape(prefix)}\s*0*([0-9]+)\s*$", str(tag).strip(), re.IGNORECASE)
+                if not m:
+                    continue
+                value = int(m.group(1))
+                if value >= 1 and value not in seen:
+                    seen.add(value)
+                    numbers.append(value)
+            if not numbers:
+                numbers = self._extract_numbers_from_retry_errors(payload.get("retry_errors", []), expect_prefix=prefix)
+            if numbers:
+                return numbers, path.name
+
+        for path in self._latest_log_files("session_report_*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            numbers = []
+            seen = set()
+            for entry in payload.get("entries", []) or []:
+                if str(entry.get("status", "")).strip().lower() != "failed":
+                    continue
+                tag = str(entry.get("tag", "") or "").strip()
+                m = re.match(rf"^\s*{re.escape(prefix)}\s*0*([0-9]+)\s*$", tag, re.IGNORECASE)
+                if not m:
+                    continue
+                value = int(m.group(1))
+                if value >= 1 and value not in seen:
+                    seen.add(value)
+                    numbers.append(value)
+            if not numbers:
+                numbers = self._extract_numbers_from_retry_errors(payload.get("retry_errors", []), expect_prefix=prefix)
+            if numbers:
+                return numbers, path.name
+        return [], ""
+
     def _build_prompt_run_numbers(self):
         source = list(getattr(self, "prompt_source_prompts", []) or [])
         upper_bound = len(source)
@@ -2625,15 +2760,16 @@ class FlowVisionApp:
         file_name = dl.suggested_filename or ""
         out_dir = self._resolve_download_output_dir()
         safe_name = file_name.strip() if file_name else ""
-        if not safe_name:
+        ext = Path(safe_name).suffix if safe_name else ""
+        if not ext:
             ext = ".mp4" if mode == "video" else ".png"
-            safe_name = f"{tag}{ext}"
+        safe_name = f"{tag}{ext}"
         target = self._next_available_path(out_dir / safe_name)
         dl.save_as(str(target))
         file_path = str(target)
         self.log(f"💾 다운로드 저장 경로: {file_path}")
 
-        return {"used": used, "file": file_name, "path": file_path}
+        return {"used": used, "file": target.name, "path": file_path}
 
     def _parse_schedule_datetime(self, raw_text):
         txt = (raw_text or "").strip()
@@ -3335,6 +3471,7 @@ class FlowVisionApp:
         self.entry_asset_manual_selection.bind("<Return>", self.on_option_toggle)
         self.entry_asset_manual_selection.bind("<KeyRelease>", self.on_option_toggle)
         ToolTip(self.entry_asset_manual_selection, "예: 005,018,048,057,071-079,110")
+        ttk.Button(asset_manual_f, text="최근 실패 자동채움", command=self.on_fill_asset_manual_from_failures).pack(side="left", padx=(6, 0))
         self.lbl_asset_manual_status = tk.Label(asset_f, text="", bg=self.color_bg, fg=self.color_text_sec, font=self.font_small)
         self.lbl_asset_manual_status.pack(anchor="w", pady=(0, 6))
 
@@ -3906,6 +4043,7 @@ class FlowVisionApp:
         self.entry_prompt_manual_selection.bind("<Return>", self.on_option_toggle)
         self.entry_prompt_manual_selection.bind("<KeyRelease>", self.on_option_toggle)
         ToolTip(self.entry_prompt_manual_selection, "예: 1,8,12-14,29")
+        ttk.Button(prompt_manual_f, text="최근 실패 자동채움", command=self.on_fill_prompt_manual_from_failures).pack(side="left", padx=(0, 6))
         self.lbl_prompt_manual_status = tk.Label(prompt_manual_f, text="", font=self.font_small, bg=self.color_bg, fg=self.color_text_sec)
         self.lbl_prompt_manual_status.pack(side="left")
 
@@ -4215,6 +4353,30 @@ class FlowVisionApp:
             self.download_output_dir_var.set(picked)
         self.on_option_toggle()
         self.log(f"📁 다운로드 저장 폴더 설정: {picked}")
+
+    def on_fill_asset_manual_from_failures(self):
+        numbers, source_name = self._load_recent_failed_asset_numbers()
+        if not numbers:
+            messagebox.showinfo("안내", "최근 실패한 S번호를 찾지 못했습니다.")
+            return
+        spec = self._compress_numbers_to_spec(numbers, pad_width=self._asset_pad_width())
+        self.asset_manual_selection_var.set(spec)
+        self.on_option_toggle()
+        source_text = source_name or "최근 로그"
+        self.log(f"🧩 S 개별 번호 자동채움: {spec} ({source_text})")
+        messagebox.showinfo("자동채움", f"최근 실패한 S번호를 불러왔습니다.\n출처: {source_text}\n번호: {spec}")
+
+    def on_fill_prompt_manual_from_failures(self):
+        numbers, source_name = self._load_recent_failed_prompt_numbers()
+        if not numbers:
+            messagebox.showinfo("안내", "최근 실패한 프롬프트 번호를 찾지 못했습니다.")
+            return
+        spec = self._compress_numbers_to_spec(numbers, pad_width=0)
+        self.prompt_manual_selection_var.set(spec)
+        self.on_option_toggle()
+        source_text = source_name or "최근 로그"
+        self.log(f"🧩 프롬프트 개별 실행 자동채움: {spec} ({source_text})")
+        messagebox.showinfo("자동채움", f"최근 실패한 프롬프트 번호를 불러왔습니다.\n출처: {source_text}\n번호: {spec}")
 
     def on_option_toggle(self, event=None):
         self.cfg["afk_mode"] = self.afk_var.get()
