@@ -2139,8 +2139,15 @@ class FlowVisionApp:
             if start_url and start_url not in (self.page.url or ""):
                 self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
                 time.sleep(random.uniform(0.8, 1.8))
+            input_selector = (self.cfg.get("input_selector") or "").strip()
+            preset_input_locator = None
+            if input_selector:
+                try:
+                    preset_input_locator, _ = self._resolve_prompt_input_locator(input_selector, timeout_ms=2200)
+                except Exception:
+                    preset_input_locator = None
             self.update_status_label("🎛️ 이어달리기 동영상 모드 맞추는 중...", self.color_info)
-            self._apply_prompt_generation_preset(input_locator=None, profile="asset")
+            self._apply_prompt_generation_preset(input_locator=preset_input_locator, profile="asset")
             self.log("🏃 이어달리기 사전준비 완료: 이미지→동영상 전환 확인")
         except Exception as e:
             self.log(f"⚠️ 이어달리기 S자동화 사전준비 실패(실행은 계속): {e}")
@@ -8838,9 +8845,20 @@ class FlowVisionApp:
                     m = re.match(r"^\s*([A-Za-z]+[0-9]+)\s*:", prompt)
                     if m:
                         asset_tag = m.group(1)
+                preset_input_locator = None
+                if input_selector:
+                    try:
+                        preset_input_locator, preset_input_selector = self._resolve_prompt_input_locator(
+                            input_selector,
+                            timeout_ms=2200,
+                        )
+                        if preset_input_locator is not None:
+                            self.log(f"🧭 S전환 기준 입력칸 확인: {preset_input_selector or '자동 탐색'}")
+                    except Exception:
+                        preset_input_locator = None
                 try:
                     self.update_status_label("🎛️ 생성 옵션 맞추는 중...", self.color_info)
-                    self._apply_prompt_generation_preset(input_locator=None, profile="asset")
+                    self._apply_prompt_generation_preset(input_locator=preset_input_locator, profile="asset")
                 except Exception as e:
                     self.log(f"⚠️ 프롬프트 생성 옵션 자동 맞춤 실패: {e}")
                 if asset_tag:
