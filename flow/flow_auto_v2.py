@@ -6765,14 +6765,350 @@ class FlowVisionApp:
         cands.extend([
             f"button:text-is('{target}')",
             f"[role='button']:text-is('{target}')",
+            f"[role='tab']:text-is('{target}')",
             f"button:has-text('{target}')",
             f"[role='button']:has-text('{target}')",
+            f"[role='tab']:has-text('{target}')",
             f"button:has-text('{alt}')",
             f"[role='button']:has-text('{alt}')",
+            f"[role='tab']:has-text('{alt}')",
             f"button[aria-label*='{target.lower()}' i]",
             f"[role='button'][aria-label*='{target.lower()}' i]",
+            f"[role='tab'][aria-label*='{target.lower()}' i]",
+            f"button[title*='{target.lower()}' i]",
+            f"[role='button'][title*='{target.lower()}' i]",
+            f"[role='tab'][title*='{target.lower()}' i]",
+            f"div[role='tab']:has-text('{target}')",
+            f"span[role='tab']:has-text('{target}')",
+            f"div[role='tab']:has-text('{alt}')",
+            f"span[role='tab']:has-text('{alt}')",
         ])
         return self._normalize_candidate_list(cands)
+
+    def _media_state_terms(self, state):
+        state = "video" if str(state).strip().lower() == "video" else "image"
+        if state == "video":
+            return {
+                "state": "video",
+                "primary": "Video",
+                "localized": "동영상",
+                "keywords": ("video", "동영상", "영상", "movie", "clip", "veo"),
+                "exact": ("video", "동영상", "영상"),
+            }
+        return {
+            "state": "image",
+            "primary": "Image",
+            "localized": "이미지",
+            "keywords": ("image", "이미지", "사진", "photo", "nano banana"),
+            "exact": ("image", "이미지"),
+        }
+
+    def _locator_box(self, locator):
+        if locator is None:
+            return None
+        try:
+            return locator.bounding_box()
+        except Exception:
+            return None
+
+    def _score_panel_media_candidate(self, info, desired_state=None, input_box=None, opener_box=None, selector=""):
+        rect = info.get("rect") or {}
+        width = float(rect.get("width") or 0.0)
+        height = float(rect.get("height") or 0.0)
+        x = float(rect.get("x") or 0.0)
+        y = float(rect.get("y") or 0.0)
+        cx = x + (width / 2.0)
+        cy = y + (height / 2.0)
+
+        tag = str(info.get("tag") or "").lower()
+        role = str(info.get("role") or "").lower()
+        text = str(info.get("text") or "").strip()
+        inner = str(info.get("innerText") or "").strip()
+        aria = str(info.get("aria") or "").strip()
+        title = str(info.get("title") or "").strip()
+        class_name = str(info.get("className") or "").strip()
+
+        meta = " ".join([tag, role, text, inner, aria, title, class_name]).lower()
+        compact_inner = re.sub(r"\s+", " ", inner or text).strip().lower()
+
+        target_terms = self._media_state_terms(desired_state) if desired_state else None
+        other_terms = None
+        if target_terms is not None:
+            other_terms = self._media_state_terms("image" if desired_state == "video" else "video")
+
+        target_hits = 0
+        other_hits = 0
+        exact_match = False
+        if target_terms is not None:
+            target_hits = sum(1 for key in target_terms["keywords"] if key in meta)
+            other_hits = sum(1 for key in other_terms["keywords"] if key in meta)
+            exact_match = compact_inner in target_terms["exact"] or aria.lower() in target_terms["exact"] or title.lower() in target_terms["exact"]
+
+        score = 0.0
+        if tag == "button":
+            score += 120.0
+        if role == "button":
+            score += 140.0
+        if role == "tab":
+            score += 220.0
+        if any(token in class_name.lower() for token in ("tab", "segment", "segmented", "pill", "chip", "toggle")):
+            score += 90.0
+        if any(token in meta for token in ("image", "video", "이미지", "동영상", "영상", "nano banana", "veo")):
+            score += 140.0
+        if target_hits:
+            score += 380.0 + (target_hits * 35.0)
+        if exact_match:
+            score += 260.0
+        if other_hits and not target_hits:
+            score -= 130.0
+        elif other_hits:
+            score -= 40.0
+
+        if any(token in meta for token in ("generate", "생성", "send", "보내", "close", "닫기", "menu", "메뉴", "setting", "설정")) and not target_hits:
+            score -= 220.0
+
+        if not any((text, inner, aria, title, class_name)):
+            score -= 240.0
+        if width < 22 or height < 12:
+            score -= 400.0
+        if width > 520:
+            score -= 180.0
+        if height > 180:
+            score -= 220.0
+        if len(inner) > 120 and role not in ("tab", "button") and tag != "button":
+            score -= 180.0
+        if 30 <= width <= 260:
+            score += 45.0
+        if 20 <= height <= 88:
+            score += 35.0
+
+        ref_box = opener_box or input_box
+        if ref_box:
+            ref_cx = float(ref_box.get("x") or 0.0) + (float(ref_box.get("width") or 0.0) / 2.0)
+            ref_cy = float(ref_box.get("y") or 0.0) + (float(ref_box.get("height") or 0.0) / 2.0)
+            dist = ((cx - ref_cx) ** 2 + (cy - ref_cy) ** 2) ** 0.5
+            score -= min(dist, 1800.0) * (0.22 if opener_box else 0.16)
+
+        if input_box:
+            input_top = float(input_box.get("y") or 0.0)
+            input_bottom = input_top + float(input_box.get("height") or 0.0)
+            if cy < (input_top - 280.0):
+                score -= 160.0
+            if cy > (input_bottom + 260.0):
+                score -= 140.0
+
+        return {
+            "score": score,
+            "target_hits": target_hits,
+            "other_hits": other_hits,
+            "exact_match": exact_match,
+            "meta": meta,
+            "compact_inner": compact_inner,
+            "selector": selector,
+        }
+
+    def _collect_panel_media_candidates(self, desired_state, input_locator=None, opener_locator=None, timeout_ms=200):
+        if not self.page:
+            return []
+
+        input_box = self._locator_box(input_locator)
+        opener_box = self._locator_box(opener_locator)
+        candidates = []
+        seen = set()
+        selectors = (
+            ("button", 80),
+            ("[role='button']", 120),
+            ("[role='tab']", 120),
+            ("div", 180),
+            ("span", 180),
+        )
+
+        containers = [("main", self.page)]
+        try:
+            for idx, fr in enumerate(self.page.frames):
+                if fr == self.page.main_frame:
+                    continue
+                containers.append((f"frame{idx}", fr))
+        except Exception:
+            pass
+
+        for frame_label, container in containers:
+            for selector, limit in selectors:
+                try:
+                    loc = container.locator(selector)
+                    total = loc.count()
+                except Exception:
+                    continue
+                upper = min(total, limit)
+                for idx in range(upper):
+                    cand = loc.nth(idx)
+                    try:
+                        if not cand.is_visible(timeout=timeout_ms):
+                            continue
+                    except Exception:
+                        continue
+                    try:
+                        info = cand.evaluate(
+                            """(el) => {
+                                const a = (name) => (el.getAttribute(name) || "");
+                                const rect = el.getBoundingClientRect();
+                                return {
+                                    tag: (el.tagName || "").toLowerCase(),
+                                    role: a("role"),
+                                    aria: a("aria-label"),
+                                    title: a("title"),
+                                    className: String(el.className || ""),
+                                    id: a("id"),
+                                    text: String(el.textContent || "").trim(),
+                                    innerText: String(el.innerText || "").trim(),
+                                    rect: {
+                                        x: Number(rect.x || 0),
+                                        y: Number(rect.y || 0),
+                                        width: Number(rect.width || 0),
+                                        height: Number(rect.height || 0),
+                                    },
+                                };
+                            }"""
+                        ) or {}
+                    except Exception:
+                        continue
+
+                    rect = info.get("rect") or {}
+                    width = float(rect.get("width") or 0.0)
+                    height = float(rect.get("height") or 0.0)
+                    if width < 18.0 or height < 12.0:
+                        continue
+
+                    x = round(float(rect.get("x") or 0.0), 1)
+                    y = round(float(rect.get("y") or 0.0), 1)
+                    key = (
+                        frame_label,
+                        selector,
+                        info.get("tag") or "",
+                        info.get("role") or "",
+                        x,
+                        y,
+                        round(width, 1),
+                        round(height, 1),
+                        str(info.get("aria") or "")[:80],
+                        str(info.get("innerText") or "")[:80],
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+
+                    scored = self._score_panel_media_candidate(
+                        info,
+                        desired_state=desired_state,
+                        input_box=input_box,
+                        opener_box=opener_box,
+                        selector=selector,
+                    )
+                    info.update(scored)
+
+                    role = str(info.get("role") or "").lower()
+                    meta = str(info.get("meta") or "")
+                    if selector in ("div", "span") and role not in ("button", "tab"):
+                        if info["target_hits"] <= 0 and not any(token in meta for token in ("image", "video", "이미지", "동영상", "영상", "tab", "segment", "chip", "pill", "toggle")):
+                            if info["score"] < -40.0:
+                                continue
+
+                    info["frame"] = frame_label
+                    info["locator"] = cand
+                    candidates.append(info)
+
+        candidates.sort(key=lambda item: item.get("score", float("-inf")), reverse=True)
+        return candidates
+
+    def _log_panel_media_candidates_dump(self, desired_state, candidates, stage_label=""):
+        state_label = "동영상" if str(desired_state).strip().lower() == "video" else "이미지"
+        head = "🧩 패널 후보 덤프"
+        if stage_label:
+            head += f" | {stage_label}"
+        head += f" | 목표={state_label} | 후보 {len(candidates)}개"
+        self.log(head)
+
+        if not candidates:
+            self.log("   - 보이는 후보가 없습니다.")
+            return
+
+        for idx, item in enumerate(candidates[:30], start=1):
+            rect = item.get("rect") or {}
+            text = re.sub(r"\s+", " ", str(item.get("text") or "")).strip()
+            inner = re.sub(r"\s+", " ", str(item.get("innerText") or "")).strip()
+            aria = re.sub(r"\s+", " ", str(item.get("aria") or "")).strip()
+            title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip()
+            class_name = re.sub(r"\s+", " ", str(item.get("className") or "")).strip()
+            self.log(
+                f"   {idx:02d}. tag={item.get('tag') or '-'} role={item.get('role') or '-'} "
+                f"text='{text[:70]}' inner='{inner[:70]}' aria='{aria[:60]}' title='{title[:60]}' "
+                f"class='{class_name[:80]}' box=({float(rect.get('x') or 0.0):.1f}, {float(rect.get('y') or 0.0):.1f}, "
+                f"{float(rect.get('width') or 0.0):.1f}, {float(rect.get('height') or 0.0):.1f}) "
+                f"score={float(item.get('score') or 0.0):.1f} frame={item.get('frame') or 'main'} src={item.get('selector') or '-'}"
+            )
+
+    def _resolve_panel_media_target(self, desired_state, input_locator=None, opener_locator=None, profile="prompt", timeout_ms=3200, dump_stage_label=""):
+        profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
+        desired_state = "video" if str(desired_state).strip().lower() == "video" else "image"
+        wait_steps = (0.12, 0.28, 0.55, 0.9, 1.2)
+        deadline = time.time() + max(1.0, timeout_ms / 1000.0)
+        dumped = False
+        last_candidates = []
+
+        while time.time() < deadline:
+            for near in (input_locator, opener_locator, None):
+                media_loc, media_sel = self._resolve_best_locator(
+                    self._panel_media_tab_candidates(desired_state, profile=profile),
+                    near_locator=near if near is not None else None,
+                    timeout_ms=220,
+                    prefer_enabled=False,
+                )
+                if media_loc is not None:
+                    if not dumped:
+                        last_candidates = self._collect_panel_media_candidates(
+                            desired_state,
+                            input_locator=input_locator,
+                            opener_locator=opener_locator,
+                            timeout_ms=120,
+                        )
+                        self._log_panel_media_candidates_dump(desired_state, last_candidates, stage_label=dump_stage_label or "selector 탐색 직후")
+                        dumped = True
+                    return media_loc, media_sel
+
+            last_candidates = self._collect_panel_media_candidates(
+                desired_state,
+                input_locator=input_locator,
+                opener_locator=opener_locator,
+                timeout_ms=160,
+            )
+            if not dumped:
+                self._log_panel_media_candidates_dump(desired_state, last_candidates, stage_label=dump_stage_label or "패널 직후 visible dump")
+                dumped = True
+
+            for item in last_candidates:
+                if item.get("target_hits", 0) <= 0:
+                    continue
+                if item.get("exact_match"):
+                    return item.get("locator"), self._locator_to_button_selector(item.get("locator")) or item.get("selector") or "dom-exact"
+                role = str(item.get("role") or "").lower()
+                tag = str(item.get("tag") or "").lower()
+                if role in ("tab", "button") or tag == "button" or float(item.get("score") or 0.0) >= 120.0:
+                    return item.get("locator"), self._locator_to_button_selector(item.get("locator")) or item.get("selector") or "dom-near"
+
+            if not wait_steps:
+                break
+            time.sleep(wait_steps[0])
+            wait_steps = wait_steps[1:]
+
+        if not dumped:
+            last_candidates = self._collect_panel_media_candidates(
+                desired_state,
+                input_locator=input_locator,
+                opener_locator=opener_locator,
+                timeout_ms=160,
+            )
+            self._log_panel_media_candidates_dump(desired_state, last_candidates, stage_label=dump_stage_label or "최종 실패 dump")
+        return None, None
 
     def _prompt_orientation_candidates(self, orientation, profile="prompt"):
         orientation = "portrait" if str(orientation).strip().lower() == "portrait" else "landscape"
@@ -6852,11 +7188,13 @@ class FlowVisionApp:
             raise RuntimeError(f"{current_state} 패널 열기 클릭 실패")
         time.sleep(0.5)
 
-        target_button, media_mode_selector = self._resolve_best_locator(
-            self._panel_media_tab_candidates(target_state, profile=profile),
-            near_locator=input_locator if input_locator is not None else None,
-            timeout_ms=1500,
-            prefer_enabled=False,
+        target_button, media_mode_selector = self._resolve_panel_media_target(
+            target_state,
+            input_locator=input_locator,
+            opener_locator=current_button,
+            profile=profile,
+            timeout_ms=3600,
+            dump_stage_label=f"{profile} {current_state}->{target_state}",
         )
         if target_button is None:
             raise RuntimeError(f"{target_state} 선택 버튼을 찾지 못했습니다.")
@@ -7048,7 +7386,10 @@ class FlowVisionApp:
                         .map(x => x.trim())
                         .filter(Boolean);
                     return {
+                        tag: (el.tagName || "button").toLowerCase(),
+                        role: a("role"),
                         id: a("id"),
+                        testid: a("data-testid"),
                         aria: a("aria-label"),
                         title: a("title"),
                         textLines,
@@ -7058,20 +7399,34 @@ class FlowVisionApp:
         except Exception:
             return ""
 
+        tag = str(info.get("tag") or "button").strip().lower() or "button"
+        role = str(info.get("role") or "").strip().lower()
+
         raw_id = str(info.get("id") or "").strip()
         if raw_id:
             esc_id = raw_id.replace("\\", "\\\\").replace("'", "\\'")
-            return f"button[id='{esc_id}']"
+            return f"{tag}[id='{esc_id}']"
+
+        raw_testid = str(info.get("testid") or "").strip()
+        if raw_testid:
+            esc_testid = raw_testid.replace("\\", "\\\\").replace("'", "\\'")
+            if role:
+                return f"[role='{role}'][data-testid*='{esc_testid}']"
+            return f"{tag}[data-testid*='{esc_testid}']"
 
         raw_aria = str(info.get("aria") or "").strip()
         if raw_aria:
             esc = raw_aria.replace("'", "\\'")
-            return f"button[aria-label*='{esc}']"
+            if role:
+                return f"[role='{role}'][aria-label*='{esc}']"
+            return f"{tag}[aria-label*='{esc}']"
 
         raw_title = str(info.get("title") or "").strip()
         if raw_title:
             esc = raw_title.replace("'", "\\'")
-            return f"button[title*='{esc}']"
+            if role:
+                return f"[role='{role}'][title*='{esc}']"
+            return f"{tag}[title*='{esc}']"
 
         bad_lines = {
             "image", "video", "가로 모드", "세로 모드", "frames", "ingredients",
@@ -7090,7 +7445,9 @@ class FlowVisionApp:
             if len(v) > 48:
                 continue
             esc = v.replace("'", "\\'")
-            return f"button:has-text('{esc}')"
+            if role:
+                return f"[role='{role}']:has-text('{esc}')"
+            return f"{tag}:has-text('{esc}')"
         return ""
 
     def _ensure_prompt_generation_panel_open(self, input_locator=None, profile="prompt"):
@@ -7181,11 +7538,13 @@ class FlowVisionApp:
             return False
         time.sleep(0.5)
 
-        media_loc, media_sel = self._resolve_best_locator(
-            self._panel_media_tab_candidates(desired_state, profile=profile),
-            near_locator=input_locator if input_locator is not None else None,
-            timeout_ms=1400,
-            prefer_enabled=False,
+        media_loc, media_sel = self._resolve_panel_media_target(
+            desired_state,
+            input_locator=input_locator,
+            opener_locator=open_loc,
+            profile=profile,
+            timeout_ms=3600,
+            dump_stage_label=f"{profile} {current_state}->{desired_state}",
         )
         if media_loc is None:
             self.log(f"⚠️ {desired_state} 선택 버튼을 찾지 못했습니다.")
