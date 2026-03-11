@@ -127,6 +127,8 @@ DEFAULT_CONFIG = {
     "asset_loop_num_width": 3,
     "asset_loop_prefix": "S",
     "asset_loop_prompt_template": "{tag} : Naturally Seamless Loop animation.",
+    "asset_use_prompt_slot": False,
+    "asset_prompt_slot": 0,
     "asset_manual_selection": "",
     "asset_start_selector": "",
     "asset_search_button_selector": "",
@@ -1597,6 +1599,36 @@ class FlowVisionApp:
             return f"{file_name} | 프롬프트 없음"
         return f"{file_name} | 총 {len(prompts)}개 | 1~{len(prompts)}"
 
+    def _asset_prompt_slot_summary(self):
+        if not self.cfg.get("asset_use_prompt_slot"):
+            return "공통 프롬프트 템플릿 사용"
+        slots = self.cfg.get("prompt_slots", []) or []
+        if not slots:
+            return "개별 프롬프트 파일이 없습니다."
+        slot_idx = self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0))
+        slot = slots[slot_idx]
+        slot_name = str(slot.get("name", "") or f"슬롯 {slot_idx + 1}")
+        file_name = str(slot.get("file", "") or "").strip()
+        prompts = self._load_prompts_from_file_name(file_name)
+        if not file_name:
+            return f"{slot_name} | 파일 연결 없음"
+        if not prompts:
+            return f"{slot_name} | {file_name} | 프롬프트 없음"
+        return f"{slot_name} | {file_name} | 총 {len(prompts)}개 | S001=1번, S002=2번..."
+
+    def _refresh_asset_prompt_slot_controls(self):
+        slot_names = self._prompt_slot_names()
+        self.cfg["asset_prompt_slot"] = self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0))
+        if hasattr(self, "combo_asset_prompt_slot"):
+            self.combo_asset_prompt_slot["values"] = slot_names
+            if slot_names:
+                self.combo_asset_prompt_slot.current(self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0)))
+        if hasattr(self, "lbl_asset_prompt_source_status"):
+            self.lbl_asset_prompt_source_status.config(
+                text=self._asset_prompt_slot_summary(),
+                fg=self.color_info if self.cfg.get("asset_use_prompt_slot") else self.color_text_sec,
+            )
+
     def _pipeline_active_step(self):
         steps = self.cfg.get("pipeline_steps", []) or []
         if not steps:
@@ -2657,6 +2689,7 @@ class FlowVisionApp:
                 )
             else:
                 self.lbl_asset_manual_status.config(text="비워두면 시작~끝 범위 실행", fg=self.color_text_sec)
+        self._refresh_asset_prompt_slot_controls()
 
     def _load_prompt_source_prompts(self, update_preview=True):
         path = self.base / self.cfg["prompts_file"]
@@ -2678,10 +2711,12 @@ class FlowVisionApp:
 
     def _build_asset_loop_items(self):
         if not self.cfg.get("asset_loop_enabled", False):
+            self.asset_prompt_missing_numbers = []
             return []
         plan = self._resolve_asset_number_plan()
         numbers = list(plan.get("numbers", []) or [])
         if not numbers:
+            self.asset_prompt_missing_numbers = []
             return []
 
         prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
@@ -2693,16 +2728,37 @@ class FlowVisionApp:
         template = (self.cfg.get("asset_loop_prompt_template") or "{tag} : Naturally Seamless Loop animation.").strip()
         if "{tag}" not in template:
             template = "{tag} : " + template
+        use_prompt_slot = bool(self.cfg.get("asset_use_prompt_slot"))
+        slot_prompts = []
+        if use_prompt_slot:
+            slots = self.cfg.get("prompt_slots", []) or []
+            if slots:
+                slot_idx = self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0))
+                slot = slots[slot_idx]
+                slot_prompts = self._load_prompts_from_file_name(slot.get("file", ""))
 
         max_items = 500
         items = []
+        missing_numbers = []
         for n in numbers:
             if len(items) >= max_items:
                 break
             num_txt = str(n).zfill(pad_width)
             tag = f"{prefix}{num_txt}"
-            prompt = template.replace("{tag}", tag).strip()
+            if use_prompt_slot:
+                prompt_idx = n - 1
+                if 0 <= prompt_idx < len(slot_prompts):
+                    prompt = str(slot_prompts[prompt_idx] or "").strip()
+                else:
+                    missing_numbers.append(n)
+                    continue
+                if not prompt:
+                    missing_numbers.append(n)
+                    continue
+            else:
+                prompt = template.replace("{tag}", tag).strip()
             items.append({"tag": tag, "prompt": prompt, "number": n})
+        self.asset_prompt_missing_numbers = missing_numbers
         return items
 
     def _build_download_items(self):
@@ -4774,6 +4830,39 @@ class FlowVisionApp:
         self.entry_asset_prefix.pack(side="left", padx=(6, 0))
         self.entry_asset_prefix.bind("<FocusOut>", self.on_option_toggle)
 
+        asset_prompt_source_f = tk.Frame(asset_f, bg=self.color_bg)
+        asset_prompt_source_f.pack(fill="x", pady=(0, 6))
+        self.asset_use_prompt_slot_var = tk.BooleanVar(value=bool(self.cfg.get("asset_use_prompt_slot", False)))
+        tk.Checkbutton(
+            asset_prompt_source_f,
+            text="개별 프롬프트 파일 사용",
+            variable=self.asset_use_prompt_slot_var,
+            command=self.on_option_toggle,
+            bg=self.color_bg,
+            font=self.font_small,
+            activebackground=self.color_bg,
+        ).pack(side="left")
+        tk.Label(asset_prompt_source_f, text="프롬프트 파일", bg=self.color_bg, font=self.font_small).pack(side="left", padx=(10, 0))
+        self.asset_prompt_slot_var = tk.StringVar()
+        self.combo_asset_prompt_slot = ttk.Combobox(
+            asset_prompt_source_f,
+            textvariable=self.asset_prompt_slot_var,
+            state="readonly",
+            width=18,
+            font=self.font_small,
+        )
+        self.combo_asset_prompt_slot.pack(side="left", padx=(6, 0))
+        self.combo_asset_prompt_slot.bind("<<ComboboxSelected>>", self.on_option_toggle)
+        self.lbl_asset_prompt_source_status = tk.Label(
+            asset_f,
+            text="",
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            font=self.font_small,
+        )
+        self.lbl_asset_prompt_source_status.pack(anchor="w", pady=(0, 6))
+        self._refresh_asset_prompt_slot_controls()
+
         tk.Label(asset_f, text="프롬프트 템플릿 ({tag}=S001/S002... 로 치환)", bg=self.color_bg, font=self.font_small).pack(anchor="w")
         self.asset_loop_template_var = tk.StringVar(
             value=self.cfg.get("asset_loop_prompt_template", "{tag} : Naturally Seamless Loop animation.")
@@ -6111,6 +6200,11 @@ class FlowVisionApp:
 
         asset_prefix = self.asset_loop_prefix_var.get().strip() if hasattr(self, "asset_loop_prefix_var") else str(self.cfg.get("asset_loop_prefix", "S"))
         self.cfg["asset_loop_prefix"] = asset_prefix or "S"
+        self.cfg["asset_use_prompt_slot"] = self.asset_use_prompt_slot_var.get() if hasattr(self, "asset_use_prompt_slot_var") else bool(self.cfg.get("asset_use_prompt_slot", False))
+        if hasattr(self, "combo_asset_prompt_slot") and self.combo_asset_prompt_slot.current() >= 0:
+            self.cfg["asset_prompt_slot"] = self._clamp_slot_index(self.combo_asset_prompt_slot.current())
+        else:
+            self.cfg["asset_prompt_slot"] = self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0))
         asset_template = self.asset_loop_template_var.get().strip() if hasattr(self, "asset_loop_template_var") else str(self.cfg.get("asset_loop_prompt_template", ""))
         self.cfg["asset_loop_prompt_template"] = asset_template or "{tag} : Naturally Seamless Loop animation."
         self.cfg["asset_manual_selection"] = self.asset_manual_selection_var.get().strip() if hasattr(self, "asset_manual_selection_var") else str(self.cfg.get("asset_manual_selection", "") or "").strip()
@@ -8548,6 +8642,17 @@ class FlowVisionApp:
             self._sync_relay_selection_label()
             self._sync_asset_range_display()
             self._refresh_manual_selection_labels()
+            self._refresh_asset_prompt_slot_controls()
+            if self.cfg.get("asset_loop_enabled") and self.cfg.get("asset_use_prompt_slot"):
+                missing = list(getattr(self, "asset_prompt_missing_numbers", []) or [])
+                if hasattr(self, "lbl_asset_prompt_source_status") and missing:
+                    preview = ", ".join(f"S{str(n).zfill(self._asset_pad_width())}" for n in missing[:3])
+                    if len(missing) > 3:
+                        preview += f" 외 {len(missing) - 3}개"
+                    self.lbl_asset_prompt_source_status.config(
+                        text=f"{self._asset_prompt_slot_summary()} | 누락: {preview}",
+                        fg=self.color_error,
+                    )
         except: pass
 
     def _update_progress_ui(self):
@@ -8716,6 +8821,7 @@ class FlowVisionApp:
                     messagebox.showwarning("주의", f"S 개별 번호 입력 형식을 확인해주세요.\n문제값: {', '.join(asset_plan['invalid_tokens'][:5])}")
                     return
                 self.asset_loop_items = self._build_asset_loop_items()
+                missing_asset_prompts = list(getattr(self, "asset_prompt_missing_numbers", []) or [])
                 self.prompts = [item["prompt"] for item in self.asset_loop_items]
                 self.current_selection_input = str(self.cfg.get("asset_manual_selection", "") or "").strip()
                 if self.current_selection_input:
@@ -8726,6 +8832,11 @@ class FlowVisionApp:
                     )
                 else:
                     self.current_selection_summary = "시작~끝 범위 전체 실행"
+                if self.cfg.get("asset_use_prompt_slot") and missing_asset_prompts:
+                    preview = ", ".join(f"S{str(n).zfill(self._asset_pad_width())}" for n in missing_asset_prompts[:5])
+                    if len(missing_asset_prompts) > 5:
+                        preview += f" 외 {len(missing_asset_prompts) - 5}개"
+                    self.log(f"⚠️ S 개별 프롬프트 누락 번호는 건너뜁니다: {preview}")
             else:
                 prompt_numbers, prompt_info = self._build_prompt_run_numbers()
                 if prompt_info.get("invalid_tokens"):
@@ -8794,7 +8905,8 @@ class FlowVisionApp:
             mode_label = "영상" if self._download_mode() == "video" else "이미지"
             self.log(f"🚀 다운로드 자동화 시작 | 모드={mode_label} | 대상={len(self.download_items)}개 | 실패판단대기={self.cfg.get('download_wait_seconds', 20)}초 | 선택={self.current_selection_summary}")
         elif self.cfg.get("asset_loop_enabled"):
-            self.log(f"🚀 S반복 자동화 시작 | 선택={self.current_selection_summary}")
+            prompt_source = self._asset_prompt_slot_summary() if self.cfg.get("asset_use_prompt_slot") else "공통 템플릿"
+            self.log(f"🚀 S반복 자동화 시작 | 선택={self.current_selection_summary} | 프롬프트={prompt_source}")
         else:
             self.log(f"🚀 프롬프트 자동화 시작 | 선택={self.current_selection_summary}")
         if not is_download_mode:
@@ -9608,6 +9720,7 @@ class FlowVisionApp:
             self.combo_slots.current(idx)
             self._sync_relay_range_controls()
             self._sync_relay_selection_label()
+            self._refresh_asset_prompt_slot_controls()
             self.log(f"📝 슬롯 이름 변경: {current_name} -> {new_name}")
 
     def on_add_slot(self):
@@ -9640,6 +9753,7 @@ class FlowVisionApp:
         self.combo_slots.current(new_idx)
         self._sync_relay_range_controls()
         self._sync_relay_selection_label()
+        self._refresh_asset_prompt_slot_controls()
         self.on_slot_change()
         self.log(f"➕ 새 슬롯 추가됨: {new_name} ({new_file})")
         messagebox.showinfo("성공", f"'{new_name}' 슬롯이 추가되었습니다!")
@@ -9694,6 +9808,7 @@ class FlowVisionApp:
         self.combo_slots.current(self.cfg["active_prompt_slot"])
         self._sync_relay_range_controls()
         self._sync_relay_selection_label()
+        self._refresh_asset_prompt_slot_controls()
         self.on_slot_change()
         self.log(f"🗑️ 슬롯 삭제됨: {slot_name}")
         messagebox.showinfo("성공", f"'{slot_name}' 슬롯이 목록에서 제거되었습니다.")
