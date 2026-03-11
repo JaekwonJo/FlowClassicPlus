@@ -3169,6 +3169,9 @@ class FlowVisionApp:
         )
         if start_loc is not None:
             return True
+        start_loc, _ = self._resolve_text_locator_any_frame(["시작", "Start"], timeout_ms=900)
+        if start_loc is not None:
+            return True
 
         side_loc, side_sel = self._resolve_asset_sidebar_button(timeout_sec=timeout_sec)
         if side_loc is None:
@@ -3185,6 +3188,9 @@ class FlowVisionApp:
             prefer_enabled=False,
             ratios=(0.0, 0.10, 0.18),
         )
+        if start_loc is not None:
+            return True
+        start_loc, _ = self._resolve_text_locator_any_frame(["시작", "Start"], timeout_ms=1000)
         return start_loc is not None
 
     def _open_asset_search_surface_for_detection(self):
@@ -3206,7 +3212,9 @@ class FlowVisionApp:
             ratios=(0.0, 0.10, 0.18),
         )
         if start_loc is None:
-            return False
+            start_loc, start_sel = self._resolve_text_locator_any_frame(["시작", "Start"], timeout_ms=1000)
+            if start_loc is None:
+                return False
         if not self._click_with_actor_fallback(start_loc, "시작 버튼"):
             self.log("ℹ️ 자동탐색용 시작 버튼 클릭 실패")
             return False
@@ -7655,12 +7663,6 @@ class FlowVisionApp:
                 timeout_ms=2200,
                 prefer_enabled=False,
             )
-            if start_loc is not None:
-                try:
-                    self._click_with_actor_fallback(start_loc, "자동탐색 시작 버튼")
-                    self.actor.random_action_delay("자동탐색 시작 후 대기", 0.4, 1.1)
-                except Exception:
-                    pass
             search_candidates = self._asset_search_button_candidates() + [
                 "text=에셋 검색",
                 "text=Asset search",
@@ -7674,6 +7676,12 @@ class FlowVisionApp:
             )
             if start_loc is None:
                 start_loc, start_sel = self._resolve_text_locator_any_frame(["시작", "Start"], timeout_ms=1000)
+            if start_loc is not None:
+                try:
+                    self._click_with_actor_fallback(start_loc, "자동탐색 시작 버튼")
+                    self.actor.random_action_delay("자동탐색 시작 후 대기", 0.4, 1.1)
+                except Exception:
+                    pass
             if search_loc is None:
                 search_loc, search_sel = self._resolve_text_locator_any_frame(
                     ["에셋 검색", "Asset search", "Search assets"],
