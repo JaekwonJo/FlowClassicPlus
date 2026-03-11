@@ -1395,14 +1395,18 @@ class FlowVisionApp:
 
     def _refresh_pipeline_step_editor_state(self):
         step, _active = self._pipeline_active_step()
-        step_type = "prompt"
-        download_mode = "video"
-        if step is not None:
-            step_type = str(step.get("type", "prompt") or "prompt").strip().lower()
-            download_mode = str(step.get("download_mode", "video") or "video").strip().lower()
-        elif hasattr(self, "pipeline_step_type_var"):
-            step_type = self._pipeline_type_values().get(str(self.pipeline_step_type_var.get() or "").strip(), "prompt")
-            download_mode = self._pipeline_mode_values().get(str(self.pipeline_step_download_mode_var.get() or "").strip(), "video")
+        step_type = self._pipeline_type_values().get(
+            str(self.pipeline_step_type_var.get() or "").strip(),
+            str((step or {}).get("type", "prompt") or "prompt").strip().lower(),
+        ) if hasattr(self, "pipeline_step_type_var") else str((step or {}).get("type", "prompt") or "prompt").strip().lower()
+        download_mode = self._pipeline_mode_values().get(
+            str(self.pipeline_step_download_mode_var.get() or "").strip(),
+            str((step or {}).get("download_mode", "video") or "video").strip().lower(),
+        ) if hasattr(self, "pipeline_step_download_mode_var") else str((step or {}).get("download_mode", "video") or "video").strip().lower()
+        if step_type not in {"prompt", "asset", "download"}:
+            step_type = "prompt"
+        if download_mode not in {"image", "video"}:
+            download_mode = "video"
 
         if step_type == "prompt":
             fixed_mode = "image"
@@ -1417,7 +1421,6 @@ class FlowVisionApp:
             self.combo_pipeline_media_mode.config(state="disabled")
 
         prompt_enabled = (step_type == "prompt")
-        download_enabled = (step_type == "download")
         if hasattr(self, "combo_pipeline_prompt_slot"):
             self.combo_pipeline_prompt_slot.config(state="readonly" if prompt_enabled else "disabled")
         if hasattr(self, "lbl_pipeline_prompt_slot"):
@@ -1434,23 +1437,23 @@ class FlowVisionApp:
                 self.lbl_pipeline_prompt_range.config(text="프롬프트 자동화를 선택하면 파일과 범위가 표시됩니다.", fg=self.color_text_sec)
 
         if hasattr(self, "combo_pipeline_download_mode"):
-            self.combo_pipeline_download_mode.config(state="readonly" if download_enabled else "disabled")
+            self.combo_pipeline_download_mode.config(state="readonly")
         if hasattr(self, "combo_pipeline_quality"):
-            values = self._pipeline_download_quality_options(download_mode if download_enabled else "video")
+            values = self._pipeline_download_quality_options(download_mode)
             self.combo_pipeline_quality["values"] = values
             current_quality = str(self.pipeline_step_quality_var.get() or "").strip()
-            normalized_quality = self._normalize_pipeline_quality(current_quality, download_mode if download_enabled else "video")
+            normalized_quality = self._normalize_pipeline_quality(current_quality, download_mode)
             self.pipeline_step_quality_var.set(normalized_quality)
-            self.combo_pipeline_quality.config(state="readonly" if download_enabled else "disabled")
+            self.combo_pipeline_quality.config(state="readonly")
         if hasattr(self, "lbl_pipeline_quality"):
-            self.lbl_pipeline_quality.config(fg=self.color_text if download_enabled else self.color_text_sec)
+            self.lbl_pipeline_quality.config(fg=self.color_text)
 
         if hasattr(self, "entry_pipeline_output_dir"):
             self.entry_pipeline_output_dir.config(state="readonly")
         if hasattr(self, "btn_pipeline_output_dir"):
-            self.btn_pipeline_output_dir.config(state="normal" if download_enabled else "disabled")
+            self.btn_pipeline_output_dir.config(state="normal")
         if hasattr(self, "lbl_pipeline_output_dir"):
-            self.lbl_pipeline_output_dir.config(fg=self.color_text if download_enabled else self.color_text_sec)
+            self.lbl_pipeline_output_dir.config(fg=self.color_text)
 
     def _default_pipeline_step(self, step_no=1):
         return {
@@ -1659,9 +1662,11 @@ class FlowVisionApp:
             self.lbl_pipeline_step_status.config(text=f"저장 완료 | 현재 단계: {step['name']}")
 
     def on_pipeline_step_type_change(self, event=None):
+        self._refresh_pipeline_step_editor_state()
         self._save_pipeline_step_fields()
 
     def on_pipeline_step_download_mode_change(self, event=None):
+        self._refresh_pipeline_step_editor_state()
         self._save_pipeline_step_fields()
 
     def on_pipeline_step_prompt_slot_change(self, event=None):
@@ -1678,7 +1683,20 @@ class FlowVisionApp:
             initial = str(self.cfg.get("download_output_dir", "") or "").strip()
         if not initial:
             initial = str(self._resolve_download_output_dir())
-        picked = filedialog.askdirectory(initialdir=initial, title="이어달리기 저장 폴더 선택")
+        try:
+            initial_path = Path(initial).expanduser()
+        except Exception:
+            initial_path = Path.home()
+        if not initial_path.exists():
+            initial_path = self._resolve_download_output_dir()
+        if not initial_path.exists():
+            initial_path = Path.home()
+        picked = filedialog.askdirectory(
+            parent=self.pipeline_window,
+            initialdir=str(initial_path),
+            mustexist=False,
+            title="이어달리기 저장 폴더 선택",
+        )
         if not picked:
             return
         self.pipeline_step_output_dir_var.set(picked)
