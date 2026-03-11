@@ -1599,22 +1599,68 @@ class FlowVisionApp:
             return f"{file_name} | 프롬프트 없음"
         return f"{file_name} | 총 {len(prompts)}개 | 1~{len(prompts)}"
 
-    def _asset_prompt_slot_summary(self):
-        if not self.cfg.get("asset_use_prompt_slot"):
-            return "공통 프롬프트 템플릿 사용"
+    def _asset_prompt_slot_data(self):
         slots = self.cfg.get("prompt_slots", []) or []
         if not slots:
-            return "개별 프롬프트 파일이 없습니다."
+            return {
+                "slot_name": "",
+                "file_name": "",
+                "entries": [],
+                "tagged_prompts": {},
+                "common_prompt": "",
+                "mode": "empty",
+            }
         slot_idx = self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0))
         slot = slots[slot_idx]
         slot_name = str(slot.get("name", "") or f"슬롯 {slot_idx + 1}")
         file_name = str(slot.get("file", "") or "").strip()
-        prompts = self._load_prompts_from_file_name(file_name)
+        entries = self._load_prompts_from_file_name(file_name)
+        prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
+        tag_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*::\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
+        tagged_prompts = {}
+        common_prompt = ""
+        for entry in entries:
+            raw_text = str(entry or "").strip()
+            if not raw_text:
+                continue
+            match = tag_pattern.match(raw_text)
+            if match:
+                tag = match.group(1).strip().upper()
+                body = match.group(2).strip()
+                if body:
+                    tagged_prompts[tag] = body
+                continue
+            if not common_prompt:
+                common_prompt = raw_text
+        mode = "tagged" if tagged_prompts else ("sequential" if entries else "empty")
+        return {
+            "slot_name": slot_name,
+            "file_name": file_name,
+            "entries": entries,
+            "tagged_prompts": tagged_prompts,
+            "common_prompt": common_prompt,
+            "mode": mode,
+        }
+
+    def _asset_prompt_slot_summary(self):
+        if not self.cfg.get("asset_use_prompt_slot"):
+            return "공통 프롬프트 템플릿 사용"
+        data = self._asset_prompt_slot_data()
+        if not data.get("slot_name"):
+            return "개별 프롬프트 파일이 없습니다."
+        slot_name = data.get("slot_name", "")
+        file_name = data.get("file_name", "")
         if not file_name:
             return f"{slot_name} | 파일 연결 없음"
-        if not prompts:
+        entries = list(data.get("entries", []) or [])
+        if not entries:
             return f"{slot_name} | {file_name} | 프롬프트 없음"
-        return f"{slot_name} | {file_name} | 총 {len(prompts)}개 | S001=1번, S002=2번..."
+        if data.get("mode") == "tagged":
+            tagged_count = len(data.get("tagged_prompts", {}) or {})
+            has_common = bool(data.get("common_prompt"))
+            common_text = " + 공통 fallback" if has_common else ""
+            return f"{slot_name} | {file_name} | 태그형 {tagged_count}개{common_text}"
+        return f"{slot_name} | {file_name} | 총 {len(entries)}개 | S001=1번, S002=2번..."
 
     def _refresh_asset_prompt_slot_controls(self):
         slot_names = self._prompt_slot_names()
@@ -2729,13 +2775,12 @@ class FlowVisionApp:
         if "{tag}" not in template:
             template = "{tag} : " + template
         use_prompt_slot = bool(self.cfg.get("asset_use_prompt_slot"))
-        slot_prompts = []
+        slot_data = {"mode": "empty", "entries": [], "tagged_prompts": {}, "common_prompt": ""}
         if use_prompt_slot:
-            slots = self.cfg.get("prompt_slots", []) or []
-            if slots:
-                slot_idx = self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0))
-                slot = slots[slot_idx]
-                slot_prompts = self._load_prompts_from_file_name(slot.get("file", ""))
+            slot_data = self._asset_prompt_slot_data()
+            slot_prompts = list(slot_data.get("entries", []) or [])
+        else:
+            slot_prompts = []
 
         max_items = 500
         items = []
@@ -2746,12 +2791,17 @@ class FlowVisionApp:
             num_txt = str(n).zfill(pad_width)
             tag = f"{prefix}{num_txt}"
             if use_prompt_slot:
-                prompt_idx = n - 1
-                if 0 <= prompt_idx < len(slot_prompts):
-                    prompt = str(slot_prompts[prompt_idx] or "").strip()
+                if slot_data.get("mode") == "tagged":
+                    prompt = str((slot_data.get("tagged_prompts", {}) or {}).get(tag.upper(), "") or "").strip()
+                    if not prompt:
+                        prompt = str(slot_data.get("common_prompt", "") or "").strip()
                 else:
-                    missing_numbers.append(n)
-                    continue
+                    prompt_idx = n - 1
+                    if 0 <= prompt_idx < len(slot_prompts):
+                        prompt = str(slot_prompts[prompt_idx] or "").strip()
+                    else:
+                        missing_numbers.append(n)
+                        continue
                 if not prompt:
                     missing_numbers.append(n)
                     continue
@@ -4861,6 +4911,13 @@ class FlowVisionApp:
             font=self.font_small,
         )
         self.lbl_asset_prompt_source_status.pack(anchor="w", pady=(0, 6))
+        tk.Label(
+            asset_f,
+            text="예: S004::개별 프롬프트 / 태그 없는 프롬프트는 공통 fallback",
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            font=self.font_small,
+        ).pack(anchor="w", pady=(0, 6))
         self._refresh_asset_prompt_slot_controls()
 
         tk.Label(asset_f, text="프롬프트 템플릿 ({tag}=S001/S002... 로 치환)", bg=self.color_bg, font=self.font_small).pack(anchor="w")
