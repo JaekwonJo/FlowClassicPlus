@@ -3088,6 +3088,138 @@ class FlowVisionApp:
                 seen.add(x)
         return uniq
 
+    def _resolve_asset_sidebar_button(self, timeout_sec=4):
+        if not self.page:
+            return None, None
+        end_ts = time.time() + max(1, timeout_sec)
+        viewport_w = 1600
+        viewport_h = 900
+        try:
+            vp = self.page.viewport_size or {}
+            viewport_w = int(vp.get("width", 1600))
+            viewport_h = int(vp.get("height", 900))
+        except Exception:
+            pass
+
+        positive_keys = ("image", "이미지", "photo", "사진", "gallery", "asset", "에셋", "media", "reference")
+        negative_keys = ("video", "동영상", "설정", "setting", "menu", "download", "다운로드")
+
+        while time.time() < end_ts:
+            best = None
+            best_sel = None
+            best_score = float("-inf")
+            candidates = [
+                "button, [role='button']",
+                "[aria-label*='image' i]",
+                "[title*='image' i]",
+                "[aria-label*='이미지' i]",
+                "[title*='이미지' i]",
+                "[aria-label*='asset' i]",
+                "[title*='asset' i]",
+                "[aria-label*='에셋' i]",
+                "[title*='에셋' i]",
+            ]
+            for sel in candidates:
+                try:
+                    loc = self.page.locator(sel)
+                    total = min(loc.count(), 60)
+                except Exception:
+                    continue
+                for i in range(total):
+                    cand = loc.nth(i)
+                    try:
+                        if not cand.is_visible(timeout=400):
+                            continue
+                        box = cand.bounding_box()
+                    except Exception:
+                        continue
+                    if not box:
+                        continue
+                    if box["x"] > max(120, viewport_w * 0.12):
+                        continue
+                    if box["y"] < 90 or box["y"] > (viewport_h * 0.68):
+                        continue
+                    if box["width"] < 20 or box["height"] < 20 or box["width"] > 90 or box["height"] > 90:
+                        continue
+                    score = 0.0
+                    meta = self._locator_meta_text(cand)
+                    if any(k in meta for k in positive_keys):
+                        score += 900.0
+                    if any(k in meta for k in negative_keys):
+                        score -= 900.0
+                    score -= abs((box["x"] + box["width"] / 2.0) - 34.0) * 2.0
+                    score -= abs((box["y"] + box["height"] / 2.0) - (viewport_h * 0.30)) * 0.8
+                    if score > best_score:
+                        best_score = score
+                        best = cand
+                        best_sel = sel
+            if best is not None:
+                return best, best_sel
+            time.sleep(0.2)
+        return None, None
+
+    def _ensure_asset_workspace_visible(self, timeout_sec=4):
+        if not self.page:
+            return False
+        start_loc, _ = self._resolve_best_locator_with_scroll(
+            self._asset_start_button_candidates(),
+            timeout_ms=1200,
+            prefer_enabled=False,
+            ratios=(0.0, 0.10, 0.18),
+        )
+        if start_loc is not None:
+            return True
+
+        side_loc, side_sel = self._resolve_asset_sidebar_button(timeout_sec=timeout_sec)
+        if side_loc is None:
+            self.log("ℹ️ 좌측 이미지/에셋 아이콘 미탐지")
+            return False
+        if not self._click_with_actor_fallback(side_loc, "좌측 이미지/에셋 아이콘"):
+            self.log("ℹ️ 좌측 이미지/에셋 아이콘 클릭 실패")
+            return False
+        self.log(f"🖼️ 좌측 이미지/에셋 아이콘 클릭: {side_sel or '위치기반 탐색'}")
+        self.actor.random_action_delay("에셋 작업영역 표시 대기", 0.5, 1.3)
+        start_loc, _ = self._resolve_best_locator_with_scroll(
+            self._asset_start_button_candidates(),
+            timeout_ms=1600,
+            prefer_enabled=False,
+            ratios=(0.0, 0.10, 0.18),
+        )
+        return start_loc is not None
+
+    def _open_asset_search_surface_for_detection(self):
+        if not self.page:
+            return False
+        input_loc, _ = self._resolve_best_locator_with_scroll(
+            self._asset_search_input_candidates(),
+            timeout_ms=1200,
+            prefer_enabled=False,
+            ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
+        )
+        if input_loc is not None:
+            return True
+
+        start_loc, start_sel = self._resolve_best_locator_with_scroll(
+            self._asset_start_button_candidates(),
+            timeout_ms=1800,
+            prefer_enabled=False,
+            ratios=(0.0, 0.10, 0.18),
+        )
+        if start_loc is None:
+            return False
+        if not self._click_with_actor_fallback(start_loc, "시작 버튼"):
+            self.log("ℹ️ 자동탐색용 시작 버튼 클릭 실패")
+            return False
+        self.log(f"🟢 자동탐색용 시작 클릭: {start_sel or '텍스트 탐색'}")
+        self.actor.random_action_delay("에셋 검색창 표시 대기", 0.5, 1.4)
+        input_loc, _ = self._resolve_best_locator_with_scroll(
+            self._asset_search_input_candidates(),
+            timeout_ms=1800,
+            prefer_enabled=False,
+            ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
+        )
+        return input_loc is not None
+
     def _asset_search_button_candidates(self):
         cands = []
         cands.extend(self._normalize_candidate_list(self.cfg.get("asset_search_button_selector", "")))
@@ -3304,6 +3436,7 @@ class FlowVisionApp:
             return
 
         self._prepare_page_for_selector_detection()
+        self._ensure_asset_workspace_visible(timeout_sec=4)
         self.log(f"🔁 S반복 사전단계 시작: {asset_tag}")
         start_locator, start_selector = self._resolve_best_locator_with_scroll(
             self._asset_start_button_candidates(),
@@ -7515,12 +7648,19 @@ class FlowVisionApp:
                 self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
             time.sleep(random.uniform(1.0, 2.3))
             self._prepare_page_for_selector_detection()
+            self._ensure_asset_workspace_visible(timeout_sec=4)
 
             start_loc, start_sel = self._resolve_best_locator_with_scroll(
                 self._asset_start_button_candidates(),
                 timeout_ms=2200,
                 prefer_enabled=False,
             )
+            if start_loc is not None:
+                try:
+                    self._click_with_actor_fallback(start_loc, "자동탐색 시작 버튼")
+                    self.actor.random_action_delay("자동탐색 시작 후 대기", 0.4, 1.1)
+                except Exception:
+                    pass
             search_candidates = self._asset_search_button_candidates() + [
                 "text=에셋 검색",
                 "text=Asset search",
@@ -7603,6 +7743,8 @@ class FlowVisionApp:
                 self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
             time.sleep(random.uniform(0.8, 1.8))
             self._prepare_page_for_selector_detection()
+            self._ensure_asset_workspace_visible(timeout_sec=4)
+            self._open_asset_search_surface_for_detection()
 
             start_candidates = self._normalize_candidate_list(self.cfg.get("asset_start_selector", "")) or self._asset_start_button_candidates()
             search_candidates = self._normalize_candidate_list(self.cfg.get("asset_search_button_selector", "")) or self._asset_search_button_candidates()
