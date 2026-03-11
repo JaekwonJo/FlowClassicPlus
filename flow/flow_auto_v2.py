@@ -1237,7 +1237,20 @@ class FlowVisionApp:
         if hasattr(self, "lbl_detected_media_state"):
             self.lbl_detected_media_state.config(text=text, fg=color)
 
-    def refresh_detected_media_state(self, ensure_session=True):
+    def _read_detected_media_state(self, input_locator=None, profile="prompt"):
+        if not self.page:
+            return None, "브라우저 없음"
+        if input_locator is None:
+            input_selector = (self.cfg.get("input_selector") or "").strip()
+            if input_selector:
+                try:
+                    input_locator, _ = self._resolve_prompt_input_locator(input_selector, timeout_ms=1800)
+                except Exception:
+                    input_locator = None
+        _loc, desc, state = self._resolve_current_media_panel_button(input_locator=input_locator, profile=profile)
+        return state, desc or ""
+
+    def refresh_detected_media_state(self, ensure_session=True, input_locator=None, profile="prompt", write_log=False):
         try:
             if ensure_session:
                 self.on_option_toggle()
@@ -1246,22 +1259,17 @@ class FlowVisionApp:
             if not self.page:
                 self._set_detected_media_state_ui(None, "브라우저 없음")
                 return None
-            input_selector = (self.cfg.get("input_selector") or "").strip()
-            input_locator = None
-            if input_selector:
-                try:
-                    input_locator, _ = self._resolve_prompt_input_locator(input_selector, timeout_ms=1800)
-                except Exception:
-                    input_locator = None
-            _loc, desc, state = self._resolve_current_media_panel_button(input_locator=input_locator, profile="prompt")
+            state, desc = self._read_detected_media_state(input_locator=input_locator, profile=profile)
             self._set_detected_media_state_ui(state, desc or "")
+            if write_log:
+                self.log(f"👁 현재 감지 상태: {state or '미확인'}{f' | {desc}' if desc else ''}")
             return state
         except Exception as e:
             self._set_detected_media_state_ui(None, str(e), error=True)
             return None
 
     def on_refresh_detected_media_state(self):
-        self.refresh_detected_media_state(ensure_session=True)
+        self.refresh_detected_media_state(ensure_session=True, write_log=True)
 
     def _ensure_worker_thread(self):
         if self.worker_thread and self.worker_thread.is_alive():
@@ -2191,6 +2199,12 @@ class FlowVisionApp:
                     preset_input_locator, _ = self._resolve_prompt_input_locator(input_selector, timeout_ms=2200)
                 except Exception:
                     preset_input_locator = None
+            self.refresh_detected_media_state(
+                ensure_session=False,
+                input_locator=preset_input_locator,
+                profile="asset",
+                write_log=True,
+            )
             self.update_status_label("🎛️ 이어달리기 동영상 모드 맞추는 중...", self.color_info)
             self._apply_prompt_generation_preset(input_locator=preset_input_locator, profile="asset")
             self.log("🏃 이어달리기 사전준비 완료: 이미지→동영상 전환 확인")
@@ -8915,6 +8929,12 @@ class FlowVisionApp:
                             self.log(f"🧭 S전환 기준 입력칸 확인: {preset_input_selector or '자동 탐색'}")
                     except Exception:
                         preset_input_locator = None
+                self.refresh_detected_media_state(
+                    ensure_session=False,
+                    input_locator=preset_input_locator,
+                    profile="asset",
+                    write_log=True,
+                )
                 try:
                     self.update_status_label("🎛️ 생성 옵션 맞추는 중...", self.color_info)
                     self._apply_prompt_generation_preset(input_locator=preset_input_locator, profile="asset")
@@ -8965,6 +8985,12 @@ class FlowVisionApp:
                 self.root.after(0, lambda v=resolved_input_selector: self.input_selector_var.set(v))
             self.save_config()
             self.log(f"🧭 프롬프트 입력창 확정: {resolved_input_selector or '자동 탐색'}")
+            self.refresh_detected_media_state(
+                ensure_session=False,
+                input_locator=input_locator,
+                profile="prompt",
+                write_log=True,
+            )
 
             if not self.cfg.get("asset_loop_enabled"):
                 try:
