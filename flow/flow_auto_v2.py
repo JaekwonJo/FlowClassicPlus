@@ -90,6 +90,8 @@ DEFAULT_CONFIG = {
     "sound_enabled": True,
     "project_profiles": [],
     "active_project_profile": 0,
+    "pipeline_steps": [],
+    "active_pipeline_step": 0,
     "relay_mode": False,
     "relay_count": 1,
     "relay_start_slot": None,
@@ -520,6 +522,7 @@ class FlowVisionApp:
 
         self._ensure_prompt_slots()
         self._ensure_project_profiles()
+        self._ensure_pipeline_steps()
         self._build_ui()
         self.on_reload()
         self.root.after(1000, self._tick)
@@ -1137,9 +1140,8 @@ class FlowVisionApp:
 
     def _default_project_profile(self):
         return {
-            "name": "기본 프로젝트",
+            "project_name": "기본 프로젝트",
             "url": str(self.cfg.get("start_url", "https://labs.google/flow") or "https://labs.google/flow").strip(),
-            "project_name": "",
         }
 
     def _clamp_project_profile_index(self, idx, default=0):
@@ -1154,7 +1156,7 @@ class FlowVisionApp:
 
     def _make_unique_project_profile_name(self, base_name):
         base_name = str(base_name or "").strip() or "프로젝트"
-        existing = {str(item.get("name", "")).strip() for item in self.cfg.get("project_profiles", [])}
+        existing = {str(item.get("project_name", "")).strip() for item in self.cfg.get("project_profiles", [])}
         if base_name not in existing:
             return base_name
         suffix = 2
@@ -1172,15 +1174,13 @@ class FlowVisionApp:
             for item in raw_profiles:
                 if not isinstance(item, dict):
                     continue
-                name = str(item.get("name", "") or "").strip()
+                name = str(item.get("project_name", "") or item.get("name", "") or "").strip()
                 url = str(item.get("url", "") or "").strip()
-                project_name = str(item.get("project_name", "") or "").strip()
                 if not name:
                     name = self._make_unique_project_profile_name("프로젝트")
                 normalized.append({
-                    "name": name,
+                    "project_name": name,
                     "url": url,
-                    "project_name": project_name,
                 })
         if not normalized:
             normalized = [self._default_project_profile()]
@@ -1196,11 +1196,7 @@ class FlowVisionApp:
             self.save_config()
 
     def _project_profile_preview(self, item):
-        name = str(item.get("name", "") or "").strip() or "이름 없음"
-        project_name = str(item.get("project_name", "") or "").strip()
-        if project_name:
-            return f"{name} | 프로젝트: {project_name}"
-        return name
+        return str(item.get("project_name", "") or "").strip() or "이름 없음"
 
     def _sync_project_profile_ui(self):
         if not hasattr(self, "project_profile_listbox"):
@@ -1217,14 +1213,12 @@ class FlowVisionApp:
             self.project_profile_listbox.see(active)
             profile = profiles[active]
         else:
-            profile = {"name": "", "url": "", "project_name": ""}
+            profile = {"project_name": "", "url": ""}
 
         if hasattr(self, "pipeline_profile_name_var"):
-            self.pipeline_profile_name_var.set(str(profile.get("name", "") or ""))
+            self.pipeline_profile_name_var.set(str(profile.get("project_name", "") or ""))
         if hasattr(self, "pipeline_profile_url_var"):
             self.pipeline_profile_url_var.set(str(profile.get("url", "") or ""))
-        if hasattr(self, "pipeline_profile_project_var"):
-            self.pipeline_profile_project_var.set(str(profile.get("project_name", "") or ""))
         if hasattr(self, "lbl_pipeline_profile_status"):
             count = len(profiles)
             status = f"저장된 프로젝트 {count}개"
@@ -1242,16 +1236,12 @@ class FlowVisionApp:
         profile = profiles[active]
         name = str(self.pipeline_profile_name_var.get() or "").strip() or "프로젝트"
         url = str(self.pipeline_profile_url_var.get() or "").strip()
-        project_name = str(self.pipeline_profile_project_var.get() or "").strip()
         changed = False
-        if profile.get("name") != name:
-            profile["name"] = name
+        if profile.get("project_name") != name:
+            profile["project_name"] = name
             changed = True
         if profile.get("url") != url:
             profile["url"] = url
-            changed = True
-        if profile.get("project_name") != project_name:
-            profile["project_name"] = project_name
             changed = True
         if changed:
             self.save_config()
@@ -1272,46 +1262,56 @@ class FlowVisionApp:
         self._sync_project_profile_ui()
 
     def on_add_project_profile(self):
-        base_name = simpledialog.askstring("프로젝트 추가", "새 프로젝트 목록 이름을 입력하세요:", parent=self.pipeline_window)
+        base_name = simpledialog.askstring("프로젝트 추가", "새 프로젝트 이름을 입력하세요:", parent=self.pipeline_window)
         if base_name is None:
             return
         name = self._make_unique_project_profile_name(base_name)
         profiles = self.cfg.get("project_profiles", [])
-        profiles.append({"name": name, "url": "", "project_name": ""})
+        profiles.append({"project_name": name, "url": ""})
         self.cfg["active_project_profile"] = len(profiles) - 1
         self.save_config()
         self._sync_project_profile_ui()
-        self.log(f"📁 프로젝트 목록 추가: {name}")
+        self.log(f"📁 프로젝트 추가: {name}")
 
     def on_rename_project_profile(self):
         profiles = self.cfg.get("project_profiles", [])
         if not profiles:
             return
         active = self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0))
-        current_name = str(profiles[active].get("name", "") or "").strip() or "프로젝트"
-        new_name = simpledialog.askstring("이름 변경", "새 프로젝트 목록 이름을 입력하세요:", initialvalue=current_name, parent=self.pipeline_window)
+        current_name = str(profiles[active].get("project_name", "") or "").strip() or "프로젝트"
+        new_name = simpledialog.askstring("이름 변경", "새 프로젝트 이름을 입력하세요:", initialvalue=current_name, parent=self.pipeline_window)
         if new_name is None:
             return
         new_name = self._make_unique_project_profile_name(new_name)
-        profiles[active]["name"] = new_name
+        profiles[active]["project_name"] = new_name
         self.save_config()
         self._sync_project_profile_ui()
-        self.log(f"✏️ 프로젝트 목록 이름 변경: {current_name} -> {new_name}")
+        self.log(f"✏️ 프로젝트 이름 변경: {current_name} -> {new_name}")
 
     def on_delete_project_profile(self):
         profiles = self.cfg.get("project_profiles", [])
         if len(profiles) <= 1:
-            messagebox.showwarning("삭제 불가", "프로젝트 목록은 최소 1개 이상 있어야 합니다.", parent=self.pipeline_window)
+            messagebox.showwarning("삭제 불가", "프로젝트는 최소 1개 이상 있어야 합니다.", parent=self.pipeline_window)
             return
         active = self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0))
-        name = str(profiles[active].get("name", "") or "").strip() or "프로젝트"
-        if not messagebox.askyesno("삭제 확인", f"'{name}' 프로젝트 목록을 삭제할까요?", parent=self.pipeline_window):
+        name = str(profiles[active].get("project_name", "") or "").strip() or "프로젝트"
+        if not messagebox.askyesno("삭제 확인", f"'{name}' 프로젝트를 삭제할까요?", parent=self.pipeline_window):
             return
         profiles.pop(active)
         self.cfg["active_project_profile"] = self._clamp_project_profile_index(active, default=0)
+        for step in self.cfg.get("pipeline_steps", []) or []:
+            try:
+                idx = int(step.get("project_profile", 0))
+            except Exception:
+                idx = 0
+            if idx > active:
+                step["project_profile"] = idx - 1
+            elif idx == active:
+                step["project_profile"] = min(active, max(len(profiles) - 1, 0))
         self.save_config()
         self._sync_project_profile_ui()
-        self.log(f"🗑 프로젝트 목록 삭제: {name}")
+        self._sync_pipeline_step_ui()
+        self.log(f"🗑 프로젝트 삭제: {name}")
 
     def on_save_project_profile_detail(self, event=None):
         self._save_pipeline_profile_fields()
@@ -1319,6 +1319,280 @@ class FlowVisionApp:
             self.lbl_pipeline_profile_status.config(
                 text=f"저장 완료 | 현재 선택: {self._project_profile_preview(self.cfg['project_profiles'][self._clamp_project_profile_index(self.cfg.get('active_project_profile', 0))])}"
             )
+        self._sync_pipeline_step_ui()
+
+    def _pipeline_type_labels(self):
+        return {
+            "prompt": "프롬프트 자동화",
+            "asset": "S반복 자동화",
+            "download": "다운로드 자동화",
+        }
+
+    def _pipeline_type_values(self):
+        return {v: k for k, v in self._pipeline_type_labels().items()}
+
+    def _pipeline_mode_labels(self):
+        return {"image": "이미지", "video": "동영상"}
+
+    def _pipeline_mode_values(self):
+        return {v: k for k, v in self._pipeline_mode_labels().items()}
+
+    def _default_pipeline_step(self, step_no=1):
+        return {
+            "name": f"{step_no}번 작업",
+            "type": "prompt",
+            "project_profile": 0,
+            "start": 1,
+            "end": 1,
+            "manual_selection": "",
+            "interval_seconds": int(self.cfg.get("interval_seconds", 180) or 180),
+            "media_mode": "image",
+            "download_mode": "video",
+            "quality": "1080P",
+            "output_dir": "",
+        }
+
+    def _clamp_pipeline_step_index(self, idx, default=0):
+        steps = self.cfg.get("pipeline_steps", [])
+        if not steps:
+            return 0
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            idx = default
+        return max(0, min(len(steps) - 1, idx))
+
+    def _pipeline_profile_names(self):
+        return [self._project_profile_preview(item) for item in self.cfg.get("project_profiles", [])]
+
+    def _make_unique_pipeline_step_name(self, base_name):
+        base_name = str(base_name or "").strip() or "작업"
+        existing = {str(item.get("name", "")).strip() for item in self.cfg.get("pipeline_steps", [])}
+        if base_name not in existing:
+            return base_name
+        suffix = 2
+        while True:
+            candidate = f"{base_name} ({suffix})"
+            if candidate not in existing:
+                return candidate
+            suffix += 1
+
+    def _ensure_pipeline_steps(self):
+        changed = False
+        raw_steps = self.cfg.get("pipeline_steps", [])
+        normalized = []
+        if isinstance(raw_steps, list):
+            for idx, item in enumerate(raw_steps, start=1):
+                if not isinstance(item, dict):
+                    continue
+                step_type = str(item.get("type", "prompt") or "prompt").strip().lower()
+                if step_type not in {"prompt", "asset", "download"}:
+                    step_type = "prompt"
+                media_mode = str(item.get("media_mode", "image") or "image").strip().lower()
+                if media_mode not in {"image", "video"}:
+                    media_mode = "image"
+                download_mode = str(item.get("download_mode", "video") or "video").strip().lower()
+                if download_mode not in {"image", "video"}:
+                    download_mode = "video"
+                try:
+                    project_profile = self._clamp_project_profile_index(item.get("project_profile", 0))
+                except Exception:
+                    project_profile = 0
+                try:
+                    start = max(1, int(item.get("start", 1)))
+                except Exception:
+                    start = 1
+                try:
+                    end = max(1, int(item.get("end", start)))
+                except Exception:
+                    end = start
+                if start > end:
+                    start, end = end, start
+                try:
+                    interval_seconds = max(1, int(item.get("interval_seconds", self.cfg.get("interval_seconds", 180) or 180)))
+                except Exception:
+                    interval_seconds = int(self.cfg.get("interval_seconds", 180) or 180)
+                normalized.append({
+                    "name": str(item.get("name", "") or f"{idx}번 작업").strip() or f"{idx}번 작업",
+                    "type": step_type,
+                    "project_profile": project_profile,
+                    "start": start,
+                    "end": end,
+                    "manual_selection": str(item.get("manual_selection", "") or "").strip(),
+                    "interval_seconds": interval_seconds,
+                    "media_mode": media_mode,
+                    "download_mode": download_mode,
+                    "quality": str(item.get("quality", "1080P") or "1080P").strip() or "1080P",
+                    "output_dir": str(item.get("output_dir", "") or "").strip(),
+                })
+        if not normalized:
+            normalized = [self._default_pipeline_step(1)]
+            changed = True
+        if raw_steps != normalized:
+            self.cfg["pipeline_steps"] = normalized
+            changed = True
+        active = self._clamp_pipeline_step_index(self.cfg.get("active_pipeline_step", 0))
+        if self.cfg.get("active_pipeline_step") != active:
+            self.cfg["active_pipeline_step"] = active
+            changed = True
+        if changed:
+            self.save_config()
+
+    def _pipeline_step_preview(self, step, idx):
+        type_label = self._pipeline_type_labels().get(step.get("type", "prompt"), "프롬프트 자동화")
+        return f"{idx+1}. {step.get('name', f'{idx+1}번 작업')} | {type_label}"
+
+    def _sync_pipeline_step_ui(self):
+        if not hasattr(self, "pipeline_step_listbox"):
+            return
+        steps = self.cfg.get("pipeline_steps", [])
+        self.pipeline_step_listbox.delete(0, "end")
+        for idx, step in enumerate(steps):
+            self.pipeline_step_listbox.insert("end", self._pipeline_step_preview(step, idx))
+        active = self._clamp_pipeline_step_index(self.cfg.get("active_pipeline_step", 0))
+        profiles = self._pipeline_profile_names()
+        if hasattr(self, "combo_pipeline_project_profile"):
+            self.combo_pipeline_project_profile["values"] = profiles
+        if steps:
+            self.pipeline_step_listbox.selection_clear(0, "end")
+            self.pipeline_step_listbox.selection_set(active)
+            self.pipeline_step_listbox.activate(active)
+            self.pipeline_step_listbox.see(active)
+            step = steps[active]
+        else:
+            step = self._default_pipeline_step(1)
+        if hasattr(self, "pipeline_step_name_var"):
+            self.pipeline_step_name_var.set(str(step.get("name", "") or ""))
+        if hasattr(self, "pipeline_step_type_var"):
+            self.pipeline_step_type_var.set(self._pipeline_type_labels().get(step.get("type", "prompt"), "프롬프트 자동화"))
+        if hasattr(self, "pipeline_step_start_var"):
+            self.pipeline_step_start_var.set(str(step.get("start", 1)))
+        if hasattr(self, "pipeline_step_end_var"):
+            self.pipeline_step_end_var.set(str(step.get("end", 1)))
+        if hasattr(self, "pipeline_step_manual_var"):
+            self.pipeline_step_manual_var.set(str(step.get("manual_selection", "") or ""))
+        if hasattr(self, "pipeline_step_interval_var"):
+            self.pipeline_step_interval_var.set(str(step.get("interval_seconds", self.cfg.get("interval_seconds", 180) or 180)))
+        if hasattr(self, "pipeline_step_media_mode_var"):
+            self.pipeline_step_media_mode_var.set(self._pipeline_mode_labels().get(step.get("media_mode", "image"), "이미지"))
+        if hasattr(self, "pipeline_step_download_mode_var"):
+            self.pipeline_step_download_mode_var.set(self._pipeline_mode_labels().get(step.get("download_mode", "video"), "동영상"))
+        if hasattr(self, "pipeline_step_quality_var"):
+            self.pipeline_step_quality_var.set(str(step.get("quality", "1080P") or "1080P"))
+        if hasattr(self, "pipeline_step_output_dir_var"):
+            self.pipeline_step_output_dir_var.set(str(step.get("output_dir", "") or ""))
+        if hasattr(self, "combo_pipeline_project_profile") and profiles:
+            profile_idx = self._clamp_project_profile_index(step.get("project_profile", 0))
+            self.combo_pipeline_project_profile.current(profile_idx)
+        if hasattr(self, "lbl_pipeline_step_status"):
+            self.lbl_pipeline_step_status.config(text=f"저장된 작업 단계 {len(steps)}개")
+
+    def _save_pipeline_step_fields(self, event=None):
+        if not hasattr(self, "pipeline_step_name_var"):
+            return
+        steps = self.cfg.get("pipeline_steps", [])
+        if not steps:
+            return
+        active = self._clamp_pipeline_step_index(self.cfg.get("active_pipeline_step", 0))
+        step = steps[active]
+        type_value = self._pipeline_type_values().get(str(self.pipeline_step_type_var.get() or "").strip(), "prompt")
+        media_mode = self._pipeline_mode_values().get(str(self.pipeline_step_media_mode_var.get() or "").strip(), "image")
+        download_mode = self._pipeline_mode_values().get(str(self.pipeline_step_download_mode_var.get() or "").strip(), "video")
+        try:
+            start = max(1, int(str(self.pipeline_step_start_var.get() or "1").strip()))
+        except Exception:
+            start = 1
+        try:
+            end = max(1, int(str(self.pipeline_step_end_var.get() or start).strip()))
+        except Exception:
+            end = start
+        if start > end:
+            start, end = end, start
+        try:
+            interval_seconds = max(1, int(str(self.pipeline_step_interval_var.get() or self.cfg.get("interval_seconds", 180)).strip()))
+        except Exception:
+            interval_seconds = int(self.cfg.get("interval_seconds", 180) or 180)
+        profile_idx = 0
+        if hasattr(self, "combo_pipeline_project_profile") and self.combo_pipeline_project_profile.current() >= 0:
+            profile_idx = self.combo_pipeline_project_profile.current()
+        step["name"] = str(self.pipeline_step_name_var.get() or "").strip() or f"{active+1}번 작업"
+        step["type"] = type_value
+        step["project_profile"] = self._clamp_project_profile_index(profile_idx)
+        step["start"] = start
+        step["end"] = end
+        step["manual_selection"] = str(self.pipeline_step_manual_var.get() or "").strip()
+        step["interval_seconds"] = interval_seconds
+        step["media_mode"] = media_mode
+        step["download_mode"] = download_mode
+        step["quality"] = str(self.pipeline_step_quality_var.get() or "").strip() or "1080P"
+        step["output_dir"] = str(self.pipeline_step_output_dir_var.get() or "").strip()
+        self.save_config()
+        self._sync_pipeline_step_ui()
+        if hasattr(self, "lbl_pipeline_step_status"):
+            self.lbl_pipeline_step_status.config(text=f"저장 완료 | 현재 단계: {step['name']}")
+
+    def on_pipeline_step_select(self, event=None):
+        if not hasattr(self, "pipeline_step_listbox"):
+            return
+        try:
+            selection = self.pipeline_step_listbox.curselection()
+            if not selection:
+                return
+            idx = int(selection[0])
+        except Exception:
+            return
+        self.cfg["active_pipeline_step"] = self._clamp_pipeline_step_index(idx)
+        self.save_config()
+        self._sync_pipeline_step_ui()
+
+    def on_add_pipeline_step(self):
+        steps = self.cfg.get("pipeline_steps", [])
+        steps.append(self._default_pipeline_step(len(steps) + 1))
+        self.cfg["active_pipeline_step"] = len(steps) - 1
+        self.save_config()
+        self._sync_pipeline_step_ui()
+        self.log(f"🧩 이어달리기 작업 추가: {len(steps)}번 작업")
+
+    def on_duplicate_pipeline_step(self):
+        steps = self.cfg.get("pipeline_steps", [])
+        if not steps:
+            return
+        active = self._clamp_pipeline_step_index(self.cfg.get("active_pipeline_step", 0))
+        copied = dict(steps[active])
+        copied["name"] = self._make_unique_pipeline_step_name(str(copied.get("name", "") or f"{active+1}번 작업 복사"))
+        steps.insert(active + 1, copied)
+        self.cfg["active_pipeline_step"] = active + 1
+        self.save_config()
+        self._sync_pipeline_step_ui()
+        self.log(f"📄 이어달리기 작업 복제: {copied['name']}")
+
+    def on_delete_pipeline_step(self):
+        steps = self.cfg.get("pipeline_steps", [])
+        if len(steps) <= 1:
+            messagebox.showwarning("삭제 불가", "작업 단계는 최소 1개 이상 있어야 합니다.", parent=self.pipeline_window)
+            return
+        active = self._clamp_pipeline_step_index(self.cfg.get("active_pipeline_step", 0))
+        name = str(steps[active].get("name", "") or f"{active+1}번 작업")
+        if not messagebox.askyesno("삭제 확인", f"'{name}' 작업을 삭제할까요?", parent=self.pipeline_window):
+            return
+        steps.pop(active)
+        self.cfg["active_pipeline_step"] = self._clamp_pipeline_step_index(active, default=0)
+        self.save_config()
+        self._sync_pipeline_step_ui()
+        self.log(f"🗑 이어달리기 작업 삭제: {name}")
+
+    def on_move_pipeline_step(self, direction):
+        steps = self.cfg.get("pipeline_steps", [])
+        if len(steps) <= 1:
+            return
+        active = self._clamp_pipeline_step_index(self.cfg.get("active_pipeline_step", 0))
+        target = active + int(direction)
+        if not (0 <= target < len(steps)):
+            return
+        steps[active], steps[target] = steps[target], steps[active]
+        self.cfg["active_pipeline_step"] = target
+        self.save_config()
+        self._sync_pipeline_step_ui()
 
     def _clamp_slot_index(self, idx, default=0):
         slots = self.cfg.get("prompt_slots", [])
@@ -4433,22 +4707,22 @@ class FlowVisionApp:
             highlightthickness=0,
         )
         self.pipeline_step_listbox.pack(fill="both", expand=True, padx=16, pady=(12, 10))
-        self.pipeline_step_listbox.insert("end", "1. 이어달리기 작업 추가 예정")
-        self.pipeline_step_listbox.insert("end", "2. 프롬프트 / S반복 / 다운로드 단계 저장 예정")
-        self.pipeline_step_listbox.insert("end", "3. 단계별 수정 / 삭제 / 순서 변경 예정")
+        self.pipeline_step_listbox.bind("<<ListboxSelect>>", self.on_pipeline_step_select)
 
         left_btns = tk.Frame(left_card, bg=self.color_card)
         left_btns.pack(fill="x", padx=16, pady=(0, 16))
-        ttk.Button(left_btns, text="➕ 작업 추가", state="disabled").pack(side="left")
-        ttk.Button(left_btns, text="📄 복제", state="disabled").pack(side="left", padx=6)
-        ttk.Button(left_btns, text="🗑 삭제", state="disabled").pack(side="left")
+        ttk.Button(left_btns, text="➕ 작업 추가", command=self.on_add_pipeline_step).pack(side="left")
+        ttk.Button(left_btns, text="📄 복제", command=self.on_duplicate_pipeline_step).pack(side="left", padx=6)
+        ttk.Button(left_btns, text="🗑 삭제", command=self.on_delete_pipeline_step).pack(side="left")
+        ttk.Button(left_btns, text="▲", width=3, command=lambda: self.on_move_pipeline_step(-1)).pack(side="right")
+        ttk.Button(left_btns, text="▼", width=3, command=lambda: self.on_move_pipeline_step(1)).pack(side="right", padx=(0, 6))
 
         right_card = tk.Frame(right, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
         right_card.pack(fill="both", expand=True)
         tk.Label(right_card, text="이어달리기 설계 화면", font=self.font_section, bg=self.color_card, fg=self.color_text).pack(anchor="w", padx=18, pady=(16, 8))
         tk.Label(
             right_card,
-            text="이번 단계는 기능을 안 건드리고 창만 먼저 분리했습니다. 다음 단계에서 프로젝트 목록, 단계 설정, 시작/일시정지/재개를 붙일 예정입니다.",
+            text="이번 단계는 기존 기능은 건드리지 않고, 이어달리기 작업 단계 저장 UI만 먼저 붙였습니다.",
             font=self.font_body,
             bg=self.color_card,
             fg=self.color_text_sec,
@@ -4482,10 +4756,10 @@ class FlowVisionApp:
             highlightthickness=0,
             exportselection=False,
         )
-        self.project_profile_listbox.grid(row=0, column=0, rowspan=5, sticky="nsew", padx=(0, 12))
+        self.project_profile_listbox.grid(row=0, column=0, rowspan=3, sticky="nsew", padx=(0, 12))
         self.project_profile_listbox.bind("<<ListboxSelect>>", self.on_pipeline_profile_select)
 
-        tk.Label(profile_body, text="목록 이름", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=0, column=1, sticky="w")
+        tk.Label(profile_body, text="프로젝트 이름", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=0, column=1, sticky="w")
         self.pipeline_profile_name_var = tk.StringVar()
         self.entry_pipeline_profile_name = tk.Entry(
             profile_body,
@@ -4513,26 +4787,102 @@ class FlowVisionApp:
         self.entry_pipeline_profile_url.bind("<FocusOut>", self.on_save_project_profile_detail)
         self.entry_pipeline_profile_url.bind("<Return>", self.on_save_project_profile_detail)
 
-        tk.Label(profile_body, text="프로젝트 이름", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=4, column=1, sticky="w")
-        self.pipeline_profile_project_var = tk.StringVar()
-        self.entry_pipeline_profile_project = tk.Entry(
-            profile_body,
-            textvariable=self.pipeline_profile_project_var,
-            bg=self.color_input_bg,
-            fg=self.color_input_fg,
-            insertbackground=self.color_input_fg,
-            font=self.font_body,
-        )
-        self.entry_pipeline_profile_project.grid(row=5, column=1, sticky="ew", pady=(2, 8), ipady=3)
-        self.entry_pipeline_profile_project.bind("<FocusOut>", self.on_save_project_profile_detail)
-        self.entry_pipeline_profile_project.bind("<Return>", self.on_save_project_profile_detail)
-
         profile_btn_row = tk.Frame(profile_card, bg="#13233A")
         profile_btn_row.pack(fill="x", padx=14, pady=(0, 10))
         ttk.Button(profile_btn_row, text="💾 프로젝트 저장", command=self.on_save_project_profile_detail).pack(side="left")
         self.lbl_pipeline_profile_status = tk.Label(profile_btn_row, text="", font=self.font_small, bg="#13233A", fg=self.color_text_sec)
         self.lbl_pipeline_profile_status.pack(side="left", padx=(10, 0))
         self._sync_project_profile_ui()
+
+        step_detail_card = tk.Frame(right_card, bg="#13233A", highlightbackground="#28405F", highlightthickness=1)
+        step_detail_card.pack(fill="x", padx=18, pady=(0, 14))
+        tk.Label(step_detail_card, text="작업 상세 설정", font=self.font_body_bold, bg="#13233A", fg=self.color_info).pack(anchor="w", padx=14, pady=(12, 8))
+
+        step_form = tk.Frame(step_detail_card, bg="#13233A")
+        step_form.pack(fill="x", padx=14, pady=(0, 10))
+        step_form.grid_columnconfigure(1, weight=1)
+        step_form.grid_columnconfigure(3, weight=1)
+
+        self.pipeline_step_name_var = tk.StringVar()
+        self.pipeline_step_type_var = tk.StringVar()
+        self.pipeline_step_start_var = tk.StringVar()
+        self.pipeline_step_end_var = tk.StringVar()
+        self.pipeline_step_manual_var = tk.StringVar()
+        self.pipeline_step_interval_var = tk.StringVar()
+        self.pipeline_step_media_mode_var = tk.StringVar()
+        self.pipeline_step_download_mode_var = tk.StringVar()
+        self.pipeline_step_quality_var = tk.StringVar()
+        self.pipeline_step_output_dir_var = tk.StringVar()
+
+        tk.Label(step_form, text="작업 이름", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=0, column=0, sticky="w")
+        ent_step_name = tk.Entry(step_form, textvariable=self.pipeline_step_name_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
+        ent_step_name.grid(row=0, column=1, sticky="ew", pady=(0, 8), padx=(6, 14), ipady=3)
+
+        tk.Label(step_form, text="작업 종류", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=0, column=2, sticky="w")
+        self.combo_pipeline_step_type = ttk.Combobox(step_form, textvariable=self.pipeline_step_type_var, state="readonly", values=tuple(self._pipeline_type_labels().values()), font=self.font_small)
+        self.combo_pipeline_step_type.grid(row=0, column=3, sticky="ew", pady=(0, 8))
+
+        tk.Label(step_form, text="프로젝트", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=1, column=0, sticky="w")
+        self.combo_pipeline_project_profile = ttk.Combobox(step_form, state="readonly", font=self.font_small)
+        self.combo_pipeline_project_profile.grid(row=1, column=1, sticky="ew", pady=(0, 8), padx=(6, 14))
+
+        tk.Label(step_form, text="작업 간격(초)", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=1, column=2, sticky="w")
+        ent_step_interval = tk.Entry(step_form, textvariable=self.pipeline_step_interval_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
+        ent_step_interval.grid(row=1, column=3, sticky="ew", pady=(0, 8), ipady=3)
+
+        tk.Label(step_form, text="시작 번호", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=2, column=0, sticky="w")
+        ent_step_start = tk.Entry(step_form, textvariable=self.pipeline_step_start_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
+        ent_step_start.grid(row=2, column=1, sticky="ew", pady=(0, 8), padx=(6, 14), ipady=3)
+
+        tk.Label(step_form, text="끝 번호", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=2, column=2, sticky="w")
+        ent_step_end = tk.Entry(step_form, textvariable=self.pipeline_step_end_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
+        ent_step_end.grid(row=2, column=3, sticky="ew", pady=(0, 8), ipady=3)
+
+        tk.Label(step_form, text="개별 번호", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=3, column=0, sticky="w")
+        ent_step_manual = tk.Entry(step_form, textvariable=self.pipeline_step_manual_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small)
+        ent_step_manual.grid(row=3, column=1, sticky="ew", pady=(0, 8), padx=(6, 14), ipady=3)
+
+        tk.Label(step_form, text="기본값 모드", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=3, column=2, sticky="w")
+        self.combo_pipeline_media_mode = ttk.Combobox(step_form, textvariable=self.pipeline_step_media_mode_var, state="readonly", values=tuple(self._pipeline_mode_labels().values()), font=self.font_small)
+        self.combo_pipeline_media_mode.grid(row=3, column=3, sticky="ew", pady=(0, 8))
+
+        tk.Label(step_form, text="다운로드 모드", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=4, column=0, sticky="w")
+        self.combo_pipeline_download_mode = ttk.Combobox(step_form, textvariable=self.pipeline_step_download_mode_var, state="readonly", values=tuple(self._pipeline_mode_labels().values()), font=self.font_small)
+        self.combo_pipeline_download_mode.grid(row=4, column=1, sticky="ew", pady=(0, 8), padx=(6, 14))
+
+        tk.Label(step_form, text="품질", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=4, column=2, sticky="w")
+        ent_step_quality = tk.Entry(step_form, textvariable=self.pipeline_step_quality_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
+        ent_step_quality.grid(row=4, column=3, sticky="ew", pady=(0, 8), ipady=3)
+
+        tk.Label(step_form, text="저장 폴더", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=5, column=0, sticky="w")
+        ent_step_output = tk.Entry(step_form, textvariable=self.pipeline_step_output_dir_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small)
+        ent_step_output.grid(row=5, column=1, columnspan=3, sticky="ew", pady=(0, 8), padx=(6, 0), ipady=3)
+
+        for widget in (
+            ent_step_name,
+            ent_step_interval,
+            ent_step_start,
+            ent_step_end,
+            ent_step_manual,
+            ent_step_quality,
+            ent_step_output,
+            self.combo_pipeline_step_type,
+            self.combo_pipeline_project_profile,
+            self.combo_pipeline_media_mode,
+            self.combo_pipeline_download_mode,
+        ):
+            widget.bind("<FocusOut>", self._save_pipeline_step_fields)
+            if isinstance(widget, ttk.Combobox):
+                widget.bind("<<ComboboxSelected>>", self._save_pipeline_step_fields)
+            else:
+                widget.bind("<Return>", self._save_pipeline_step_fields)
+
+        step_btn_row = tk.Frame(step_detail_card, bg="#13233A")
+        step_btn_row.pack(fill="x", padx=14, pady=(0, 12))
+        ttk.Button(step_btn_row, text="💾 작업 저장", command=self._save_pipeline_step_fields).pack(side="left")
+        self.lbl_pipeline_step_status = tk.Label(step_btn_row, text="", font=self.font_small, bg="#13233A", fg=self.color_text_sec)
+        self.lbl_pipeline_step_status.pack(side="left", padx=(10, 0))
+        self._sync_pipeline_step_ui()
 
         info_box = tk.Frame(right_card, bg="#13233A", highlightbackground="#28405F", highlightthickness=1)
         info_box.pack(fill="x", padx=18, pady=(0, 14))
