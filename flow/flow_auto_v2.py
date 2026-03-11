@@ -1340,11 +1340,124 @@ class FlowVisionApp:
     def _pipeline_mode_values(self):
         return {v: k for k, v in self._pipeline_mode_labels().items()}
 
+    def _pipeline_download_quality_options(self, mode="video"):
+        mode = "image" if str(mode or "").strip().lower() == "image" else "video"
+        if mode == "image":
+            return ("1K", "2K", "4K")
+        return ("1080P", "720P", "4K")
+
+    def _normalize_pipeline_quality(self, quality, mode="video"):
+        quality = str(quality or "").strip().upper()
+        allowed = self._pipeline_download_quality_options(mode)
+        if quality in allowed:
+            return quality
+        if mode == "image":
+            return "4K"
+        return "1080P"
+
+    def _prompt_slot_names(self):
+        return [str(slot.get("name", "") or f"슬롯 {idx+1}") for idx, slot in enumerate(self.cfg.get("prompt_slots", []) or [])]
+
+    def _load_prompts_from_file_name(self, file_name):
+        file_name = str(file_name or "").strip()
+        if not file_name:
+            return []
+        path = self.base / file_name
+        if not path.exists():
+            return []
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            return []
+        sep = self.cfg.get("prompts_separator", "|||")
+        return [part.strip() for part in raw.split(sep) if part.strip()]
+
+    def _pipeline_prompt_slot_summary(self, slot_idx):
+        slots = self.cfg.get("prompt_slots", []) or []
+        if not slots:
+            return "프롬프트 파일이 없습니다."
+        slot_idx = self._clamp_slot_index(slot_idx)
+        slot = slots[slot_idx]
+        file_name = str(slot.get("file", "") or "").strip()
+        prompts = self._load_prompts_from_file_name(file_name)
+        if not file_name:
+            return "프롬프트 파일 연결이 없습니다."
+        if not prompts:
+            return f"{file_name} | 프롬프트 없음"
+        return f"{file_name} | 총 {len(prompts)}개 | 1~{len(prompts)}"
+
+    def _pipeline_active_step(self):
+        steps = self.cfg.get("pipeline_steps", []) or []
+        if not steps:
+            return None, None
+        active = self._clamp_pipeline_step_index(self.cfg.get("active_pipeline_step", 0))
+        return steps[active], active
+
+    def _refresh_pipeline_step_editor_state(self):
+        step, _active = self._pipeline_active_step()
+        step_type = "prompt"
+        download_mode = "video"
+        if step is not None:
+            step_type = str(step.get("type", "prompt") or "prompt").strip().lower()
+            download_mode = str(step.get("download_mode", "video") or "video").strip().lower()
+        elif hasattr(self, "pipeline_step_type_var"):
+            step_type = self._pipeline_type_values().get(str(self.pipeline_step_type_var.get() or "").strip(), "prompt")
+            download_mode = self._pipeline_mode_values().get(str(self.pipeline_step_download_mode_var.get() or "").strip(), "video")
+
+        if step_type == "prompt":
+            fixed_mode = "image"
+        elif step_type == "asset":
+            fixed_mode = "video"
+        else:
+            fixed_mode = "image" if download_mode == "image" else "video"
+
+        if hasattr(self, "pipeline_step_media_mode_var"):
+            self.pipeline_step_media_mode_var.set(self._pipeline_mode_labels().get(fixed_mode, "이미지"))
+        if hasattr(self, "combo_pipeline_media_mode"):
+            self.combo_pipeline_media_mode.config(state="disabled")
+
+        prompt_enabled = (step_type == "prompt")
+        download_enabled = (step_type == "download")
+        if hasattr(self, "combo_pipeline_prompt_slot"):
+            self.combo_pipeline_prompt_slot.config(state="readonly" if prompt_enabled else "disabled")
+        if hasattr(self, "lbl_pipeline_prompt_slot"):
+            self.lbl_pipeline_prompt_slot.config(fg=self.color_text if prompt_enabled else self.color_text_sec)
+        if hasattr(self, "lbl_pipeline_prompt_range"):
+            if prompt_enabled:
+                slot_idx = 0
+                if hasattr(self, "combo_pipeline_prompt_slot") and self.combo_pipeline_prompt_slot.current() >= 0:
+                    slot_idx = self.combo_pipeline_prompt_slot.current()
+                elif step is not None:
+                    slot_idx = self._clamp_slot_index(step.get("prompt_slot", self.cfg.get("active_prompt_slot", 0)))
+                self.lbl_pipeline_prompt_range.config(text=self._pipeline_prompt_slot_summary(slot_idx), fg=self.color_info)
+            else:
+                self.lbl_pipeline_prompt_range.config(text="프롬프트 자동화를 선택하면 파일과 범위가 표시됩니다.", fg=self.color_text_sec)
+
+        if hasattr(self, "combo_pipeline_download_mode"):
+            self.combo_pipeline_download_mode.config(state="readonly" if download_enabled else "disabled")
+        if hasattr(self, "combo_pipeline_quality"):
+            values = self._pipeline_download_quality_options(download_mode if download_enabled else "video")
+            self.combo_pipeline_quality["values"] = values
+            current_quality = str(self.pipeline_step_quality_var.get() or "").strip()
+            normalized_quality = self._normalize_pipeline_quality(current_quality, download_mode if download_enabled else "video")
+            self.pipeline_step_quality_var.set(normalized_quality)
+            self.combo_pipeline_quality.config(state="readonly" if download_enabled else "disabled")
+        if hasattr(self, "lbl_pipeline_quality"):
+            self.lbl_pipeline_quality.config(fg=self.color_text if download_enabled else self.color_text_sec)
+
+        if hasattr(self, "entry_pipeline_output_dir"):
+            self.entry_pipeline_output_dir.config(state="readonly")
+        if hasattr(self, "btn_pipeline_output_dir"):
+            self.btn_pipeline_output_dir.config(state="normal" if download_enabled else "disabled")
+        if hasattr(self, "lbl_pipeline_output_dir"):
+            self.lbl_pipeline_output_dir.config(fg=self.color_text if download_enabled else self.color_text_sec)
+
     def _default_pipeline_step(self, step_no=1):
         return {
             "name": f"{step_no}번 작업",
             "type": "prompt",
             "project_profile": 0,
+            "prompt_slot": self._clamp_slot_index(self.cfg.get("active_prompt_slot", 0)),
             "start": 1,
             "end": 1,
             "manual_selection": "",
@@ -1419,13 +1532,14 @@ class FlowVisionApp:
                     "name": str(item.get("name", "") or f"{idx}번 작업").strip() or f"{idx}번 작업",
                     "type": step_type,
                     "project_profile": project_profile,
+                    "prompt_slot": self._clamp_slot_index(item.get("prompt_slot", self.cfg.get("active_prompt_slot", 0))),
                     "start": start,
                     "end": end,
                     "manual_selection": str(item.get("manual_selection", "") or "").strip(),
                     "interval_seconds": interval_seconds,
-                    "media_mode": media_mode,
+                    "media_mode": "image" if step_type == "prompt" else ("video" if step_type == "asset" else media_mode),
                     "download_mode": download_mode,
-                    "quality": str(item.get("quality", "1080P") or "1080P").strip() or "1080P",
+                    "quality": self._normalize_pipeline_quality(item.get("quality", "1080P"), download_mode),
                     "output_dir": str(item.get("output_dir", "") or "").strip(),
                 })
         if not normalized:
@@ -1468,6 +1582,11 @@ class FlowVisionApp:
             self.pipeline_step_name_var.set(str(step.get("name", "") or ""))
         if hasattr(self, "pipeline_step_type_var"):
             self.pipeline_step_type_var.set(self._pipeline_type_labels().get(step.get("type", "prompt"), "프롬프트 자동화"))
+        if hasattr(self, "combo_pipeline_prompt_slot"):
+            slot_names = self._prompt_slot_names()
+            self.combo_pipeline_prompt_slot["values"] = slot_names
+            if slot_names:
+                self.combo_pipeline_prompt_slot.current(self._clamp_slot_index(step.get("prompt_slot", self.cfg.get("active_prompt_slot", 0))))
         if hasattr(self, "pipeline_step_start_var"):
             self.pipeline_step_start_var.set(str(step.get("start", 1)))
         if hasattr(self, "pipeline_step_end_var"):
@@ -1487,6 +1606,7 @@ class FlowVisionApp:
         if hasattr(self, "combo_pipeline_project_profile") and profiles:
             profile_idx = self._clamp_project_profile_index(step.get("project_profile", 0))
             self.combo_pipeline_project_profile.current(profile_idx)
+        self._refresh_pipeline_step_editor_state()
         if hasattr(self, "lbl_pipeline_step_status"):
             self.lbl_pipeline_step_status.config(text=f"저장된 작업 단계 {len(steps)}개")
 
@@ -1499,8 +1619,10 @@ class FlowVisionApp:
         active = self._clamp_pipeline_step_index(self.cfg.get("active_pipeline_step", 0))
         step = steps[active]
         type_value = self._pipeline_type_values().get(str(self.pipeline_step_type_var.get() or "").strip(), "prompt")
-        media_mode = self._pipeline_mode_values().get(str(self.pipeline_step_media_mode_var.get() or "").strip(), "image")
         download_mode = self._pipeline_mode_values().get(str(self.pipeline_step_download_mode_var.get() or "").strip(), "video")
+        prompt_slot_idx = self._clamp_slot_index(step.get("prompt_slot", self.cfg.get("active_prompt_slot", 0)))
+        if hasattr(self, "combo_pipeline_prompt_slot") and self.combo_pipeline_prompt_slot.current() >= 0:
+            prompt_slot_idx = self.combo_pipeline_prompt_slot.current()
         try:
             start = max(1, int(str(self.pipeline_step_start_var.get() or "1").strip()))
         except Exception:
@@ -1518,21 +1640,49 @@ class FlowVisionApp:
         profile_idx = 0
         if hasattr(self, "combo_pipeline_project_profile") and self.combo_pipeline_project_profile.current() >= 0:
             profile_idx = self.combo_pipeline_project_profile.current()
+        media_mode = "image" if type_value == "prompt" else ("video" if type_value == "asset" else ("image" if download_mode == "image" else "video"))
         step["name"] = str(self.pipeline_step_name_var.get() or "").strip() or f"{active+1}번 작업"
         step["type"] = type_value
         step["project_profile"] = self._clamp_project_profile_index(profile_idx)
+        step["prompt_slot"] = prompt_slot_idx
         step["start"] = start
         step["end"] = end
         step["manual_selection"] = str(self.pipeline_step_manual_var.get() or "").strip()
         step["interval_seconds"] = interval_seconds
         step["media_mode"] = media_mode
         step["download_mode"] = download_mode
-        step["quality"] = str(self.pipeline_step_quality_var.get() or "").strip() or "1080P"
-        step["output_dir"] = str(self.pipeline_step_output_dir_var.get() or "").strip()
+        step["quality"] = self._normalize_pipeline_quality(self.pipeline_step_quality_var.get(), download_mode)
+        step["output_dir"] = str(self.pipeline_step_output_dir_var.get() or "").strip() if type_value == "download" else str(step.get("output_dir", "") or "").strip()
         self.save_config()
         self._sync_pipeline_step_ui()
         if hasattr(self, "lbl_pipeline_step_status"):
             self.lbl_pipeline_step_status.config(text=f"저장 완료 | 현재 단계: {step['name']}")
+
+    def on_pipeline_step_type_change(self, event=None):
+        self._save_pipeline_step_fields()
+
+    def on_pipeline_step_download_mode_change(self, event=None):
+        self._save_pipeline_step_fields()
+
+    def on_pipeline_step_prompt_slot_change(self, event=None):
+        self._refresh_pipeline_step_editor_state()
+        self._save_pipeline_step_fields()
+
+    def on_pick_pipeline_output_dir(self):
+        self._save_pipeline_step_fields()
+        step, _active = self._pipeline_active_step()
+        initial = ""
+        if step is not None:
+            initial = str(step.get("output_dir", "") or "").strip()
+        if not initial:
+            initial = str(self.cfg.get("download_output_dir", "") or "").strip()
+        if not initial:
+            initial = str(self._resolve_download_output_dir())
+        picked = filedialog.askdirectory(initialdir=initial, title="이어달리기 저장 폴더 선택")
+        if not picked:
+            return
+        self.pipeline_step_output_dir_var.set(picked)
+        self._save_pipeline_step_fields()
 
     def on_pipeline_step_select(self, event=None):
         if not hasattr(self, "pipeline_step_listbox"):
@@ -1672,7 +1822,17 @@ class FlowVisionApp:
             self.cfg["prompt_manual_selection"] = prompt_selection
             if hasattr(self, "prompt_manual_selection_var"):
                 self.prompt_manual_selection_var.set(prompt_selection)
-            self.cfg["prompt_media_mode"] = str(step.get("media_mode", "image") or "image")
+            prompt_slot_idx = self._clamp_slot_index(step.get("prompt_slot", self.cfg.get("active_prompt_slot", 0)))
+            self.cfg["active_prompt_slot"] = prompt_slot_idx
+            prompt_slots = self.cfg.get("prompt_slots", []) or []
+            if prompt_slots:
+                self.cfg["prompts_file"] = str(prompt_slots[prompt_slot_idx].get("file", self.cfg.get("prompts_file", "flow_prompts.txt")) or self.cfg.get("prompts_file", "flow_prompts.txt"))
+                if hasattr(self, "combo_slots"):
+                    try:
+                        self.combo_slots.current(prompt_slot_idx)
+                    except Exception:
+                        pass
+            self.cfg["prompt_media_mode"] = "image"
             if hasattr(self, "prompt_media_mode_var"):
                 self.prompt_media_mode_var.set(PROMPT_MEDIA_LABELS.get(self.cfg["prompt_media_mode"], "이미지"))
             target_key = "prompt"
@@ -1689,7 +1849,7 @@ class FlowVisionApp:
                 self.asset_loop_start_var.set(self._format_asset_number_text(self.cfg["asset_loop_start"]))
             if hasattr(self, "asset_loop_end_var"):
                 self.asset_loop_end_var.set(self._format_asset_number_text(self.cfg["asset_loop_end"]))
-            self.cfg["asset_prompt_media_mode"] = str(step.get("media_mode", "video") or "video")
+            self.cfg["asset_prompt_media_mode"] = "video"
             if hasattr(self, "asset_prompt_media_mode_var"):
                 self.asset_prompt_media_mode_var.set(PROMPT_MEDIA_LABELS.get(self.cfg["asset_prompt_media_mode"], "영상"))
             target_key = "asset"
@@ -5045,6 +5205,7 @@ class FlowVisionApp:
 
         self.pipeline_step_name_var = tk.StringVar()
         self.pipeline_step_type_var = tk.StringVar()
+        self.pipeline_step_prompt_slot_var = tk.StringVar()
         self.pipeline_step_start_var = tk.StringVar()
         self.pipeline_step_end_var = tk.StringVar()
         self.pipeline_step_manual_var = tk.StringVar()
@@ -5070,33 +5231,48 @@ class FlowVisionApp:
         ent_step_interval = tk.Entry(step_form, textvariable=self.pipeline_step_interval_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
         ent_step_interval.grid(row=1, column=3, sticky="ew", pady=(0, 8), ipady=3)
 
-        tk.Label(step_form, text="시작 번호", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=2, column=0, sticky="w")
+        self.lbl_pipeline_prompt_slot = tk.Label(step_form, text="프롬프트 파일", font=self.font_small, bg="#13233A", fg=self.color_text)
+        self.lbl_pipeline_prompt_slot.grid(row=2, column=0, sticky="w")
+        self.combo_pipeline_prompt_slot = ttk.Combobox(step_form, textvariable=self.pipeline_step_prompt_slot_var, state="readonly", font=self.font_small)
+        self.combo_pipeline_prompt_slot.grid(row=2, column=1, sticky="ew", pady=(0, 8), padx=(6, 14))
+
+        self.lbl_pipeline_prompt_range = tk.Label(step_form, text="프롬프트 자동화를 선택하면 파일과 범위가 표시됩니다.", font=self.font_small, bg="#13233A", fg=self.color_text_sec, anchor="w")
+        self.lbl_pipeline_prompt_range.grid(row=2, column=2, columnspan=2, sticky="ew", pady=(0, 8))
+
+        tk.Label(step_form, text="시작 번호", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=3, column=0, sticky="w")
         ent_step_start = tk.Entry(step_form, textvariable=self.pipeline_step_start_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
-        ent_step_start.grid(row=2, column=1, sticky="ew", pady=(0, 8), padx=(6, 14), ipady=3)
+        ent_step_start.grid(row=3, column=1, sticky="ew", pady=(0, 8), padx=(6, 14), ipady=3)
 
-        tk.Label(step_form, text="끝 번호", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=2, column=2, sticky="w")
+        tk.Label(step_form, text="끝 번호", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=3, column=2, sticky="w")
         ent_step_end = tk.Entry(step_form, textvariable=self.pipeline_step_end_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
-        ent_step_end.grid(row=2, column=3, sticky="ew", pady=(0, 8), ipady=3)
+        ent_step_end.grid(row=3, column=3, sticky="ew", pady=(0, 8), ipady=3)
 
-        tk.Label(step_form, text="개별 번호", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=3, column=0, sticky="w")
+        tk.Label(step_form, text="개별 번호", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=4, column=0, sticky="w")
         ent_step_manual = tk.Entry(step_form, textvariable=self.pipeline_step_manual_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small)
-        ent_step_manual.grid(row=3, column=1, sticky="ew", pady=(0, 8), padx=(6, 14), ipady=3)
+        ent_step_manual.grid(row=4, column=1, sticky="ew", pady=(0, 8), padx=(6, 14), ipady=3)
 
-        tk.Label(step_form, text="기본값 모드", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=3, column=2, sticky="w")
+        tk.Label(step_form, text="기본값 모드", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=4, column=2, sticky="w")
         self.combo_pipeline_media_mode = ttk.Combobox(step_form, textvariable=self.pipeline_step_media_mode_var, state="readonly", values=tuple(self._pipeline_mode_labels().values()), font=self.font_small)
-        self.combo_pipeline_media_mode.grid(row=3, column=3, sticky="ew", pady=(0, 8))
+        self.combo_pipeline_media_mode.grid(row=4, column=3, sticky="ew", pady=(0, 8))
 
-        tk.Label(step_form, text="다운로드 모드", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=4, column=0, sticky="w")
+        tk.Label(step_form, text="다운로드 모드", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=5, column=0, sticky="w")
         self.combo_pipeline_download_mode = ttk.Combobox(step_form, textvariable=self.pipeline_step_download_mode_var, state="readonly", values=tuple(self._pipeline_mode_labels().values()), font=self.font_small)
-        self.combo_pipeline_download_mode.grid(row=4, column=1, sticky="ew", pady=(0, 8), padx=(6, 14))
+        self.combo_pipeline_download_mode.grid(row=5, column=1, sticky="ew", pady=(0, 8), padx=(6, 14))
 
-        tk.Label(step_form, text="품질", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=4, column=2, sticky="w")
-        ent_step_quality = tk.Entry(step_form, textvariable=self.pipeline_step_quality_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
-        ent_step_quality.grid(row=4, column=3, sticky="ew", pady=(0, 8), ipady=3)
+        self.lbl_pipeline_quality = tk.Label(step_form, text="품질", font=self.font_small, bg="#13233A", fg=self.color_text)
+        self.lbl_pipeline_quality.grid(row=5, column=2, sticky="w")
+        self.combo_pipeline_quality = ttk.Combobox(step_form, textvariable=self.pipeline_step_quality_var, state="readonly", font=self.font_small)
+        self.combo_pipeline_quality.grid(row=5, column=3, sticky="ew", pady=(0, 8))
 
-        tk.Label(step_form, text="저장 폴더", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=5, column=0, sticky="w")
-        ent_step_output = tk.Entry(step_form, textvariable=self.pipeline_step_output_dir_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small)
-        ent_step_output.grid(row=5, column=1, columnspan=3, sticky="ew", pady=(0, 8), padx=(6, 0), ipady=3)
+        self.lbl_pipeline_output_dir = tk.Label(step_form, text="저장 폴더", font=self.font_small, bg="#13233A", fg=self.color_text)
+        self.lbl_pipeline_output_dir.grid(row=6, column=0, sticky="w")
+        pipeline_output_wrap = tk.Frame(step_form, bg="#13233A")
+        pipeline_output_wrap.grid(row=6, column=1, columnspan=3, sticky="ew", pady=(0, 8))
+        pipeline_output_wrap.grid_columnconfigure(0, weight=1)
+        self.entry_pipeline_output_dir = tk.Entry(pipeline_output_wrap, textvariable=self.pipeline_step_output_dir_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small, state="readonly")
+        self.entry_pipeline_output_dir.grid(row=0, column=0, sticky="ew", padx=(6, 6), ipady=3)
+        self.btn_pipeline_output_dir = ttk.Button(pipeline_output_wrap, text="폴더선택", command=self.on_pick_pipeline_output_dir)
+        self.btn_pipeline_output_dir.grid(row=0, column=1, sticky="e")
 
         for widget in (
             ent_step_name,
@@ -5104,18 +5280,22 @@ class FlowVisionApp:
             ent_step_start,
             ent_step_end,
             ent_step_manual,
-            ent_step_quality,
-            ent_step_output,
             self.combo_pipeline_step_type,
             self.combo_pipeline_project_profile,
+            self.combo_pipeline_prompt_slot,
             self.combo_pipeline_media_mode,
             self.combo_pipeline_download_mode,
+            self.combo_pipeline_quality,
         ):
             widget.bind("<FocusOut>", self._save_pipeline_step_fields)
             if isinstance(widget, ttk.Combobox):
                 widget.bind("<<ComboboxSelected>>", self._save_pipeline_step_fields)
             else:
                 widget.bind("<Return>", self._save_pipeline_step_fields)
+
+        self.combo_pipeline_step_type.bind("<<ComboboxSelected>>", self.on_pipeline_step_type_change)
+        self.combo_pipeline_download_mode.bind("<<ComboboxSelected>>", self.on_pipeline_step_download_mode_change)
+        self.combo_pipeline_prompt_slot.bind("<<ComboboxSelected>>", self.on_pipeline_step_prompt_slot_change)
 
         step_btn_row = tk.Frame(step_detail_card, bg="#13233A")
         step_btn_row.pack(fill="x", padx=14, pady=(0, 12))
