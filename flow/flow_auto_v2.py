@@ -601,22 +601,40 @@ class FlowVisionApp:
         self._refresh_responsive_layout()
         self.log(f"🔎 UI 확대 비율 적용: {target}%")
 
+    def _get_browser_work_area(self):
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        safe_w = max(760, sw - 80)
+        safe_h = max(620, sh - 140)
+        return sw, sh, safe_w, safe_h
+
     def _apply_browser_window_scale_live(self):
         if not self.page:
             return
         try:
             win_w, win_h, viewport_w, viewport_h = self._compute_browser_window_size()
-            try:
-                self.page.set_viewport_size({"width": viewport_w, "height": viewport_h})
-            except Exception:
-                pass
             cdp_owner = getattr(self.page, "context", None) or self.browser_context
             if cdp_owner and hasattr(cdp_owner, "new_cdp_session"):
                 session = cdp_owner.new_cdp_session(self.page)
                 info = session.send("Browser.getWindowForTarget")
                 window_id = (info or {}).get("windowId")
                 if window_id:
-                    session.send("Browser.setWindowBounds", {"windowId": window_id, "bounds": {"width": win_w, "height": win_h}})
+                    session.send(
+                        "Browser.setWindowBounds",
+                        {
+                            "windowId": window_id,
+                            "bounds": {
+                                "left": 24,
+                                "top": 24,
+                                "width": win_w,
+                                "height": win_h,
+                            },
+                        },
+                    )
+            try:
+                self.page.set_viewport_size({"width": viewport_w, "height": viewport_h})
+            except Exception:
+                pass
             self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 브라우저 창 크기 적용: {self.cfg.get('browser_window_scale_percent', 100)}%")
         except Exception as e:
             self.log(f"⚠️ 봇 작업창 크기 실시간 적용 실패(계속 진행): {e}")
@@ -649,10 +667,6 @@ class FlowVisionApp:
         if not self.page:
             return
         try:
-            self._apply_browser_window_scale_live()
-        except Exception:
-            pass
-        try:
             self._apply_browser_zoom()
         except Exception:
             pass
@@ -661,6 +675,44 @@ class FlowVisionApp:
         except Exception:
             pass
         time.sleep(0.35)
+
+    def _scroll_page_to_ratio(self, ratio):
+        if not self.page:
+            return
+        try:
+            ratio = max(0.0, min(1.0, float(ratio)))
+        except Exception:
+            ratio = 0.0
+        try:
+            self.page.evaluate(
+                """(r) => {
+                    const root = document.scrollingElement || document.documentElement || document.body;
+                    if (!root) return;
+                    const maxY = Math.max(0, root.scrollHeight - window.innerHeight);
+                    root.scrollTo({ top: Math.round(maxY * r), behavior: "instant" });
+                }""",
+                ratio,
+            )
+        except Exception:
+            try:
+                self.page.evaluate("window.scrollTo(0, 0)")
+            except Exception:
+                pass
+        time.sleep(0.18)
+
+    def _resolve_best_locator_with_scroll(self, candidates, timeout_ms=1200, prefer_enabled=False, ratios=None):
+        if ratios is None:
+            ratios = (0.0, 0.18, 0.34, 0.52)
+        for ratio in ratios:
+            self._scroll_page_to_ratio(ratio)
+            loc, sel = self._resolve_best_locator(
+                candidates,
+                timeout_ms=timeout_ms,
+                prefer_enabled=prefer_enabled,
+            )
+            if loc is not None:
+                return loc, sel
+        return None, None
 
     def _draw_header_progress_bar(self, pct=0.0):
         if not hasattr(self, "header_progress_canvas"):
@@ -890,19 +942,18 @@ class FlowVisionApp:
             self._refresh_responsive_layout()
 
     def _compute_browser_window_size(self):
-        sw = self.root.winfo_screenwidth()
-        sh = self.root.winfo_screenheight()
+        sw, sh, safe_w, safe_h = self._get_browser_work_area()
         browser_scale = self._clamp_percent(self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=50, maximum=150) / 100.0
         if sw <= 1600 or sh <= 900:
-            win_w = max(560, int(sw * 0.72 * browser_scale))
-            win_h = max(420, int(sh * 0.82 * browser_scale))
+            win_w = max(680, int(safe_w * 0.76 * browser_scale))
+            win_h = max(560, int(safe_h * 0.88 * browser_scale))
         else:
-            win_w = max(640, int(sw * 0.68 * browser_scale))
-            win_h = max(480, int(sh * 0.86 * browser_scale))
-        win_w = min(win_w, sw - 40)
-        win_h = min(win_h, sh - 80)
-        viewport_w = max(640, win_w - 24)
-        viewport_h = max(400, win_h - 100)
+            win_w = max(760, int(safe_w * 0.72 * browser_scale))
+            win_h = max(620, int(safe_h * 0.90 * browser_scale))
+        win_w = min(win_w, safe_w)
+        win_h = min(win_h, safe_h)
+        viewport_w = max(640, win_w - 32)
+        viewport_h = max(420, win_h - 136)
         return win_w, win_h, viewport_w, viewport_h
 
     def _apply_browser_zoom(self):
@@ -1029,6 +1080,7 @@ class FlowVisionApp:
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",
+                    "--window-position=24,24",
                     f"--window-size={win_w},{win_h}",
                 ],
             )
@@ -3253,9 +3305,9 @@ class FlowVisionApp:
 
         self._prepare_page_for_selector_detection()
         self.log(f"🔁 S반복 사전단계 시작: {asset_tag}")
-        start_locator, start_selector = self._wait_best_locator(
+        start_locator, start_selector = self._resolve_best_locator_with_scroll(
             self._asset_start_button_candidates(),
-            timeout_sec=6,
+            timeout_ms=2000,
             prefer_enabled=False,
         )
         if start_locator is not None:
@@ -3271,10 +3323,11 @@ class FlowVisionApp:
                 self.log("ℹ️ Step1 시작 버튼 미탐지(현재 화면 유지)")
 
         # 2-0) 에셋 검색 버튼 없이 바로 검색 입력칸이 열리는 UI 대응
-        direct_input, _ = self._wait_best_locator(
+        direct_input, _ = self._resolve_best_locator_with_scroll(
             self._asset_search_input_candidates(),
-            timeout_sec=4,
+            timeout_ms=1600,
             prefer_enabled=False,
+            ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
         )
         if direct_input is not None:
             try:
@@ -3308,10 +3361,11 @@ class FlowVisionApp:
             "[aria-label*='asset' i][aria-label*='search' i]",
             "[title*='asset' i][title*='search' i]",
         ]
-        search_locator, search_selector = self._wait_best_locator(
+        search_locator, search_selector = self._resolve_best_locator_with_scroll(
             search_candidates,
-            timeout_sec=10,
+            timeout_ms=2200,
             prefer_enabled=False,
+            ratios=(0.0, 0.12, 0.24, 0.36, 0.50),
         )
         if search_locator is None:
             search_locator, search_selector = self._resolve_text_locator_any_frame(
@@ -3325,10 +3379,11 @@ class FlowVisionApp:
                 self.log(f"🔎 Step2 에셋 검색 클릭: {search_selector or '텍스트 탐색'}")
                 self.actor.random_action_delay("에셋 검색 클릭 후 대기", 0.4, 1.6)
 
-        search_input, _ = self._wait_best_locator(
+        search_input, _ = self._resolve_best_locator_with_scroll(
             self._asset_search_input_candidates(),
-            timeout_sec=8,
+            timeout_ms=2200,
             prefer_enabled=False,
+            ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
         )
         if search_input is None:
             # 클릭 후 포커스가 검색칸으로 이미 이동했을 수 있어 키보드 직접 입력 1회 폴백
@@ -7461,9 +7516,9 @@ class FlowVisionApp:
             time.sleep(random.uniform(1.0, 2.3))
             self._prepare_page_for_selector_detection()
 
-            start_loc, start_sel = self._wait_best_locator(
+            start_loc, start_sel = self._resolve_best_locator_with_scroll(
                 self._asset_start_button_candidates(),
-                timeout_sec=7,
+                timeout_ms=2200,
                 prefer_enabled=False,
             )
             search_candidates = self._asset_search_button_candidates() + [
@@ -7471,10 +7526,11 @@ class FlowVisionApp:
                 "text=Asset search",
                 "text=Search assets",
             ]
-            search_loc, search_sel = self._wait_best_locator(
+            search_loc, search_sel = self._resolve_best_locator_with_scroll(
                 search_candidates,
-                timeout_sec=9,
+                timeout_ms=2200,
                 prefer_enabled=False,
+                ratios=(0.0, 0.12, 0.24, 0.36, 0.50),
             )
             if start_loc is None:
                 start_loc, start_sel = self._resolve_text_locator_any_frame(["시작", "Start"], timeout_ms=1000)
@@ -7484,10 +7540,11 @@ class FlowVisionApp:
                     timeout_ms=1200,
                 )
 
-            input_loc, input_sel = self._wait_best_locator(
+            input_loc, input_sel = self._resolve_best_locator_with_scroll(
                 self._asset_search_input_candidates(),
-                timeout_sec=2,
+                timeout_ms=1200,
                 prefer_enabled=False,
+                ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
             )
             if (input_loc is None) and (search_loc is not None):
                 try:
@@ -7495,10 +7552,11 @@ class FlowVisionApp:
                     self.actor.random_action_delay("에셋 검색 입력칸 표시 대기", 0.3, 1.2)
                 except Exception:
                     pass
-                input_loc, input_sel = self._wait_best_locator(
+                input_loc, input_sel = self._resolve_best_locator_with_scroll(
                     self._asset_search_input_candidates(),
-                    timeout_sec=8,
+                    timeout_ms=2200,
                     prefer_enabled=False,
+                    ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
                 )
 
             if start_sel:
@@ -7550,8 +7608,13 @@ class FlowVisionApp:
             search_candidates = self._normalize_candidate_list(self.cfg.get("asset_search_button_selector", "")) or self._asset_search_button_candidates()
             input_candidates = self._normalize_candidate_list(self.cfg.get("asset_search_input_selector", "")) or self._asset_search_input_candidates()
 
-            start_loc, start_sel = self._resolve_best_locator(start_candidates, timeout_ms=2200, prefer_enabled=False)
-            search_loc, search_sel = self._resolve_best_locator(search_candidates + ["text=에셋 검색", "text=Asset search"], timeout_ms=2200, prefer_enabled=False)
+            start_loc, start_sel = self._resolve_best_locator_with_scroll(start_candidates, timeout_ms=2200, prefer_enabled=False)
+            search_loc, search_sel = self._resolve_best_locator_with_scroll(
+                search_candidates + ["text=에셋 검색", "text=Asset search"],
+                timeout_ms=2200,
+                prefer_enabled=False,
+                ratios=(0.0, 0.12, 0.24, 0.36, 0.50),
+            )
             if start_loc is None:
                 start_loc, start_sel = self._resolve_text_locator_any_frame(["시작", "Start"], timeout_ms=1000)
             if search_loc is None:
@@ -7560,14 +7623,24 @@ class FlowVisionApp:
                     timeout_ms=1200,
                 )
 
-            input_loc, input_sel = self._resolve_best_locator(input_candidates, timeout_ms=1800, prefer_enabled=False)
+            input_loc, input_sel = self._resolve_best_locator_with_scroll(
+                input_candidates,
+                timeout_ms=1800,
+                prefer_enabled=False,
+                ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
+            )
             if (input_loc is None) and (search_loc is not None):
                 try:
                     search_loc.click(timeout=2000)
                 except Exception:
                     pass
                 self.actor.random_action_delay("검색 입력칸 확인 대기", 0.3, 1.0)
-                input_loc, input_sel = self._resolve_best_locator(input_candidates, timeout_ms=3000, prefer_enabled=False)
+                input_loc, input_sel = self._resolve_best_locator_with_scroll(
+                    input_candidates,
+                    timeout_ms=2200,
+                    prefer_enabled=False,
+                    ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
+                )
 
             start_ok = start_loc is not None
             search_ok = search_loc is not None
