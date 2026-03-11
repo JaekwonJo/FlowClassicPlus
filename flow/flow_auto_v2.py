@@ -1212,11 +1212,56 @@ class FlowVisionApp:
                 self.page.bring_to_front()
             except Exception:
                 pass
+            self.refresh_detected_media_state(ensure_session=False)
             self.log("🤖 봇 작업창 열기 완료 - 이 창에서 Image 기본값을 맞춰주세요.")
             self.update_status_label("🤖 봇 작업창 열림", self.color_success)
         except Exception as e:
             self.log(f"❌ 봇 작업창 열기 실패: {e}")
             self.update_status_label("❌ 봇 작업창 열기 실패", self.color_error)
+
+    def _set_detected_media_state_ui(self, state=None, detail="", error=False):
+        if state == "image":
+            text = "현재 감지 생성 기본값: 이미지"
+            color = self.color_success
+        elif state == "video":
+            text = "현재 감지 생성 기본값: 동영상"
+            color = self.color_accent
+        elif error:
+            text = f"현재 감지 생성 기본값: 확인 실패{f' | {detail}' if detail else ''}"
+            color = self.color_error
+        else:
+            suffix = f" | {detail}" if detail else ""
+            text = f"현재 감지 생성 기본값: 확인 필요{suffix}"
+            color = self.color_text_sec
+
+        if hasattr(self, "lbl_detected_media_state"):
+            self.lbl_detected_media_state.config(text=text, fg=color)
+
+    def refresh_detected_media_state(self, ensure_session=True):
+        try:
+            if ensure_session:
+                self.on_option_toggle()
+                self._ensure_browser_session()
+                self.actor.set_page(self.page)
+            if not self.page:
+                self._set_detected_media_state_ui(None, "브라우저 없음")
+                return None
+            input_selector = (self.cfg.get("input_selector") or "").strip()
+            input_locator = None
+            if input_selector:
+                try:
+                    input_locator, _ = self._resolve_prompt_input_locator(input_selector, timeout_ms=1800)
+                except Exception:
+                    input_locator = None
+            _loc, desc, state = self._resolve_current_media_panel_button(input_locator=input_locator, profile="prompt")
+            self._set_detected_media_state_ui(state, desc or "")
+            return state
+        except Exception as e:
+            self._set_detected_media_state_ui(None, str(e), error=True)
+            return None
+
+    def on_refresh_detected_media_state(self):
+        self.refresh_detected_media_state(ensure_session=True)
 
     def _ensure_worker_thread(self):
         if self.worker_thread and self.worker_thread.is_alive():
@@ -4429,6 +4474,18 @@ class FlowVisionApp:
         ttk.Button(selector_tool_f, text="🧪 Selector 테스트", command=self.on_test_selectors).pack(side="left", padx=6)
         ttk.Button(selector_tool_f, text="🤖 봇 작업창 열기", command=self.on_open_bot_work_window).pack(side="left")
 
+        detected_state_f = tk.Frame(left_card, bg=self.color_bg)
+        detected_state_f.pack(fill="x", pady=(0, 8))
+        ttk.Button(detected_state_f, text="👁 상태 확인", command=self.on_refresh_detected_media_state).pack(side="left")
+        self.lbl_detected_media_state = tk.Label(
+            detected_state_f,
+            text="현재 감지 생성 기본값: 확인 필요",
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            font=self.font_small,
+        )
+        self.lbl_detected_media_state.pack(side="left", padx=(10, 0))
+
         browser_f = tk.Frame(left_card, bg=self.color_bg)
         browser_f.pack(fill="x", pady=(0, 10))
         self.browser_headless_var = tk.BooleanVar(value=self.cfg.get("browser_headless", False))
@@ -7099,6 +7156,7 @@ class FlowVisionApp:
             self.current_media_state = desired_state
             self.cfg["current_media_state"] = desired_state
             self.save_config()
+            self.refresh_detected_media_state(ensure_session=False)
             return True
 
         if open_loc is None:
@@ -7137,6 +7195,7 @@ class FlowVisionApp:
         self.current_media_state = desired_state
         self.cfg["current_media_state"] = desired_state
         self.save_config()
+        self.refresh_detected_media_state(ensure_session=False)
         return True
 
     def _close_prompt_generation_panel(self, input_locator=None, opener=None, opener_desc=None):
