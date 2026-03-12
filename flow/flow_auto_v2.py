@@ -4621,15 +4621,39 @@ class FlowVisionApp:
             return refreshed_input
         return input_locator
 
-    def _apply_prompt_references_for_scene(self, scene_no, input_locator):
-        refs = self._prompt_reference_matches_for_scene(scene_no)
-        if not refs:
+    def _split_prompt_inline_reference_parts(self, prompt_text):
+        text = str(prompt_text or "")
+        pattern = re.compile(r"@(S?\d{3,4})\b", re.IGNORECASE)
+        parts = []
+        cursor = 0
+        for match in pattern.finditer(text):
+            if match.start() > cursor:
+                parts.append({"type": "text", "value": text[cursor:match.start()]})
+            asset_tag = self._normalize_reference_asset_tag(match.group(1))
+            parts.append({"type": "reference", "value": asset_tag, "raw": match.group(0)})
+            cursor = match.end()
+        if cursor < len(text):
+            parts.append({"type": "text", "value": text[cursor:]})
+        return parts
+
+    def _type_prompt_with_inline_references(self, prompt_text, input_locator, input_mode="typing"):
+        parts = self._split_prompt_inline_reference_parts(prompt_text)
+        if not any(part.get("type") == "reference" for part in parts):
+            self.actor.type_text(prompt_text, input_locator=input_locator, mode=input_mode)
             return input_locator
-        for ref in refs:
-            name = ref.get("name") or ref.get("asset_tag") or "레퍼런스"
-            self.update_status_label(f"🖼️ 레퍼런스 첨부 중... ({name})", self.color_info)
-            self.log(f"🖼️ 레퍼런스 첨부 대상: {name} -> {ref.get('asset_tag', '')}")
-            input_locator = self._attach_prompt_reference_asset(input_locator, ref.get("asset_tag", ""))
+        ref_count = sum(1 for part in parts if part.get("type") == "reference")
+        self.log(f"🔖 프롬프트 inline 레퍼런스 감지: {ref_count}개")
+        for part in parts:
+            if part.get("type") == "text":
+                chunk = str(part.get("value", "") or "")
+                if chunk:
+                    self.actor.type_text(chunk, input_locator=input_locator, mode=input_mode)
+                continue
+            asset_tag = str(part.get("value", "") or "").strip()
+            if not asset_tag:
+                continue
+            self.update_status_label(f"🖼️ inline 레퍼런스 첨부 중... ({asset_tag})", self.color_info)
+            input_locator = self._attach_prompt_reference_asset(input_locator, asset_tag)
         return input_locator
 
     def _apply_download_used_selectors(self, mode, used):
@@ -5666,52 +5690,6 @@ class FlowVisionApp:
         ttk.Button(preset_btn_f, text="🧪 동영상→이미지", command=self.on_test_prompt_video_to_image).pack(side="left", padx=6)
         self._refresh_manual_baseline_labels()
 
-        ref_body, _set_prompt_ref_open = self._create_collapsible_section(left_card, "프롬프트 레퍼런스 첨부", opened=False)
-        self._set_prompt_ref_open = _set_prompt_ref_open
-        ref_f = tk.Frame(ref_body, bg=self.color_bg)
-        ref_f.pack(fill="x", pady=6)
-        self.prompt_reference_enabled_var = tk.BooleanVar(value=bool(self.cfg.get("prompt_reference_enabled", False)))
-        tk.Checkbutton(
-            ref_f,
-            text="장면 시작 전에 @로 레퍼런스 첨부",
-            variable=self.prompt_reference_enabled_var,
-            command=self.on_option_toggle,
-            bg=self.color_bg,
-            font=self.font_body,
-            activebackground=self.color_bg,
-        ).pack(anchor="w")
-        tk.Label(
-            ref_f,
-            text="이름은 보기용이고, 참조 번호에는 S999 같은 레퍼런스 이미지를 적습니다.",
-            bg=self.color_bg,
-            fg=self.color_text_sec,
-            font=self.font_small,
-        ).pack(anchor="w", pady=(2, 0))
-        tk.Label(
-            ref_f,
-            text="장면 번호는 003,005,007 또는 020-025 형식으로 입력합니다. 한 장면에 여러 레퍼런스도 가능합니다.",
-            bg=self.color_bg,
-            fg=self.color_text_sec,
-            font=self.font_small,
-            wraplength=620,
-            justify="left",
-        ).pack(anchor="w", pady=(2, 6))
-        ref_action_f = tk.Frame(ref_f, bg=self.color_bg)
-        ref_action_f.pack(fill="x", pady=(0, 6))
-        ttk.Button(ref_action_f, text="+ 레퍼런스 추가", command=self.on_add_prompt_reference_item, style="ControlCompact.TButton").pack(side="left")
-        self.lbl_prompt_reference_status = tk.Label(
-            ref_action_f,
-            text="",
-            bg=self.color_bg,
-            fg=self.color_text_sec,
-            font=self.font_small,
-        )
-        self.lbl_prompt_reference_status.pack(side="left", padx=(10, 0))
-        self.prompt_reference_rows_frame = tk.Frame(ref_f, bg=self.color_bg)
-        self.prompt_reference_rows_frame.pack(fill="x")
-        self.prompt_reference_row_vars = []
-        self._refresh_prompt_reference_ui()
-
         asset_body, _set_asset_open = self._create_collapsible_section(left_card, "S001~S### 에셋 자동 반복", opened=True)
         self._set_asset_open = _set_asset_open
         asset_f = tk.Frame(asset_body, bg=self.color_bg)
@@ -6306,6 +6284,16 @@ class FlowVisionApp:
         ttk.Button(prompt_manual_f, text="최근 실패 자동채움", command=self.on_fill_prompt_manual_from_failures).pack(side="left", padx=(0, 6))
         self.lbl_prompt_manual_status = tk.Label(prompt_manual_f, text="", font=self.font_small, bg=self.color_bg, fg=self.color_text_sec)
         self.lbl_prompt_manual_status.pack(side="left")
+        self.lbl_prompt_inline_ref_hint = tk.Label(
+            file_nav,
+            text="레퍼런스 이미지는 프롬프트 안에 @999 또는 @S999 형태로 직접 넣으면 그 자리에서 첨부됩니다.",
+            font=self.font_small,
+            bg=self.color_bg,
+            fg=self.color_info,
+            anchor="w",
+            justify="left",
+        )
+        self.lbl_prompt_inline_ref_hint.pack(fill="x", pady=(6, 0))
 
         btn_f = tk.Frame(bottom, bg=self.color_bg)
         btn_f.pack(fill="x", pady=8)
@@ -10461,12 +10449,10 @@ class FlowVisionApp:
 
             self.update_status_label("🧹 입력창 초기화 중...", "white")
             self.actor.clear_input_field(input_locator, label="입력창")
-            if (not self.cfg.get("asset_loop_enabled")) and source_no:
-                input_locator = self._apply_prompt_references_for_scene(source_no, input_locator)
 
             print(f"Typing prompt: {prompt[:20]}...")
             self.update_status_label("✍️ 프롬프트 입력 중...", "white")
-            self.actor.type_text(prompt, input_locator=input_locator, mode=input_mode)
+            input_locator = self._type_prompt_with_inline_references(prompt, input_locator, input_mode)
 
             typed_text = self._read_input_text(input_locator)
             if len(typed_text.strip()) < max(4, min(24, len(prompt.strip()) // 6)):
@@ -10479,7 +10465,7 @@ class FlowVisionApp:
                     raise RuntimeError("생성 옵션 적용 후 프롬프트 입력창을 다시 찾지 못했습니다.")
                 self.update_status_label("✍️ 프롬프트 재입력 중...", "white")
                 self.actor.clear_input_field(input_locator, label="입력창")
-                self.actor.type_text(prompt, input_locator=input_locator, mode=input_mode)
+                input_locator = self._type_prompt_with_inline_references(prompt, input_locator, input_mode)
                 typed_text = self._read_input_text(input_locator)
 
             if len(typed_text.strip()) < max(4, min(24, len(prompt.strip()) // 6)):
