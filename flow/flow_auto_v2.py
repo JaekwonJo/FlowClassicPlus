@@ -110,7 +110,6 @@ DEFAULT_CONFIG = {
     "prompt_reference_enabled": False,
     "prompt_reference_items": [],
     "prompt_reference_test_tag": "S999",
-    "prompt_reference_add_selector": "",
     "prompt_reference_search_input_selector": "",
     "prompt_reference_result_selector": "",
     "prompt_media_mode_selector": "",
@@ -4573,68 +4572,40 @@ class FlowVisionApp:
         cands.extend(self._asset_search_input_candidates())
         return list(dict.fromkeys([x for x in cands if x]))
 
-    def _resolve_prompt_reference_add_button(self, input_locator, timeout_sec=3):
+    def _open_prompt_reference_search_via_keyboard(self, input_locator, timeout_sec=2.2):
         if (not self.page) or input_locator is None:
-            return None, None
-        stored = self._normalize_candidate_list(self.cfg.get("prompt_reference_add_selector", ""))
-        end_ts = time.time() + max(1, timeout_sec)
-        while time.time() < end_ts:
+            raise RuntimeError("프롬프트 입력창이 없어 @ 레퍼런스 호출을 할 수 없습니다.")
+        try:
+            input_locator.click(timeout=1200)
+        except Exception:
+            pass
+        deadline = time.time() + max(1.0, timeout_sec)
+        last_error = "search-input-not-found"
+        while time.time() < deadline:
             try:
-                input_box = input_locator.bounding_box()
+                self.page.keyboard.down("Shift")
+                self.page.keyboard.press("2")
+                self.page.keyboard.up("Shift")
+                self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 @ 트리거 입력: Shift+2")
+            except Exception as e:
+                last_error = str(e)
+            self.actor.random_action_delay("레퍼런스 검색창 표시 대기", 0.25, 0.7)
+            search_input, search_sel = self._resolve_best_locator(
+                self._prompt_reference_search_input_candidates(),
+                timeout_ms=1200,
+                prefer_enabled=False,
+            )
+            if search_input is not None:
+                self.log(f"🔡 레퍼런스 @ 호출 성공: {search_sel or '자동 탐색'}")
+                return search_input, search_sel or ""
+            # 검색창이 안 뜬 경우, 입력창에 찍힌 @를 지우고 한 번 더 시도
+            try:
+                input_locator.click(timeout=800)
+                self.page.keyboard.press("Backspace")
             except Exception:
-                input_box = None
-            if not input_box:
-                time.sleep(0.15)
-                continue
-            best = None
-            best_sel = None
-            best_score = float("-inf")
-            for sel in list(dict.fromkeys(stored + ["button, [role='button']", "[aria-label]", "[title]"])):
-                try:
-                    loc = self.page.locator(sel)
-                    total = min(loc.count(), 80)
-                except Exception:
-                    continue
-                for i in range(total):
-                    cand = loc.nth(i)
-                    try:
-                        if not cand.is_visible(timeout=350):
-                            continue
-                        box = cand.bounding_box()
-                    except Exception:
-                        continue
-                    if not box:
-                        continue
-                    if box["width"] < 16 or box["height"] < 16 or box["width"] > 90 or box["height"] > 90:
-                        continue
-                    cx = box["x"] + (box["width"] / 2.0)
-                    cy = box["y"] + (box["height"] / 2.0)
-                    if cx > (input_box["x"] + min(170, input_box["width"] * 0.28)):
-                        continue
-                    if cy < (input_box["y"] + input_box["height"] * 0.35):
-                        continue
-                    if cy > (input_box["y"] + input_box["height"] + 70):
-                        continue
-                    meta = self._locator_meta_text(cand)
-                    score = 0.0
-                    score -= abs(cx - (input_box["x"] + 28.0)) * 1.8
-                    score -= abs(cy - (input_box["y"] + input_box["height"] - 18.0)) * 1.2
-                    if "+" in meta:
-                        score += 900.0
-                    if any(k in meta for k in ("add", "첨부", "attach", "asset", "image", "이미지", "reference", "참조")):
-                        score += 260.0
-                    if any(k in meta for k in ("video", "동영상", "download", "다운로드", "menu", "설정")):
-                        score -= 500.0
-                    if sel in stored:
-                        score += 220.0
-                    if score > best_score:
-                        best = cand
-                        best_sel = self._locator_selector_hint(cand) or sel
-                        best_score = score
-            if best is not None and best_score > -120:
-                return best, best_sel
-            time.sleep(0.18)
-        return None, None
+                pass
+            time.sleep(0.12)
+        raise RuntimeError(f"@ 레퍼런스 검색창 호출 실패 ({last_error})")
 
     def _resolve_prompt_reference_result(self, search_input=None, timeout_sec=3):
         if not self.page:
@@ -4836,25 +4807,8 @@ class FlowVisionApp:
     def _attach_prompt_reference_asset(self, input_locator, asset_tag):
         if (not self.page) or input_locator is None or (not asset_tag):
             return input_locator
-        try:
-            input_locator.click(timeout=1200)
-        except Exception:
-            pass
-        add_btn, add_sel = self._resolve_prompt_reference_add_button(input_locator, timeout_sec=3)
-        if add_btn is None:
-            raise RuntimeError("레퍼런스 + 버튼을 찾지 못했습니다.")
-        if not self._click_with_actor_fallback(add_btn, "레퍼런스 + 버튼"):
-            raise RuntimeError("레퍼런스 + 버튼 클릭 실패")
-        self.log(f"➕ 레퍼런스 추가 버튼 클릭: {add_sel or '위치기반 탐색'}")
         self.log(f"🔖 레퍼런스 첨부 시작: {asset_tag}")
-        self.actor.random_action_delay("레퍼런스 검색창 표시 대기", 0.4, 1.1)
-
-        search_input, _ = self._resolve_best_locator_with_scroll(
-            self._prompt_reference_search_input_candidates(),
-            timeout_ms=2200,
-            prefer_enabled=False,
-            ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
-        )
+        search_input, search_sel = self._open_prompt_reference_search_via_keyboard(input_locator, timeout_sec=2.4)
         search_input, search_sel = self._fill_prompt_reference_search_input(search_input, asset_tag)
         if search_sel:
             self.cfg["prompt_reference_search_input_selector"] = search_sel
@@ -4867,8 +4821,6 @@ class FlowVisionApp:
             clicked, result_sel = self._click_prompt_reference_first_result(search_input=search_input, asset_tag=asset_tag, timeout_sec=1.8)
         if not clicked:
             raise RuntimeError(f"레퍼런스 첫 결과 선택 실패: {asset_tag}")
-        if add_sel:
-            self.cfg["prompt_reference_add_selector"] = add_sel
         if result_sel:
             self.cfg["prompt_reference_result_selector"] = result_sel
         self.log(f"✅ 레퍼런스 첨부 요청 완료: {asset_tag}")
@@ -7342,22 +7294,9 @@ class FlowVisionApp:
             except Exception:
                 pass
 
-            add_btn, add_sel = self._resolve_prompt_reference_add_button(input_locator, timeout_sec=3)
-            add_ok = add_btn is not None
-            if not add_ok:
-                raise RuntimeError("레퍼런스 + 버튼을 찾지 못했습니다.")
-            if not self._click_with_actor_fallback(add_btn, "레퍼런스 + 버튼"):
-                raise RuntimeError("레퍼런스 + 버튼 클릭 실패")
-            self.actor.random_action_delay("레퍼런스 검색창 표시 대기", 0.4, 1.1)
-
-            search_input, input_sel = self._resolve_best_locator_with_scroll(
-                self._prompt_reference_search_input_candidates(),
-                timeout_ms=2200,
-                prefer_enabled=False,
-                ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
-            )
+            search_input, trigger_sel = self._open_prompt_reference_search_via_keyboard(input_locator, timeout_sec=2.4)
             search_input, filled_sel = self._fill_prompt_reference_search_input(search_input, tag)
-            search_sel = filled_sel or input_sel or ""
+            search_sel = filled_sel or trigger_sel or ""
 
             self.actor.random_action_delay("레퍼런스 결과 표시 대기", 0.35, 0.9)
             result_ok, result_sel = self._click_prompt_reference_first_result(search_input=search_input, asset_tag=tag, timeout_sec=2.4)
@@ -7376,14 +7315,13 @@ class FlowVisionApp:
             if refreshed_input is not None:
                 input_locator = refreshed_input
             if not test_only:
-                self.cfg["prompt_reference_add_selector"] = add_sel or self.cfg.get("prompt_reference_add_selector", "")
                 self.cfg["prompt_reference_search_input_selector"] = search_sel or self.cfg.get("prompt_reference_search_input_selector", "")
                 self.cfg["prompt_reference_result_selector"] = result_sel or self.cfg.get("prompt_reference_result_selector", "")
                 self.save_config()
 
             summary = (
                 f"🧪 레퍼런스 첨부 {mode_label} | "
-                f"+버튼({add_sel or '위치기반'})=OK | "
+                f"@호출({trigger_sel or 'Shift+2'})=OK | "
                 f"검색입력({search_sel or '직접입력'})=OK | "
                 f"첫결과({result_sel or '위치기반 결과'})=OK"
             )
