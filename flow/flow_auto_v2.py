@@ -388,7 +388,6 @@ class LogWindow:
         self.root.lift()
 
 class FlowVisionApp:
-    PROMPT_CARET_SENTINEL = "\u200b"
 
     def __init__(self):
         self.base = Path(__file__).resolve().parent
@@ -4978,8 +4977,7 @@ class FlowVisionApp:
             self.cfg["prompt_reference_result_selector"] = result_sel
         self.log(f"✅ 레퍼런스 첨부 요청 완료: {asset_tag}")
         self.actor.random_action_delay("레퍼런스 첨부 반영 대기", 0.04, 0.10)
-        self._click_prompt_input_and_move_end(input_locator)
-        self.log("🧭 레퍼런스 첨부 후 입력창 복귀: 입력창 클릭 + End")
+        self.log("🧭 레퍼런스 첨부 후 입력창 복귀: 추가 조작 없음")
         return input_locator
 
     def _split_prompt_inline_reference_parts(self, prompt_text):
@@ -5007,37 +5005,6 @@ class FlowVisionApp:
         except Exception:
             self.page.keyboard.insert_text(text)
         self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] inline 텍스트 직선 입력 완료")
-
-    def _cleanup_prompt_reference_sentinels(self, input_locator):
-        if input_locator is None:
-            return
-        sentinel = self.PROMPT_CARET_SENTINEL
-        try:
-            input_locator.evaluate(
-                """([el, sentinel]) => {
-                    if (!el) return false;
-                    if ("value" in el && typeof el.value === "string") {
-                        el.value = String(el.value || "").split(sentinel).join("");
-                        return true;
-                    }
-                    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-                    const nodes = [];
-                    let node = walker.nextNode();
-                    while (node) {
-                        nodes.push(node);
-                        node = walker.nextNode();
-                    }
-                    for (const textNode of nodes) {
-                        if (textNode.textContent && textNode.textContent.includes(sentinel)) {
-                            textNode.textContent = textNode.textContent.split(sentinel).join("");
-                        }
-                    }
-                    return true;
-                }""",
-                [sentinel],
-            )
-        except Exception:
-            pass
 
     def _type_prompt_with_inline_references(self, prompt_text, input_locator, input_mode="typing"):
         parts = self._split_prompt_inline_reference_parts(prompt_text)
@@ -5067,35 +5034,6 @@ class FlowVisionApp:
             input_locator = self._attach_prompt_reference_asset(input_locator, asset_tag)
             keep_focus_only = True
         return input_locator
-
-    def _click_prompt_input_and_move_end(self, input_locator):
-        if (not self.page) or input_locator is None:
-            return
-        try:
-            box = input_locator.bounding_box()
-        except Exception:
-            box = None
-        if not box:
-            try:
-                input_locator.focus(timeout=800)
-                self.page.keyboard.press("End")
-            except Exception:
-                pass
-            return
-        safe_x = float(box["x"]) + max(120.0, float(box["width"]) * 0.72)
-        safe_x = min(safe_x, float(box["x"]) + float(box["width"]) - 48.0)
-        safe_y = float(box["y"]) + min(float(box["height"]) * 0.72, float(box["height"]) - 10.0)
-        try:
-            self.page.mouse.move(safe_x, safe_y, steps=6)
-            self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 입력창 복귀 클릭 위치: ({safe_x:.1f}, {safe_y:.1f})")
-            self.page.mouse.click(safe_x, safe_y, delay=random.randint(30, 80))
-            self.page.keyboard.press("End")
-        except Exception:
-            try:
-                input_locator.focus(timeout=800)
-                self.page.keyboard.press("End")
-            except Exception:
-                pass
 
     def _apply_download_used_selectors(self, mode, used):
         if not isinstance(used, dict):
@@ -9284,49 +9222,6 @@ class FlowVisionApp:
         except Exception:
             return ""
 
-    def _stabilize_prompt_caret_after_reference(self, input_locator):
-        if (not self.page) or input_locator is None:
-            return
-        sentinel = self.PROMPT_CARET_SENTINEL
-        try:
-            input_locator.evaluate(
-                """([el, sentinel]) => {
-                    if (!el) return false;
-                    try { el.focus(); } catch (e) {}
-                    if ("value" in el && typeof el.value === "string") {
-                        const len = el.value.length;
-                        if (el.setSelectionRange) el.setSelectionRange(len, len);
-                        return true;
-                    }
-                    if (el.isContentEditable) {
-                        const sel = window.getSelection();
-                        if (!sel) return true;
-                        let tail = el.lastChild;
-                        if (!tail || tail.nodeType !== Node.TEXT_NODE) {
-                            tail = document.createTextNode(sentinel);
-                            el.appendChild(tail);
-                        }
-                        if (!String(tail.textContent || "").endsWith(sentinel)) {
-                            tail.textContent = String(tail.textContent || "") + sentinel;
-                        }
-                        const range = document.createRange();
-                        range.setStart(tail, (tail.textContent || "").length);
-                        range.collapse(true);
-                        sel.removeAllRanges();
-                        sel.addRange(range);
-                        return true;
-                    }
-                    return true;
-                }""",
-                [sentinel],
-            )
-        except Exception:
-            try:
-                input_locator.focus(timeout=800)
-            except Exception:
-                pass
-        self.actor.random_action_delay("레퍼런스 커서 안정화", 0.05, 0.12)
-
     def _is_generation_indicator_visible(self):
         if not self.page:
             return False
@@ -11123,9 +11018,7 @@ class FlowVisionApp:
             if len(typed_text.strip()) < max(4, min(24, len(prompt.strip()) // 6)):
                 raise RuntimeError("프롬프트 입력이 실제 입력창에 반영되지 않았습니다.")
 
-            if has_inline_prompt_refs := bool(re.search(r"@(S?\d{3,4})\b", str(prompt or ""), re.IGNORECASE)):
-                self._cleanup_prompt_reference_sentinels(input_locator)
-
+            has_inline_prompt_refs = bool(re.search(r"@(S?\d{3,4})\b", str(prompt or ""), re.IGNORECASE))
             self.update_status_label("✅ 입력 완료!", self.color_success)
             if has_inline_prompt_refs:
                 self.log("ℹ️ inline 레퍼런스 프롬프트는 검토 대기를 생략합니다.")
