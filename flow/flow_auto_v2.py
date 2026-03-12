@@ -4562,6 +4562,66 @@ class FlowVisionApp:
         self.log(f"✅ Step2 에셋 검색 입력 완료: {asset_tag}")
         self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.2, 1.0)
 
+    def _resolve_prompt_reference_add_button(self, input_locator, timeout_sec=3):
+        if (not self.page) or input_locator is None:
+            return None, None
+        end_ts = time.time() + max(1, timeout_sec)
+        while time.time() < end_ts:
+            try:
+                input_box = input_locator.bounding_box()
+            except Exception:
+                input_box = None
+            if not input_box:
+                time.sleep(0.15)
+                continue
+            best = None
+            best_sel = None
+            best_score = float("-inf")
+            for sel in ("button, [role='button']", "[aria-label]", "[title]"):
+                try:
+                    loc = self.page.locator(sel)
+                    total = min(loc.count(), 80)
+                except Exception:
+                    continue
+                for i in range(total):
+                    cand = loc.nth(i)
+                    try:
+                        if not cand.is_visible(timeout=350):
+                            continue
+                        box = cand.bounding_box()
+                    except Exception:
+                        continue
+                    if not box:
+                        continue
+                    if box["width"] < 16 or box["height"] < 16 or box["width"] > 90 or box["height"] > 90:
+                        continue
+                    cx = box["x"] + (box["width"] / 2.0)
+                    cy = box["y"] + (box["height"] / 2.0)
+                    if cx > (input_box["x"] + min(170, input_box["width"] * 0.28)):
+                        continue
+                    if cy < (input_box["y"] + input_box["height"] * 0.35):
+                        continue
+                    if cy > (input_box["y"] + input_box["height"] + 70):
+                        continue
+                    meta = self._locator_meta_text(cand)
+                    score = 0.0
+                    score -= abs(cx - (input_box["x"] + 28.0)) * 1.8
+                    score -= abs(cy - (input_box["y"] + input_box["height"] - 18.0)) * 1.2
+                    if "+" in meta:
+                        score += 900.0
+                    if any(k in meta for k in ("add", "첨부", "attach", "asset", "image", "이미지", "reference", "참조")):
+                        score += 260.0
+                    if any(k in meta for k in ("video", "동영상", "download", "다운로드", "menu", "설정")):
+                        score -= 500.0
+                    if score > best_score:
+                        best = cand
+                        best_sel = sel
+                        best_score = score
+            if best is not None and best_score > -120:
+                return best, best_sel
+            time.sleep(0.18)
+        return None, None
+
     def _attach_prompt_reference_asset(self, input_locator, asset_tag):
         if (not self.page) or input_locator is None or (not asset_tag):
             return input_locator
@@ -4569,14 +4629,12 @@ class FlowVisionApp:
             input_locator.click(timeout=1200)
         except Exception:
             pass
-        self.actor.random_action_delay("레퍼런스 첨부 @ 입력 전 대기", 0.1, 0.4)
-        try:
-            self.page.keyboard.insert_text("@")
-        except Exception:
-            try:
-                input_locator.type("@", delay=random.randint(20, 60))
-            except Exception as e:
-                raise RuntimeError(f"레퍼런스 @ 입력 실패: {e}")
+        add_btn, add_sel = self._resolve_prompt_reference_add_button(input_locator, timeout_sec=3)
+        if add_btn is None:
+            raise RuntimeError("레퍼런스 + 버튼을 찾지 못했습니다.")
+        if not self._click_with_actor_fallback(add_btn, "레퍼런스 + 버튼"):
+            raise RuntimeError("레퍼런스 + 버튼 클릭 실패")
+        self.log(f"➕ 레퍼런스 추가 버튼 클릭: {add_sel or '위치기반 탐색'}")
         self.log(f"🔖 레퍼런스 첨부 시작: {asset_tag}")
         self.actor.random_action_delay("레퍼런스 검색창 표시 대기", 0.4, 1.1)
 
