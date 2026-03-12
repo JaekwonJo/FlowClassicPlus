@@ -4959,30 +4959,25 @@ class FlowVisionApp:
         search_input, search_sel = self._fill_prompt_reference_search_input(search_input, asset_tag)
         if search_sel:
             self.cfg["prompt_reference_search_input_selector"] = search_sel
-        self.actor.random_action_delay("레퍼런스 결과 표시 대기", 0.12, 0.28)
-        clicked, result_sel = self._click_prompt_reference_first_result(search_input=search_input, asset_tag=asset_tag, timeout_sec=1.1)
-        if not clicked:
-            self.actor.random_action_delay("레퍼런스 결과 Enter 전 대기", 0.06, 0.16)
-            self.page.keyboard.press("Enter")
-            self.actor.random_action_delay("레퍼런스 결과 재탐색 대기", 0.12, 0.32)
-            clicked, result_sel = self._click_prompt_reference_first_result(search_input=search_input, asset_tag=asset_tag, timeout_sec=0.8)
-        if not clicked:
-            raise RuntimeError(f"레퍼런스 첫 결과 선택 실패: {asset_tag}")
+        self.actor.random_action_delay("레퍼런스 Enter 전 대기", 0.04, 0.10)
+        self.page.keyboard.press("Enter")
+        self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 Enter 선택: {asset_tag}")
+        self.actor.random_action_delay("레퍼런스 Enter 반영 대기", 0.08, 0.18)
+
+        overlay_after_enter, _overlay_sel = self._resolve_prompt_reference_search_overlay_input(timeout_sec=0.22)
+        clicked = True
+        result_sel = ""
+        if overlay_after_enter is not None:
+            self.log("ℹ️ Enter 후에도 레퍼런스 검색창이 남아 있어 첫 결과 클릭 폴백을 시도합니다.")
+            clicked, result_sel = self._click_prompt_reference_first_result(search_input=overlay_after_enter, asset_tag=asset_tag, timeout_sec=0.65)
+            if not clicked:
+                raise RuntimeError(f"레퍼런스 첫 결과 선택 실패: {asset_tag}")
         if result_sel:
             self.cfg["prompt_reference_result_selector"] = result_sel
         self.log(f"✅ 레퍼런스 첨부 요청 완료: {asset_tag}")
-        self.actor.random_action_delay("레퍼런스 첨부 반영 대기", 0.08, 0.18)
-
-        input_selector = (self.cfg.get("input_selector") or "").strip()
-        refreshed_input, refreshed_selector = self._resolve_prompt_input_locator(
-            input_selector,
-            timeout_ms=2600,
-            near_locator=input_locator,
-        )
-        if refreshed_input is not None:
-            self._stabilize_prompt_caret_after_reference(refreshed_input)
-            self.log(f"🧭 레퍼런스 첨부 후 입력창 복귀: {refreshed_selector or '자동 탐색'}")
-            return refreshed_input
+        self.actor.random_action_delay("레퍼런스 첨부 반영 대기", 0.04, 0.10)
+        self._stabilize_prompt_caret_after_reference(input_locator)
+        self.log("🧭 레퍼런스 첨부 후 입력창 복귀: 기존 입력창 유지")
         return input_locator
 
     def _split_prompt_inline_reference_parts(self, prompt_text):
