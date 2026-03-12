@@ -154,11 +154,26 @@ DEFAULT_CONFIG = {
     "ui_window_width": 0,
     "ui_window_height": 0,
     "ui_zoom_percent": 100,
+    "scale_lock_enabled": False,
     "browser_window_scale_percent": 100,
     "browser_zoom_percent": 100,
+    "work_env_mode": "laptop",
+    "display_mode_presets": {
+        "laptop": {
+            "browser_window_scale_percent": 100,
+            "browser_zoom_percent": 100,
+        },
+        "desktop": {
+            "browser_window_scale_percent": 70,
+            "browser_zoom_percent": 100,
+        },
+    },
     "prompt_image_baseline_ready": False,
     "asset_image_baseline_ready": False,
     "current_media_state": "",
+    "last_startup_preflight_ok": False,
+    "last_startup_preflight_summary": "",
+    "last_startup_preflight_at": "",
     "enter_submit_rate": 0.5,
     "use_ref_images": False,
     "ref_image_count": 1,
@@ -372,6 +387,7 @@ class FlowVisionApp:
         self.base = Path(__file__).resolve().parent
         self.cfg_path = self.base / CONFIG_FILE
         self.cfg = load_config_from_file(self.cfg_path)
+        self._normalize_display_mode_config()
         self.logs_dir = self.base.parent / "logs"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         
@@ -423,6 +439,11 @@ class FlowVisionApp:
         self.asset_image_baseline_ready = bool(self.cfg.get("asset_image_baseline_ready", False))
         current_media_state = str(self.cfg.get("current_media_state", "") or "").strip().lower()
         self.current_media_state = current_media_state if current_media_state in ("image", "video") else None
+        self.preflight_running = False
+        self.scale_control_buttons = []
+        self.last_startup_preflight_ok = bool(self.cfg.get("last_startup_preflight_ok", False))
+        self.last_startup_preflight_summary = str(self.cfg.get("last_startup_preflight_summary", "") or "").strip()
+        self.last_startup_preflight_at = str(self.cfg.get("last_startup_preflight_at", "") or "").strip()
 
         self.actor = HumanActor(action_logger=self._action_log, status_callback=self._actor_status)
         self.actor.language_mode = self.cfg.get("language_mode", "en")
@@ -592,6 +613,188 @@ class FlowVisionApp:
         self.style.configure("ActionCompact.TButton", background=self.color_accent, foreground="white", font=(self.font_ui_family, max(11, action_size - 2), "bold"), padding=max(5, int(6 * scale)))
         self.style.configure("ControlCompact.TButton", background="#294162", foreground=self.color_text, borderwidth=1, font=(self.font_ui_family, max(10, self._font_px("body") - 1), "bold"), padding=max(3, int(4 * scale)))
 
+    def _display_mode_labels(self):
+        return {
+            "laptop": "노트북 모드",
+            "desktop": "데스크탑 모드",
+        }
+
+    def _display_mode_values(self):
+        return {label: key for key, label in self._display_mode_labels().items()}
+
+    def _default_display_mode_presets(self):
+        return {
+            "laptop": {
+                "browser_window_scale_percent": 100,
+                "browser_zoom_percent": 100,
+            },
+            "desktop": {
+                "browser_window_scale_percent": 70,
+                "browser_zoom_percent": 100,
+            },
+        }
+
+    def _normalize_display_mode_config(self):
+        raw_presets = self.cfg.get("display_mode_presets", {})
+        if not isinstance(raw_presets, dict):
+            raw_presets = {}
+        defaults = self._default_display_mode_presets()
+        normalized = {}
+        for mode, default in defaults.items():
+            current = raw_presets.get(mode, {})
+            if not isinstance(current, dict):
+                current = {}
+            normalized[mode] = {
+                "browser_window_scale_percent": self._clamp_percent(
+                    current.get("browser_window_scale_percent", default["browser_window_scale_percent"]),
+                    default=default["browser_window_scale_percent"],
+                    minimum=50,
+                    maximum=150,
+                ),
+                "browser_zoom_percent": self._clamp_percent(
+                    current.get("browser_zoom_percent", default["browser_zoom_percent"]),
+                    default=default["browser_zoom_percent"],
+                    minimum=50,
+                    maximum=150,
+                ),
+            }
+
+        active_mode = str(self.cfg.get("work_env_mode", "laptop") or "laptop").strip().lower()
+        if active_mode not in normalized:
+            active_mode = "laptop"
+
+        self.cfg["display_mode_presets"] = normalized
+        self.cfg["work_env_mode"] = active_mode
+        self.cfg["scale_lock_enabled"] = False
+        self.cfg["relay_mode"] = False
+        self.cfg["scheduled_start_enabled"] = False
+        self.cfg["scheduled_start_at"] = ""
+
+        active = normalized[active_mode]
+        self.cfg["browser_window_scale_percent"] = active["browser_window_scale_percent"]
+        self.cfg["browser_zoom_percent"] = active["browser_zoom_percent"]
+
+    def _active_display_mode(self):
+        mode = str(self.cfg.get("work_env_mode", "laptop") or "laptop").strip().lower()
+        if mode not in self._default_display_mode_presets():
+            mode = "laptop"
+        return mode
+
+    def _sync_active_display_mode_from_current_settings(self, mode=None, save=False):
+        mode = str(mode or self._active_display_mode()).strip().lower()
+        presets = self.cfg.get("display_mode_presets", {})
+        if not isinstance(presets, dict):
+            presets = {}
+        defaults = self._default_display_mode_presets()
+        normalized = {}
+        for key, default in defaults.items():
+            current = presets.get(key, {})
+            if not isinstance(current, dict):
+                current = {}
+            normalized[key] = {
+                "browser_window_scale_percent": self._clamp_percent(
+                    current.get("browser_window_scale_percent", default["browser_window_scale_percent"]),
+                    default=default["browser_window_scale_percent"],
+                    minimum=50,
+                    maximum=150,
+                ),
+                "browser_zoom_percent": self._clamp_percent(
+                    current.get("browser_zoom_percent", default["browser_zoom_percent"]),
+                    default=default["browser_zoom_percent"],
+                    minimum=50,
+                    maximum=150,
+                ),
+            }
+        if mode not in normalized:
+            mode = "laptop"
+        normalized[mode] = {
+            "browser_window_scale_percent": self._clamp_percent(self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=50, maximum=150),
+            "browser_zoom_percent": self._clamp_percent(self.cfg.get("browser_zoom_percent", 100), default=100, minimum=50, maximum=150),
+        }
+        self.cfg["display_mode_presets"] = normalized
+        if save:
+            self.save_config()
+
+    def _display_mode_summary_text(self):
+        presets = self.cfg.get("display_mode_presets", {}) or {}
+        labels = self._display_mode_labels()
+        parts = []
+        for mode in ("laptop", "desktop"):
+            preset = presets.get(mode, {}) or {}
+            parts.append(
+                f"{labels.get(mode, mode)} {preset.get('browser_window_scale_percent', 100)} / {preset.get('browser_zoom_percent', 100)}"
+            )
+        return " | ".join(parts)
+
+    def _refresh_display_mode_ui(self):
+        if hasattr(self, "display_mode_var"):
+            self.display_mode_var.set(self._display_mode_labels().get(self._active_display_mode(), "노트북 모드"))
+        if hasattr(self, "lbl_display_mode_state"):
+            self.lbl_display_mode_state.config(
+                text=f"현재 적용: {self._display_mode_labels().get(self._active_display_mode(), '노트북 모드')}",
+                fg=self.color_success,
+            )
+        if hasattr(self, "lbl_display_mode_summary"):
+            self.lbl_display_mode_summary.config(
+                text=self._display_mode_summary_text(),
+                fg=self.color_info,
+            )
+
+    def _apply_display_mode(self, mode=None, apply_browser_live=True, write_log=False):
+        self._normalize_display_mode_config()
+        mode = str(mode or self._active_display_mode()).strip().lower()
+        presets = self.cfg.get("display_mode_presets", {}) or {}
+        if mode not in presets:
+            mode = "laptop"
+        preset = presets.get(mode, {}) or {}
+        self.cfg["work_env_mode"] = mode
+        self.cfg["browser_window_scale_percent"] = self._clamp_percent(
+            preset.get("browser_window_scale_percent", 100),
+            default=100,
+            minimum=50,
+            maximum=150,
+        )
+        self.cfg["browser_zoom_percent"] = self._clamp_percent(
+            preset.get("browser_zoom_percent", 100),
+            default=100,
+            minimum=50,
+            maximum=150,
+        )
+        if hasattr(self, "browser_window_scale_var"):
+            self.browser_window_scale_var.set(str(self.cfg["browser_window_scale_percent"]))
+        if hasattr(self, "browser_zoom_var"):
+            self.browser_zoom_var.set(str(self.cfg["browser_zoom_percent"]))
+        if hasattr(self, "lbl_browser_window_scale_state"):
+            self.lbl_browser_window_scale_state.config(text=f"{self.cfg['browser_window_scale_percent']}%")
+        if hasattr(self, "lbl_browser_zoom_state"):
+            self.lbl_browser_zoom_state.config(text=f"{self.cfg['browser_zoom_percent']}%")
+        self.save_config()
+        self._refresh_display_mode_ui()
+        if self.page and apply_browser_live:
+            self._apply_browser_window_scale_live()
+            self._apply_browser_zoom()
+        if write_log:
+            self.log(
+                f"💻 환경 모드 적용: {self._display_mode_labels().get(mode, mode)} | "
+                f"작업창={self.cfg['browser_window_scale_percent']}% / 브라우저={self.cfg['browser_zoom_percent']}%"
+            )
+
+    def on_display_mode_change(self, event=None):
+        label = str(self.display_mode_var.get() or "").strip() if hasattr(self, "display_mode_var") else ""
+        mode = self._display_mode_values().get(label, self._active_display_mode())
+        self._apply_display_mode(mode=mode, apply_browser_live=bool(self.page), write_log=True)
+
+    def on_save_display_mode(self, mode):
+        mode = str(mode or self._active_display_mode()).strip().lower()
+        if mode not in self._default_display_mode_presets():
+            mode = "laptop"
+        self._sync_active_display_mode_from_current_settings(mode=mode, save=True)
+        self._refresh_display_mode_ui()
+        self.log(
+            f"💾 환경 모드 저장: {self._display_mode_labels().get(mode, mode)} | "
+            f"작업창={self.cfg.get('browser_window_scale_percent', 100)}% / 브라우저={self.cfg.get('browser_zoom_percent', 100)}%"
+        )
+
     def _set_ui_zoom_percent(self, delta=0, absolute=None):
         current = self._clamp_percent(self.cfg.get("ui_zoom_percent", 100), default=100, minimum=50, maximum=150)
         target = self._clamp_percent(absolute if absolute is not None else current + delta, default=current, minimum=50, maximum=150)
@@ -602,6 +805,20 @@ class FlowVisionApp:
             self.lbl_zoom_state.config(text=f"{target}%")
         self._refresh_responsive_layout()
         self.log(f"🔎 UI 확대 비율 적용: {target}%")
+
+    def _is_scale_locked(self):
+        return False
+
+    def _apply_locked_scale_settings(self, apply_browser_live=True, write_log=False):
+        self._apply_display_mode(mode=self._active_display_mode(), apply_browser_live=apply_browser_live, write_log=write_log)
+
+    def _refresh_scale_lock_ui(self):
+        self._refresh_display_mode_ui()
+
+    def on_toggle_scale_lock(self):
+        self.cfg["scale_lock_enabled"] = False
+        self.save_config()
+        self._refresh_display_mode_ui()
 
     def _get_browser_work_area(self):
         sw = self.root.winfo_screenwidth()
@@ -649,7 +866,9 @@ class FlowVisionApp:
             self.browser_window_scale_var.set(str(target))
         if hasattr(self, "lbl_browser_window_scale_state"):
             self.lbl_browser_window_scale_state.config(text=f"{target}%")
+        self._sync_active_display_mode_from_current_settings(save=False)
         self.save_config()
+        self._refresh_display_mode_ui()
         self._apply_browser_window_scale_live()
         self.log(f"🪟 봇 작업창 크기 적용: {target}%")
 
@@ -661,7 +880,9 @@ class FlowVisionApp:
             self.browser_zoom_var.set(str(target))
         if hasattr(self, "lbl_browser_zoom_state"):
             self.lbl_browser_zoom_state.config(text=f"{target}%")
+        self._sync_active_display_mode_from_current_settings(save=False)
         self.save_config()
+        self._refresh_display_mode_ui()
         self._apply_browser_zoom()
         self.log(f"🔎 브라우저 배율 적용: {target}%")
 
@@ -1272,6 +1493,288 @@ class FlowVisionApp:
 
     def on_refresh_detected_media_state(self):
         self.refresh_detected_media_state(ensure_session=True, write_log=True)
+
+    def _set_startup_preflight_ui(self, passed=None, detail="", checked_at=""):
+        if not hasattr(self, "lbl_startup_preflight"):
+            return
+        checked_at = str(checked_at or "").strip()
+        detail = str(detail or "").strip()
+        if len(detail) > 72:
+            detail = detail[:69] + "..."
+        time_prefix = f"[{checked_at}] " if checked_at else ""
+        if passed is True:
+            text = f"{time_prefix}시작 전 자동 점검: 합격"
+            if detail:
+                text += f" | {detail}"
+            color = self.color_success
+        elif passed is False:
+            text = f"{time_prefix}시작 전 자동 점검: 불합격"
+            if detail:
+                text += f" | {detail}"
+            color = self.color_error
+        else:
+            text = f"{time_prefix}시작 전 자동 점검: 아직 안 함"
+            if detail:
+                text += f" | {detail}"
+            color = self.color_text_sec
+        self.lbl_startup_preflight.config(text=text, fg=color)
+
+    def _format_startup_preflight_message(self, results):
+        lines = []
+        for name, ok, detail in results or []:
+            status = "합격" if ok else "실패"
+            line = f"- {name}: {status}"
+            if detail:
+                line += f" | {detail}"
+            lines.append(line)
+        return "\n".join(lines) if lines else "- 자동 점검 결과가 없습니다."
+
+    def _startup_preflight_check_prompt_selectors(self):
+        self._ensure_browser_session()
+        self.actor.set_page(self.page)
+        start_url = (self.cfg.get("start_url") or "").strip()
+        input_selector = (self.cfg.get("input_selector") or "").strip()
+        submit_selector = (self.cfg.get("submit_selector") or "").strip()
+
+        def _check_once():
+            try:
+                input_loc, _ = self._resolve_prompt_input_locator(input_selector, timeout_ms=2200)
+                input_ok_local = input_loc is not None
+            except Exception:
+                input_ok_local = False
+                input_loc = None
+            try:
+                submit_loc, _ = self._resolve_best_locator(
+                    self._normalize_candidate_list(submit_selector) or self._submit_candidates(),
+                    near_locator=input_loc if input_ok_local else None,
+                    timeout_ms=2200,
+                )
+                submit_ok_local = submit_loc is not None
+            except Exception:
+                submit_ok_local = False
+            return input_ok_local, submit_ok_local
+
+        input_ok, submit_ok = _check_once()
+        if not (input_ok and submit_ok):
+            if start_url:
+                self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+            self._try_open_new_project_if_needed(
+                input_selector or "#PINHOLE_TEXT_AREA_ELEMENT_ID, textarea, [contenteditable='true'], [role='textbox']"
+            )
+            for _ in range(6):
+                time.sleep(0.7)
+                input_ok, submit_ok = _check_once()
+                if input_ok and submit_ok:
+                    break
+        ok = input_ok and submit_ok
+        return ok, f"입력={'OK' if input_ok else 'FAIL'} / 제출={'OK' if submit_ok else 'FAIL'}"
+
+    def _startup_preflight_detect_media_state(self, profile="prompt"):
+        profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
+        self._ensure_browser_session()
+        self.actor.set_page(self.page)
+        start_url = (self.cfg.get("start_url") or "").strip()
+        if start_url:
+            if start_url not in (self.page.url or ""):
+                self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+            time.sleep(random.uniform(1.0, 2.0))
+
+        input_hint = (self.cfg.get("input_selector") or "").strip() or "#PINHOLE_TEXT_AREA_ELEMENT_ID, textarea, [contenteditable='true'], [role='textbox']"
+        self._try_open_new_project_if_needed(input_hint)
+        input_locator, _ = self._resolve_prompt_input_locator(input_hint, timeout_ms=2200)
+
+        detected_state = self.refresh_detected_media_state(
+            ensure_session=False,
+            input_locator=input_locator,
+            profile=profile,
+            write_log=True,
+        )
+        if detected_state not in ("image", "video"):
+            return False, "현재 상태 감지 실패", None, input_locator
+
+        return True, f"현재={detected_state}", detected_state, input_locator
+
+    def _startup_preflight_check_media_switch(self, profile="prompt", detected_state=None, input_locator=None):
+        if detected_state not in ("image", "video") or input_locator is None:
+            ok, detail, detected, input_locator = self._startup_preflight_detect_media_state(profile=profile)
+            if not ok:
+                return False, detail
+            detected_state = detected
+        if detected_state not in ("image", "video"):
+            return False, "현재 상태 감지 실패"
+
+        target_state = "video" if detected_state == "image" else "image"
+        self.current_media_state = detected_state
+        first_ok = self._switch_media_state(target_state, input_locator=input_locator, profile=profile)
+        second_ok = self._switch_media_state(detected_state, input_locator=input_locator, profile=profile)
+        ok = bool(first_ok and second_ok)
+        return ok, (
+            f"현재={detected_state} / "
+            f"{detected_state}→{target_state}={'OK' if first_ok else 'FAIL'} / "
+            f"{target_state}→{detected_state}={'OK' if second_ok else 'FAIL'}"
+        )
+
+    def _startup_preflight_prepare_asset_video_state(self):
+        ok, detail, detected_state, input_locator = self._startup_preflight_detect_media_state("asset")
+        if not ok:
+            return False, detail
+        if detected_state == "video":
+            return True, "현재=video / 유지=OK"
+
+        switch_ok = self._switch_media_state("video", input_locator=input_locator, profile="asset")
+        verified_state = self.refresh_detected_media_state(
+            ensure_session=False,
+            input_locator=input_locator,
+            profile="asset",
+            write_log=True,
+        )
+        ok = bool(switch_ok and verified_state == "video")
+        return ok, f"현재={detected_state} / {detected_state}→video={'OK' if ok else 'FAIL'}"
+
+    def _startup_preflight_check_asset_selectors(self):
+        self._ensure_browser_session()
+        self.actor.set_page(self.page)
+        start_url = (self.cfg.get("start_url") or "").strip()
+        if start_url and start_url not in (self.page.url or ""):
+            self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+        time.sleep(random.uniform(0.8, 1.6))
+        video_ready_ok, video_ready_detail = self._startup_preflight_prepare_asset_video_state()
+        if not video_ready_ok:
+            return False, f"{video_ready_detail} / 에셋 전 준비 실패"
+        self._prepare_page_for_selector_detection()
+        self._ensure_asset_workspace_visible(timeout_sec=4)
+        self._open_asset_search_surface_for_detection()
+
+        start_candidates = self._normalize_candidate_list(self.cfg.get("asset_start_selector", "")) or self._asset_start_button_candidates()
+        search_candidates = self._normalize_candidate_list(self.cfg.get("asset_search_button_selector", "")) or self._asset_search_button_candidates()
+        input_candidates = self._normalize_candidate_list(self.cfg.get("asset_search_input_selector", "")) or self._asset_search_input_candidates()
+
+        start_loc, _ = self._resolve_best_locator_with_scroll(start_candidates, timeout_ms=2200, prefer_enabled=False)
+        search_loc, _ = self._resolve_best_locator_with_scroll(
+            search_candidates + ["text=에셋 검색", "text=Asset search"],
+            timeout_ms=2200,
+            prefer_enabled=False,
+            ratios=(0.0, 0.12, 0.24, 0.36, 0.50),
+        )
+        if start_loc is None:
+            start_loc, _ = self._resolve_text_locator_any_frame(["시작", "Start"], timeout_ms=1000)
+        if search_loc is None:
+            search_loc, _ = self._resolve_text_locator_any_frame(["에셋 검색", "Asset search", "Search assets"], timeout_ms=1200)
+
+        input_loc, _ = self._resolve_best_locator_with_scroll(
+            input_candidates,
+            timeout_ms=1800,
+            prefer_enabled=False,
+            ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
+        )
+        if (input_loc is None) and (search_loc is not None):
+            try:
+                search_loc.click(timeout=2000)
+            except Exception:
+                pass
+            self.actor.random_action_delay("자동 점검 검색 입력칸 확인 대기", 0.3, 1.0)
+            input_loc, _ = self._resolve_best_locator_with_scroll(
+                input_candidates,
+                timeout_ms=2200,
+                prefer_enabled=False,
+                ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
+            )
+
+        start_ok = start_loc is not None
+        input_ok = input_loc is not None
+        ok = bool(start_ok and input_ok)
+        return ok, (
+            f"{video_ready_detail} / "
+            f"시작={'OK' if start_ok else 'FAIL'} / 검색입력={'OK' if input_ok else 'FAIL'}"
+        )
+
+    def _startup_preflight_check_download(self, mode):
+        mode = "image" if mode == "image" else "video"
+        self._ensure_browser_session()
+        self.actor.set_page(self.page)
+        start_url = (self.cfg.get("start_url") or "").strip()
+        if start_url and start_url not in (self.page.url or ""):
+            self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+        time.sleep(random.uniform(0.8, 1.4))
+
+        items = self._build_download_items()
+        if not items:
+            return False, "다운로드 태그 없음"
+        tag = items[0]
+        quality = self._download_quality(mode)
+        result = self._run_single_download_flow(mode=mode, tag=tag, quality=quality, dry_run=True, wait_sec=25)
+        self._apply_download_used_selectors(mode, result.get("used", {}))
+        self.save_config()
+        used = result.get("used", {})
+        ok = bool(used.get("search_input") and used.get("card") and used.get("more") and used.get("menu") and used.get("quality"))
+        return ok, (
+            f"태그={tag} / 검색={used.get('search_input') or 'FAIL'} / 카드={used.get('card') or 'FAIL'} / "
+            f"더보기={used.get('more') or 'FAIL'} / 다운로드={used.get('menu') or 'FAIL'} / 품질={used.get('quality') or 'FAIL'}"
+        )
+
+    def _run_startup_preflight_suite(self, interactive=True):
+        if self.preflight_running:
+            return False, [("자동 점검", False, "이미 실행 중입니다.")]
+
+        opened_here = False
+        results = []
+        self.preflight_running = True
+        checked_at = datetime.now().strftime("%H:%M:%S")
+        try:
+            self.on_option_toggle()
+            if not self.action_log_fp:
+                self._open_action_log("startup_preflight")
+                opened_here = True
+            self.update_status_label("🛡 시작 전 자동 점검 중...", self.color_info)
+            self._apply_display_mode(mode=self._active_display_mode(), apply_browser_live=True, write_log=True)
+
+            prompt_detect_ok, prompt_detect_detail, prompt_detected_state, prompt_input_locator = self._startup_preflight_detect_media_state("prompt")
+            results.append(("현재 상태 감지", bool(prompt_detect_ok), str(prompt_detect_detail or "").strip()))
+            self.log(f"🛡 자동 점검 | 현재 상태 감지 | {'OK' if prompt_detect_ok else 'FAIL'} | {prompt_detect_detail}")
+
+            checks = [
+                ("이미지/동영상 전환", lambda: self._startup_preflight_check_media_switch("prompt", detected_state=prompt_detected_state, input_locator=prompt_input_locator)),
+                ("S 에셋 확인", self._startup_preflight_check_asset_selectors),
+                ("이미지 다운로드", lambda: self._startup_preflight_check_download("image")),
+                ("영상 다운로드", lambda: self._startup_preflight_check_download("video")),
+            ]
+
+            for name, fn in checks:
+                self.update_status_label(f"🛡 자동 점검 중... {name}", self.color_info)
+                try:
+                    ok, detail = fn()
+                except Exception as e:
+                    ok, detail = False, str(e)
+                results.append((name, bool(ok), str(detail or "").strip()))
+                self.log(f"🛡 자동 점검 | {name} | {'OK' if ok else 'FAIL'} | {detail}")
+
+            passed = all(ok for _, ok, _ in results)
+            summary = ", ".join(f"{name}={'OK' if ok else 'FAIL'}" for name, ok, _ in results)
+            self.last_startup_preflight_ok = passed
+            self.last_startup_preflight_summary = summary
+            self.last_startup_preflight_at = checked_at
+            self.cfg["last_startup_preflight_ok"] = passed
+            self.cfg["last_startup_preflight_summary"] = summary
+            self.cfg["last_startup_preflight_at"] = checked_at
+            self.save_config()
+            self._set_startup_preflight_ui(passed, summary, checked_at)
+            self.update_status_label("✅ 시작 전 자동 점검 합격" if passed else "❌ 시작 전 자동 점검 실패", self.color_success if passed else self.color_error)
+            if interactive:
+                if passed:
+                    messagebox.showinfo("시작 전 자동 점검", "아래 항목이 모두 합격했습니다.\n\n" + self._format_startup_preflight_message(results))
+                else:
+                    messagebox.showwarning("시작 전 자동 점검 실패", "아래 항목을 먼저 확인해주세요.\n\n" + self._format_startup_preflight_message(results))
+            return passed, results
+        finally:
+            self.preflight_running = False
+            if opened_here:
+                self._close_action_log()
+
+    def on_run_startup_preflight(self):
+        if self.running:
+            messagebox.showwarning("안내", "자동화 실행 중에는 시작 전 자동 점검을 할 수 없습니다.\n먼저 중지 후 시도해주세요.")
+            return
+        self._run_startup_preflight_suite(interactive=True)
 
     def _ensure_worker_thread(self):
         if self.worker_thread and self.worker_thread.is_alive():
@@ -3168,6 +3671,8 @@ class FlowVisionApp:
         positive_keys = ("search", "검색", "media", "all media")
         negative_keys = ("project", "title", "이름", "rename", "name", "prompt", "프롬프트", "무엇을 만들고")
         toggled = False
+        min_x = max(90, int(viewport_w * 0.12))
+        max_y = max(190, int(viewport_h * 0.42))
 
         while time.time() < end_ts:
             for sel in self._download_search_input_candidates():
@@ -3188,10 +3693,10 @@ class FlowVisionApp:
                         continue
                     if box["width"] < 100 or box["height"] < 20:
                         continue
-                    # 상단 검색바만 허용 (프로젝트명/하단 입력창 제외)
-                    if box["y"] > max(170, viewport_h * 0.28):
+                    # 작은 창에서는 검색바가 조금 더 아래/왼쪽에 나올 수 있어 허용 범위를 넓힌다.
+                    if box["y"] > max_y:
                         continue
-                    if box["x"] < 220:
+                    if box["x"] < min_x:
                         continue
                     score = 0.0
                     meta = self._locator_meta_text(cand)
@@ -3231,10 +3736,144 @@ class FlowVisionApp:
                         self._click_with_actor_fallback(toggle_loc, "검색 아이콘")
                         self.actor.random_action_delay("검색바 표시 대기", 0.2, 0.8)
                         toggled = True
+                        focus_loc, focus_sel = self._resolve_focused_download_search_input()
+                        if focus_loc is not None:
+                            return focus_loc, focus_sel
                     except Exception:
                         pass
             time.sleep(0.25)
         return best_loc, best_sel
+
+    def _resolve_focused_download_search_input(self):
+        if not self.page:
+            return None, None
+        try:
+            focus_loc = self.page.locator(":focus").first
+            if focus_loc.count() <= 0:
+                return None, None
+            if not focus_loc.is_visible(timeout=400):
+                return None, None
+            box = focus_loc.bounding_box()
+            if (not box) or box["width"] < 80 or box["height"] < 18:
+                return None, None
+            meta = self._locator_meta_text(focus_loc)
+            negative_keys = ("project", "title", "이름", "rename", "name", "prompt", "프롬프트", "무엇을 만들고")
+            if any(k in meta for k in negative_keys):
+                return None, None
+            return focus_loc, ":focus"
+        except Exception:
+            return None, None
+
+    def _direct_fill_download_search_via_dom(self, search_text):
+        if (not self.page) or (not search_text):
+            return False, "page/text 없음", ""
+        try:
+            result = self.page.evaluate(
+                """(payload) => {
+                    const text = String(payload.text || "").trim();
+                    if (!text) return {ok:false, reason:"empty-text", selector:""};
+
+                    const positiveKeys = ["search", "검색", "media", "all media", "find"];
+                    const negativeKeys = ["project", "title", "이름", "rename", "name", "prompt", "프롬프트", "무엇을 만들고"];
+
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        if (!r || r.width < 10 || r.height < 10) return false;
+                        const st = window.getComputedStyle(el);
+                        return st && st.display !== "none" && st.visibility !== "hidden" && st.opacity !== "0";
+                    };
+
+                    const metaText = (el) => {
+                        const a = (k) => (el.getAttribute(k) || "");
+                        return [
+                            el.tagName || "",
+                            el.id || "",
+                            el.className || "",
+                            a("type"),
+                            a("role"),
+                            a("name"),
+                            a("placeholder"),
+                            a("aria-label"),
+                            a("title"),
+                            (el.innerText || ""),
+                        ].join(" ").toLowerCase();
+                    };
+
+                    const selectorHint = (el) => {
+                        const a = (k) => (el.getAttribute(k) || "").trim();
+                        const tag = (el.tagName || "input").toLowerCase();
+                        if (el.id) return `${tag}[id='${el.id.replace(/'/g, "\\'")}']`;
+                        if (a("aria-label")) return `${tag}[aria-label*='${a("aria-label").replace(/'/g, "\\'")}']`;
+                        if (a("placeholder")) return `${tag}[placeholder*='${a("placeholder").replace(/'/g, "\\'")}']`;
+                        if (a("name")) return `${tag}[name='${a("name").replace(/'/g, "\\'")}']`;
+                        if (a("type")) return `${tag}[type='${a("type").replace(/'/g, "\\'")}']`;
+                        if (a("role")) return `[role='${a("role").replace(/'/g, "\\'")}']`;
+                        return "dom-search-fallback";
+                    };
+
+                    const roots = [];
+                    const q = [document];
+                    while (q.length) {
+                        const root = q.shift();
+                        roots.push(root);
+                        const hostNodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
+                        for (const h of hostNodes) {
+                            if (h && h.shadowRoot) q.push(h.shadowRoot);
+                        }
+                    }
+
+                    let best = null;
+                    let bestScore = -1e9;
+                    for (const root of roots) {
+                        const nodes = root.querySelectorAll
+                            ? root.querySelectorAll("input, textarea, [contenteditable='true'], [role='searchbox'], [role='textbox']")
+                            : [];
+                        for (const el of nodes) {
+                            if (!isVisible(el)) continue;
+                            const r = el.getBoundingClientRect();
+                            const meta = metaText(el);
+                            let score = 0;
+                            if (el === document.activeElement) score += 700;
+                            if (positiveKeys.some(k => meta.includes(k))) score += 450;
+                            if (negativeKeys.some(k => meta.includes(k))) score -= 1000;
+                            if ((el.getAttribute("type") || "").toLowerCase() === "search") score += 280;
+                            if ((el.getAttribute("role") || "").toLowerCase() === "searchbox") score += 280;
+                            if (r.width >= 220) score += 180;
+                            else if (r.width >= 140) score += 70;
+                            else score -= 240;
+                            if (r.y <= Math.max(220, window.innerHeight * 0.48)) score += 120;
+                            else score -= 220;
+                            if (r.x >= Math.max(40, window.innerWidth * 0.08)) score += 60;
+                            if (score > bestScore) {
+                                best = el;
+                                bestScore = score;
+                            }
+                        }
+                    }
+
+                    if (!best) return {ok:false, reason:"no-candidate", selector:""};
+
+                    best.focus();
+                    if (best.isContentEditable) {
+                        best.textContent = "";
+                        best.dispatchEvent(new InputEvent("input", {bubbles:true, data:""}));
+                        best.textContent = text;
+                        best.dispatchEvent(new InputEvent("input", {bubbles:true, data:text}));
+                    } else {
+                        best.value = "";
+                        best.dispatchEvent(new Event("input", {bubbles:true}));
+                        best.value = text;
+                        best.dispatchEvent(new Event("input", {bubbles:true}));
+                        best.dispatchEvent(new Event("change", {bubbles:true}));
+                    }
+                    return {ok:true, reason:"", selector:selectorHint(best)};
+                }""",
+                {"text": search_text},
+            ) or {}
+        except Exception as e:
+            return False, str(e), ""
+        return bool(result.get("ok")), str(result.get("reason", "")), str(result.get("selector", ""))
 
     def _find_first_media_tile_box(self):
         if not self.page:
@@ -3941,26 +4580,37 @@ class FlowVisionApp:
 
         search_loc, search_sel = self._resolve_download_search_input(timeout_sec=8)
         if search_loc is None:
-            raise RuntimeError("검색 입력칸을 찾지 못했습니다.")
-        used["search_input"] = search_sel or ""
-        try:
-            search_loc.click(timeout=1500)
-        except Exception:
-            pass
-        try:
-            self.page.keyboard.press("Control+A")
-            self.page.keyboard.press("Backspace")
-        except Exception:
-            pass
-        try:
-            search_loc.fill(tag)
-        except Exception:
+            ok_dom, reason_dom, sel_dom = self._direct_fill_download_search_via_dom(tag)
+            if not ok_dom:
+                raise RuntimeError(f"검색 입력칸을 찾지 못했습니다. (dom={reason_dom})")
+            used["search_input"] = sel_dom or "dom-search-fallback"
+            self.log(f"✅ 다운로드 검색 입력 완료(DOM 폴백): {tag}")
+            self.page.keyboard.press("Enter")
+            self._download_action_delay("검색 결과 반영 대기", 0.4, 1.2)
+        else:
+            used["search_input"] = search_sel or ""
             try:
-                search_loc.type(tag, delay=random.randint(20, 60))
-            except Exception as e:
-                raise RuntimeError(f"검색어 입력 실패: {e}")
-        self.page.keyboard.press("Enter")
-        self._download_action_delay("검색 결과 반영 대기", 0.4, 1.2)
+                search_loc.click(timeout=1500)
+            except Exception:
+                pass
+            try:
+                self.page.keyboard.press("Control+A")
+                self.page.keyboard.press("Backspace")
+            except Exception:
+                pass
+            try:
+                search_loc.fill(tag)
+            except Exception:
+                try:
+                    search_loc.type(tag, delay=random.randint(20, 60))
+                except Exception:
+                    ok_dom, reason_dom, sel_dom = self._direct_fill_download_search_via_dom(tag)
+                    if not ok_dom:
+                        raise RuntimeError(f"검색어 입력 실패: {reason_dom}")
+                    used["search_input"] = sel_dom or used["search_input"] or "dom-search-fallback"
+                    self.log(f"✅ 다운로드 검색 입력 완료(DOM 폴백): {tag}")
+            self.page.keyboard.press("Enter")
+            self._download_action_delay("검색 결과 반영 대기", 0.4, 1.2)
 
         deadline = time.time() + wait_sec
         card_loc = None
@@ -4564,17 +5214,61 @@ class FlowVisionApp:
         browser_scale_f.pack(fill="x", pady=(0, 8))
         tk.Label(browser_scale_f, text="봇 작업창 크기", bg=self.color_bg, font=self.font_small).pack(side="left")
         self.browser_window_scale_var = tk.StringVar(value=str(self._clamp_percent(self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=50, maximum=150)))
-        ttk.Button(browser_scale_f, text="-", width=3, command=lambda: self._set_browser_window_scale_percent(delta=-10)).pack(side="left", padx=(6, 4))
+        btn_browser_scale_minus = ttk.Button(browser_scale_f, text="-", width=3, command=lambda: self._set_browser_window_scale_percent(delta=-10))
+        btn_browser_scale_minus.pack(side="left", padx=(6, 4))
+        self.scale_control_buttons.append(btn_browser_scale_minus)
         self.lbl_browser_window_scale_state = tk.Label(browser_scale_f, text=f"{self._clamp_percent(self.cfg.get('browser_window_scale_percent', 100), default=100)}%", bg=self.color_bg, fg=self.color_info, font=self.font_small, width=6)
         self.lbl_browser_window_scale_state.pack(side="left", padx=(0, 6))
-        ttk.Button(browser_scale_f, text="+", width=3, command=lambda: self._set_browser_window_scale_percent(delta=10)).pack(side="left", padx=(0, 14))
+        btn_browser_scale_plus = ttk.Button(browser_scale_f, text="+", width=3, command=lambda: self._set_browser_window_scale_percent(delta=10))
+        btn_browser_scale_plus.pack(side="left", padx=(0, 14))
+        self.scale_control_buttons.append(btn_browser_scale_plus)
 
         tk.Label(browser_scale_f, text="브라우저 배율", bg=self.color_bg, font=self.font_small).pack(side="left")
         self.browser_zoom_var = tk.StringVar(value=str(self._clamp_percent(self.cfg.get("browser_zoom_percent", 100), default=100, minimum=50, maximum=150)))
-        ttk.Button(browser_scale_f, text="-", width=3, command=lambda: self._set_browser_zoom_percent(delta=-10)).pack(side="left", padx=(6, 4))
+        btn_browser_zoom_minus = ttk.Button(browser_scale_f, text="-", width=3, command=lambda: self._set_browser_zoom_percent(delta=-10))
+        btn_browser_zoom_minus.pack(side="left", padx=(6, 4))
+        self.scale_control_buttons.append(btn_browser_zoom_minus)
         self.lbl_browser_zoom_state = tk.Label(browser_scale_f, text=f"{self._clamp_percent(self.cfg.get('browser_zoom_percent', 100), default=100)}%", bg=self.color_bg, fg=self.color_info, font=self.font_small, width=6)
         self.lbl_browser_zoom_state.pack(side="left", padx=(0, 6))
-        ttk.Button(browser_scale_f, text="+", width=3, command=lambda: self._set_browser_zoom_percent(delta=10)).pack(side="left")
+        btn_browser_zoom_plus = ttk.Button(browser_scale_f, text="+", width=3, command=lambda: self._set_browser_zoom_percent(delta=10))
+        btn_browser_zoom_plus.pack(side="left")
+        self.scale_control_buttons.append(btn_browser_zoom_plus)
+
+        display_mode_f = tk.Frame(left_card, bg=self.color_bg)
+        display_mode_f.pack(fill="x", pady=(0, 8))
+        tk.Label(display_mode_f, text="환경 모드", bg=self.color_bg, font=self.font_small).pack(side="left")
+        self.display_mode_var = tk.StringVar(value=self._display_mode_labels().get(self._active_display_mode(), "노트북 모드"))
+        self.combo_display_mode = ttk.Combobox(
+            display_mode_f,
+            textvariable=self.display_mode_var,
+            state="readonly",
+            width=12,
+            values=tuple(self._display_mode_labels().values()),
+            font=self.font_small,
+        )
+        self.combo_display_mode.pack(side="left", padx=(6, 8))
+        self.combo_display_mode.bind("<<ComboboxSelected>>", self.on_display_mode_change)
+        ttk.Button(display_mode_f, text="노트북 저장", command=lambda: self.on_save_display_mode("laptop")).pack(side="left")
+        ttk.Button(display_mode_f, text="데스크탑 저장", command=lambda: self.on_save_display_mode("desktop")).pack(side="left", padx=6)
+        self.lbl_display_mode_state = tk.Label(
+            display_mode_f,
+            text="현재 적용: 노트북 모드",
+            bg=self.color_bg,
+            fg=self.color_success,
+            font=self.font_small,
+        )
+        self.lbl_display_mode_state.pack(side="left", padx=(10, 0))
+
+        self.lbl_display_mode_summary = tk.Label(
+            left_card,
+            text=self._display_mode_summary_text(),
+            bg=self.color_bg,
+            fg=self.color_info,
+            font=self.font_small,
+            justify="left",
+            wraplength=620,
+        )
+        self.lbl_display_mode_summary.pack(anchor="w", pady=(0, 8))
 
         tk.Label(left_card, text="입력창 CSS Selector", bg=self.color_bg, font=self.font_small).pack(anchor="w")
         self.input_selector_var = tk.StringVar(value=self.cfg.get("input_selector", "textarea, [contenteditable='true']"))
@@ -4778,19 +5472,8 @@ class FlowVisionApp:
 
         preset_btn_f = tk.Frame(preset_f, bg=self.color_bg)
         preset_btn_f.pack(fill="x", pady=(8, 0))
-        ttk.Button(preset_btn_f, text="🔍 생성 옵션 자동찾기", command=self.on_auto_detect_prompt_preset_selectors).pack(side="left")
-        ttk.Button(preset_btn_f, text="🧪 이미지→동영상", command=self.on_test_prompt_image_to_video).pack(side="left", padx=6)
+        ttk.Button(preset_btn_f, text="🧪 이미지→동영상", command=self.on_test_prompt_image_to_video).pack(side="left")
         ttk.Button(preset_btn_f, text="🧪 동영상→이미지", command=self.on_test_prompt_video_to_image).pack(side="left", padx=6)
-        self.lbl_prompt_preset_selector = tk.Label(
-            preset_f,
-            text=self._preset_selector_summary("prompt"),
-            bg=self.color_bg,
-            fg=self.color_info,
-            font=self.font_mono_small,
-            justify="left",
-            wraplength=560,
-        )
-        self.lbl_prompt_preset_selector.pack(anchor="w", pady=(8, 0))
         self._refresh_manual_baseline_labels()
 
         asset_body, _set_asset_open = self._create_collapsible_section(left_card, "S001~S### 에셋 자동 반복", opened=True)
@@ -4999,19 +5682,8 @@ class FlowVisionApp:
 
         asset_preset_btn_f = tk.Frame(asset_preset_box, bg=self.color_bg)
         asset_preset_btn_f.pack(fill="x", pady=(8, 0))
-        ttk.Button(asset_preset_btn_f, text="🔍 S생성 옵션 자동찾기", command=self.on_auto_detect_asset_prompt_preset_selectors).pack(side="left")
-        ttk.Button(asset_preset_btn_f, text="🧪 이미지→동영상", command=self.on_test_asset_image_to_video).pack(side="left", padx=6)
+        ttk.Button(asset_preset_btn_f, text="🧪 이미지→동영상", command=self.on_test_asset_image_to_video).pack(side="left")
         ttk.Button(asset_preset_btn_f, text="🧪 동영상→이미지", command=self.on_test_asset_video_to_image).pack(side="left", padx=6)
-        self.lbl_asset_prompt_preset_selector = tk.Label(
-            asset_preset_box,
-            text=self._preset_selector_summary("asset"),
-            bg=self.color_bg,
-            fg=self.color_info,
-            font=self.font_mono_small,
-            justify="left",
-            wraplength=560,
-        )
-        self.lbl_asset_prompt_preset_selector.pack(anchor="w", pady=(8, 0))
         self._refresh_manual_baseline_labels()
 
         tk.Label(asset_f, text="시작 버튼 selector(선택)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w", pady=(8, 0))
@@ -5154,101 +5826,11 @@ class FlowVisionApp:
         ttk.Button(d2, text="🔍 영상 다운로드 자동찾기", command=self.on_auto_detect_video_download_selectors).pack(side="left")
         ttk.Button(d2, text="🧪 영상 다운로드 테스트", command=self.on_test_video_download_selectors).pack(side="left", padx=6)
 
-        # Relay (Accordion: 기본 접힘)
-        relay_body, _set_relay_open = self._create_collapsible_section(left_card, "이어달리기 / 문서 선택", opened=False)
-        self._set_relay_open = _set_relay_open
-        relay_f = tk.Frame(relay_body, bg=self.color_bg)
-        relay_f.pack(fill="x", pady=6)
-        c3 = tk.Checkbutton(relay_f, text="이어달리기 (파일 순차 실행)", variable=tk.BooleanVar(), command=self.on_option_toggle, bg=self.color_bg, font=("Malgun Gothic", 10), activebackground=self.color_bg)
-        self.relay_var = tk.BooleanVar(value=self.cfg.get("relay_mode", False))
-        c3.config(variable=self.relay_var)
-        c3.pack(side="left")
-
-        tk.Label(relay_f, text="횟수:", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left", padx=(8, 2))
-        self.relay_cnt_var = tk.IntVar(value=self.cfg.get("relay_count", 1))
-        sp = tk.Spinbox(relay_f, from_=1, to=10, width=3, textvariable=self.relay_cnt_var, command=self.on_option_toggle, bg=self.color_input_bg, fg=self.color_input_fg)
-        sp.pack(side="left", padx=5)
-
-        relay_range_f = tk.Frame(relay_body, bg=self.color_bg)
-        relay_range_f.pack(fill="x", pady=(0, 10))
-        tk.Label(relay_range_f, text="이어달리기 범위:", bg=self.color_bg, font=("Malgun Gothic", 9, "bold")).pack(side="left")
-        tk.Label(relay_range_f, text="시작", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left", padx=(8, 2))
-        self.combo_relay_start = ttk.Combobox(relay_range_f, state="readonly", width=8, font=("Malgun Gothic", 9))
-        self.combo_relay_start.pack(side="left")
-        self.combo_relay_start.bind("<<ComboboxSelected>>", self.on_option_toggle)
-        tk.Label(relay_range_f, text="끝", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(side="left", padx=(6, 2))
-        self.combo_relay_end = ttk.Combobox(relay_range_f, state="readonly", width=8, font=("Malgun Gothic", 9))
-        self.combo_relay_end.pack(side="left")
-        self.combo_relay_end.bind("<<ComboboxSelected>>", self.on_option_toggle)
-        self._sync_relay_range_controls()
-
-        relay_pick_f = tk.Frame(relay_body, bg=self.color_bg)
-        relay_pick_f.pack(fill="x", pady=(0, 8))
-        self.relay_pick_var = tk.BooleanVar(value=self.cfg.get("relay_use_selection", False))
-        tk.Checkbutton(
-            relay_pick_f,
-            text="문서 체크 선택 사용",
-            variable=self.relay_pick_var,
-            command=self.on_option_toggle,
-            bg=self.color_bg,
-            font=("Malgun Gothic", 9),
-            activebackground=self.color_bg
-        ).pack(side="left")
-        ttk.Button(relay_pick_f, text="문서 선택...", command=self.on_open_relay_selector).pack(side="left", padx=6)
-
-        self.lbl_relay_pick = tk.Label(relay_body, text="", font=("Malgun Gothic", 9), fg=self.color_text_sec, bg=self.color_bg)
-        self.lbl_relay_pick.pack(anchor="w", pady=(0, 8))
-        self._sync_relay_selection_label()
-
         tk.Label(left_card, text="3. 작업 간격 (초)", font=("Malgun Gothic", 11, "bold"), fg=self.color_text).pack(anchor="w", pady=(20, 5))
         self.entry_interval = tk.Entry(left_card, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 16, "bold"), justify="center", relief="solid", borderwidth=1)
         self.entry_interval.insert(0, str(self.cfg.get("interval_seconds", 180)))
         self.entry_interval.pack(fill="x", ipady=5)
         tk.Label(left_card, text="※ 설정한 시간마다 봇이 작동합니다.", font=("Malgun Gothic", 9), fg=self.color_text_sec).pack(anchor="w")
-
-        # 예약 (Accordion: 기본 접힘)
-        sched_body, _set_sched_open = self._create_collapsible_section(left_card, "예약 시작 설정(고급)", opened=False)
-        self._set_sched_open = _set_sched_open
-        sched_card = tk.Frame(sched_body, bg=self.color_bg)
-        sched_card.pack(fill="x", pady=(14, 2))
-        tk.Label(sched_card, text="4. 1회 예약 시작 (특정 날짜/시간)", font=("Malgun Gothic", 11, "bold"), fg=self.color_text).pack(anchor="w")
-        self.schedule_var = tk.BooleanVar(value=self.cfg.get("scheduled_start_enabled", False))
-        tk.Checkbutton(
-            sched_card,
-            text="예약 시작 사용",
-            variable=self.schedule_var,
-            command=self.on_option_toggle,
-            bg=self.color_bg,
-            font=("Malgun Gothic", 10),
-            activebackground=self.color_bg
-        ).pack(anchor="w", pady=(4, 2))
-        self.schedule_text_var = tk.StringVar(value=self.cfg.get("scheduled_start_at", ""))
-        self.entry_schedule_display = tk.Entry(
-            sched_card,
-            bg=self.color_input_bg,
-            fg=self.color_input_fg,
-            insertbackground=self.color_input_fg,
-            font=("Consolas", 11),
-            justify="center",
-            relief="solid",
-            borderwidth=1,
-            textvariable=self.schedule_text_var,
-            state="readonly"
-        )
-        self.entry_schedule_display.pack(fill="x", ipady=4)
-        tk.Label(
-            sched_card,
-            text="타이핑 없이 달력 버튼으로 선택하세요 👇",
-            font=("Malgun Gothic", 9),
-            fg=self.color_text_sec,
-            bg=self.color_bg
-        ).pack(anchor="w", pady=(2, 0))
-        quick_f = tk.Frame(sched_card, bg=self.color_bg)
-        quick_f.pack(fill="x", pady=(6, 0))
-        ttk.Button(quick_f, text="📅 달력 선택", command=self.on_open_schedule_picker).pack(side="left")
-        ttk.Button(quick_f, text="현재+5분", command=lambda: self.on_fill_schedule_time(5)).pack(side="left")
-        ttk.Button(quick_f, text="현재+30분", command=lambda: self.on_fill_schedule_time(30)).pack(side="left", padx=6)
-        ttk.Button(quick_f, text="예약 지우기", command=self.on_clear_schedule_time).pack(side="left")
 
         tk.Frame(left_card, height=12, bg=self.color_bg).pack()
 
@@ -5417,10 +5999,14 @@ class FlowVisionApp:
 
         zoom_f = tk.Frame(file_top, bg=self.color_bg)
         zoom_f.pack(side="right")
-        ttk.Button(zoom_f, text="A-", width=4, command=lambda: self._set_ui_zoom_percent(delta=-10)).pack(side="left", padx=(0, 4))
+        btn_ui_zoom_minus = ttk.Button(zoom_f, text="A-", width=4, command=lambda: self._set_ui_zoom_percent(delta=-10))
+        btn_ui_zoom_minus.pack(side="left", padx=(0, 4))
+        self.scale_control_buttons.append(btn_ui_zoom_minus)
         self.lbl_zoom_state = tk.Label(zoom_f, text=f"{self._clamp_percent(self.cfg.get('ui_zoom_percent', 100), default=100)}%", font=self.font_small, bg=self.color_bg, fg=self.color_info)
         self.lbl_zoom_state.pack(side="left", padx=(0, 4))
-        ttk.Button(zoom_f, text="A+", width=4, command=lambda: self._set_ui_zoom_percent(delta=10)).pack(side="left")
+        btn_ui_zoom_plus = ttk.Button(zoom_f, text="A+", width=4, command=lambda: self._set_ui_zoom_percent(delta=10))
+        btn_ui_zoom_plus.pack(side="left")
+        self.scale_control_buttons.append(btn_ui_zoom_plus)
 
         file_nav = tk.Frame(bottom, bg=self.color_bg)
         file_nav.pack(fill="x", pady=(2, 0))
@@ -5922,6 +6508,12 @@ class FlowVisionApp:
         self.btn_pipeline_start.pack(side="left")
         self.lbl_pipeline_runtime_status = tk.Label(bottom, text="이어달리기 대기 중", font=self.font_small, bg=self.color_card, fg=self.color_text_sec)
         self.lbl_pipeline_runtime_status.pack(side="left", padx=(10, 0))
+        self._refresh_display_mode_ui()
+        self._set_startup_preflight_ui(
+            self.last_startup_preflight_ok if self.last_startup_preflight_at else None,
+            self.last_startup_preflight_summary if self.last_startup_preflight_at else "",
+            self.last_startup_preflight_at,
+        )
 
     def _position_pipeline_window(self):
         if not (self.pipeline_window and self.pipeline_window.winfo_exists()):
@@ -6192,11 +6784,17 @@ class FlowVisionApp:
         messagebox.showinfo("자동채움", f"최근 실패한 프롬프트 번호를 불러왔습니다.\n출처: {source_text}\n번호: {spec}")
 
     def on_option_toggle(self, event=None):
+        self.cfg["scale_lock_enabled"] = False
         self.cfg["afk_mode"] = self.afk_var.get()
         self.cfg["sound_enabled"] = self.sound_var.get()
-        self.cfg["relay_mode"] = self.relay_var.get()
-        self.cfg["scheduled_start_enabled"] = self.schedule_var.get() if hasattr(self, "schedule_var") else self.cfg.get("scheduled_start_enabled", False)
-        self.cfg["scheduled_start_at"] = self.schedule_text_var.get().strip() if hasattr(self, "schedule_text_var") else self.cfg.get("scheduled_start_at", "")
+        self.cfg["relay_mode"] = False
+        self.cfg["scheduled_start_enabled"] = False
+        self.cfg["scheduled_start_at"] = ""
+        if hasattr(self, "display_mode_var"):
+            self.cfg["work_env_mode"] = self._display_mode_values().get(
+                str(self.display_mode_var.get() or "").strip(),
+                self._active_display_mode(),
+            )
         self.cfg["language_mode"] = "ko_en" if self.lang_var.get() else "en"
         self.cfg["prompt_mode_preset_enabled"] = self.prompt_mode_preset_enabled_var.get() if hasattr(self, "prompt_mode_preset_enabled_var") else self.cfg.get("prompt_mode_preset_enabled", True)
         media_label = self.prompt_media_mode_var.get().strip() if hasattr(self, "prompt_media_mode_var") else ""
@@ -6323,19 +6921,17 @@ class FlowVisionApp:
         if hasattr(self, "lbl_browser_zoom_state"):
             self.lbl_browser_zoom_state.config(text=f"{self.cfg['browser_zoom_percent']}%")
         self.cfg["ui_zoom_percent"] = self._clamp_percent(self.cfg.get("ui_zoom_percent", 100), default=100, minimum=50, maximum=150)
+        self._sync_active_display_mode_from_current_settings(save=False)
         self.cfg["prompt_image_baseline_ready"] = bool(self.prompt_image_baseline_ready)
         self.cfg["asset_image_baseline_ready"] = bool(self.asset_image_baseline_ready)
         self.cfg["current_media_state"] = self.current_media_state or ""
         if hasattr(self, "lbl_coords"):
             self.lbl_coords.config(text=self._get_coord_text())
-        try: self.cfg["relay_count"] = int(self.relay_cnt_var.get())
-        except: self.cfg["relay_count"] = 1
-        self.cfg["relay_use_selection"] = self.relay_pick_var.get() if hasattr(self, "relay_pick_var") else self.cfg.get("relay_use_selection", False)
-        if hasattr(self, "combo_relay_start") and self.combo_relay_start.current() >= 0:
-            self.cfg["relay_start_slot"] = self.combo_relay_start.current()
-        if hasattr(self, "combo_relay_end") and self.combo_relay_end.current() >= 0:
-            self.cfg["relay_end_slot"] = self.combo_relay_end.current()
-        self.cfg["relay_selected_slots"] = self._normalize_relay_selected_slots(self.cfg.get("relay_selected_slots", []))
+        self.cfg["relay_count"] = 1
+        self.cfg["relay_use_selection"] = False
+        self.cfg["relay_start_slot"] = None
+        self.cfg["relay_end_slot"] = None
+        self.cfg["relay_selected_slots"] = []
         self.save_config()
         self._refresh_prompt_preset_selector_label()
         self._sync_relay_selection_label()
@@ -6347,6 +6943,13 @@ class FlowVisionApp:
             self.lbl_hud_mode.config(text=f"입력: {self.cfg['input_mode']}")
         if self.page:
             self._apply_browser_zoom()
+            self._apply_browser_window_scale_live()
+        self._refresh_display_mode_ui()
+        self._set_startup_preflight_ui(
+            self.last_startup_preflight_ok if self.last_startup_preflight_at else None,
+            self.last_startup_preflight_summary if self.last_startup_preflight_at else "",
+            self.last_startup_preflight_at,
+        )
         focus_widget = None
         try:
             focus_widget = self.root.focus_get()
@@ -6894,7 +7497,9 @@ class FlowVisionApp:
         target = "Video" if media_mode == "video" else "Image"
         alt = "영상" if media_mode == "video" else "이미지"
         cands = []
-        cands.extend(self._normalize_candidate_list(self.cfg.get(self._preset_cfg_key(profile, "media_mode_selector"), "")))
+        saved_selector = str(self.cfg.get(self._preset_cfg_key(profile, "media_mode_selector"), "") or "").strip()
+        if self._selector_matches_media_state(saved_selector, media_mode):
+            cands.append(saved_selector)
         cands.extend([
             f"button:text-is('{target}')",
             f"[role='button']:text-is('{target}')",
@@ -6912,7 +7517,9 @@ class FlowVisionApp:
         target = "Video" if state == "video" else "Image"
         alt = "영상" if state == "video" else "이미지"
         cands = []
-        cands.extend(self._normalize_candidate_list(self.cfg.get(self._preset_cfg_key(profile, "media_mode_selector"), "")))
+        saved_selector = str(self.cfg.get(self._preset_cfg_key(profile, "media_mode_selector"), "") or "").strip()
+        if self._selector_matches_media_state(saved_selector, state):
+            cands.append(saved_selector)
         cands.extend([
             f"button:text-is('{target}')",
             f"[role='button']:text-is('{target}')",
@@ -6935,6 +7542,21 @@ class FlowVisionApp:
             f"span[role='tab']:has-text('{alt}')",
         ])
         return self._normalize_candidate_list(cands)
+
+    def _selector_matches_media_state(self, selector, state):
+        selector = str(selector or "").strip().lower()
+        if not selector:
+            return False
+        state = "video" if str(state).strip().lower() == "video" else "image"
+        image_terms = ("image", "이미지", "nano banana")
+        video_terms = ("video", "동영상", "영상")
+        has_image = any(term in selector for term in image_terms)
+        has_video = any(term in selector for term in video_terms)
+        if has_image and not has_video:
+            return state == "image"
+        if has_video and not has_image:
+            return state == "video"
+        return True
 
     def _media_state_terms(self, state):
         state = "video" if str(state).strip().lower() == "video" else "image"
@@ -7018,6 +7640,15 @@ class FlowVisionApp:
         if any(token in meta for token in ("generate", "생성", "send", "보내", "close", "닫기", "menu", "메뉴", "setting", "설정")) and not target_hits:
             score -= 220.0
 
+        if any(token in meta for token in ("대시보드", "dashboard", "정렬", "필터", "search", "검색", "장면 빌더", "scene builder", "미디어 추가", "카메라", "camera")):
+            score -= 520.0
+        if any(token in meta for token in ("보기", "view")) and x < 120.0:
+            score -= 1100.0
+        if x < 96.0:
+            score -= 680.0
+        if x < 96.0 and width <= 72.0 and height <= 72.0:
+            score -= 520.0
+
         if not any((text, inner, aria, title, class_name)):
             score -= 240.0
         if width < 22 or height < 12:
@@ -7039,6 +7670,10 @@ class FlowVisionApp:
             ref_cy = float(ref_box.get("y") or 0.0) + (float(ref_box.get("height") or 0.0) / 2.0)
             dist = ((cx - ref_cx) ** 2 + (cy - ref_cy) ** 2) ** 0.5
             score -= min(dist, 1800.0) * (0.22 if opener_box else 0.16)
+            if opener_box:
+                opener_x = float(opener_box.get("x") or 0.0)
+                if x < (opener_x - 280.0):
+                    score -= 760.0
 
         if input_box:
             input_top = float(input_box.get("y") or 0.0)
@@ -7321,7 +7956,7 @@ class FlowVisionApp:
         desired_state = "video" if desired_state == "video" else "image"
         ok = self._switch_media_state(desired_state, input_locator=input_locator, profile=profile)
         if not ok:
-            raise RuntimeError("생성 모드 전환에 실패했습니다. 기본값 이미지 확인 후 자동찾기/테스트를 다시 실행해주세요.")
+            raise RuntimeError("생성 모드 전환에 실패했습니다. 상태 확인과 이미지/동영상 전환 테스트를 다시 확인해주세요.")
 
     def _auto_detect_media_panel_selectors(self, input_locator=None, profile="prompt"):
         profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
@@ -7435,6 +8070,10 @@ class FlowVisionApp:
         if (not self.page) or (input_locator is None):
             return None, None
         try:
+            input_locator.scroll_into_view_if_needed(timeout=900)
+        except Exception:
+            pass
+        try:
             ib = input_locator.bounding_box()
         except Exception:
             ib = None
@@ -7471,7 +8110,7 @@ class FlowVisionApp:
                 box = None
             if not box:
                 continue
-            if box["width"] < 40 or box["height"] < 20:
+            if box["width"] < 70 or box["height"] < 24:
                 continue
 
             cx = box["x"] + box["width"] / 2.0
@@ -7490,15 +8129,25 @@ class FlowVisionApp:
                     "veo 3.1", "veo 2", "veo3.1", "veo2",
                 )
             )
+            has_mode_hint = any(x in meta for x in ("nano banana", "동영상", "image", "video", "이미지", "영상"))
+            bad_tokens = (
+                "카메라", "camera", "삽입", "삭제", "확장", "mute", "fullscreen", "play", "pause",
+                "search", "검색", "필터", "정렬", "장면 빌더", "scene builder", "미디어 추가",
+                "dashboard", "대시보드", "옵션 더보기", "more_vert", "보기", "view",
+            )
 
             if any(x in meta for x in ("생성", "generate", "submit", "send", "보내", "arrow_forward", "메인 메뉴", "설정", "닫기", "close")):
                 continue
             if looks_like_model_dropdown:
                 continue
+            if any(x.lower() in meta for x in bad_tokens):
+                continue
             if not (
                 has_count_chip
-                or any(x in meta for x in ("nano banana", "동영상", "image", "video", "이미지", "영상"))
+                or has_mode_hint
             ):
+                continue
+            if box["width"] > 300 or box["height"] > 70:
                 continue
 
             score = abs(cx - target_x) + (abs(cy - target_y) * 3.2)
@@ -7517,6 +8166,8 @@ class FlowVisionApp:
                 score -= 120.0
             if any(x in meta for x in ("frames", "ingredients", "프레임", "재료")):
                 score += 380.0
+            if has_count_chip and has_mode_hint:
+                score -= 220.0
 
             if score < best_score:
                 best = cand
@@ -7631,6 +8282,10 @@ class FlowVisionApp:
         primary = "asset" if str(profile).strip().lower() == "asset" else "prompt"
         order = (primary, "prompt" if primary == "asset" else "asset")
         for key in order:
+            image_sel = str(self.cfg.get(self._panel_selector_key(key, "image"), "") or "").strip()
+            video_sel = str(self.cfg.get(self._panel_selector_key(key, "video"), "") or "").strip()
+            if image_sel and video_sel and image_sel == video_sel:
+                continue
             loc, used = self._resolve_saved_panel_button(key, state)
             if loc is not None:
                 return loc, used, key
@@ -7642,19 +8297,12 @@ class FlowVisionApp:
         meta = self._locator_meta_text(locator)
         if not meta:
             meta = ""
+        if any(x in meta for x in ("대시보드", "dashboard", "카메라", "camera", "삽입", "삭제", "확장", "보기", "view", "검색", "정렬", "필터")):
+            return None
         if any(x in meta for x in ("nano banana", "image", "이미지")):
             return "image"
-        if any(x in meta for x in ("video", "동영상", "영상", "veo")):
+        if any(x in meta for x in ("동영상", "영상", " video ", "video", "videocam")):
             return "video"
-        try:
-            box = locator.bounding_box()
-        except Exception:
-            box = None
-        if box:
-            if float(box.get("width", 0) or 0) >= 150:
-                return "image"
-            if 40 <= float(box.get("width", 0) or 0) <= 130:
-                return "video"
         return None
 
     def _resolve_current_media_panel_button(self, input_locator=None, profile="prompt"):
@@ -7671,6 +8319,11 @@ class FlowVisionApp:
     def _switch_media_state(self, desired_state, input_locator=None, profile="prompt"):
         profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
         desired_state = "video" if str(desired_state).strip().lower() == "video" else "image"
+        try:
+            if input_locator is not None:
+                input_locator.scroll_into_view_if_needed(timeout=900)
+        except Exception:
+            pass
         open_loc, open_desc, inferred_state = self._resolve_current_media_panel_button(input_locator=input_locator, profile=profile)
         current_state = inferred_state or self.current_media_state or "image"
         if (inferred_state is not None) and current_state == desired_state:
@@ -7716,10 +8369,13 @@ class FlowVisionApp:
                 time.sleep(0.4)
         else:
             self._close_prompt_generation_panel(input_locator=input_locator, opener=None, opener_desc=close_desc or inferred_close_state or desired_state)
+        verified_state = self.refresh_detected_media_state(ensure_session=False, input_locator=input_locator, profile=profile, write_log=True)
+        if verified_state and verified_state != desired_state:
+            self.log(f"⚠️ 생성 모드 전환 검증 실패: 기대={desired_state} / 감지={verified_state}")
+            return False
         self.current_media_state = desired_state
         self.cfg["current_media_state"] = desired_state
         self.save_config()
-        self.refresh_detected_media_state(ensure_session=False)
         return True
 
     def _close_prompt_generation_panel(self, input_locator=None, opener=None, opener_desc=None):
@@ -8225,21 +8881,24 @@ class FlowVisionApp:
             if input_locator is None:
                 self.log("ℹ️ 프롬프트 입력칸 미탐지 상태 - 생성 옵션만 전역 탐색으로 테스트합니다.")
 
-            image_sel = str(self.cfg.get(self._panel_selector_key("prompt", "image"), "") or "").strip()
-            video_sel = str(self.cfg.get(self._panel_selector_key("prompt", "video"), "") or "").strip()
-            if not image_sel or not video_sel:
-                raise RuntimeError("프롬프트 생성 옵션 자동찾기를 먼저 실행해주세요.")
-
-            self.current_media_state = "image"
-            video_ok = self._switch_media_state("video", input_locator=input_locator, profile="prompt")
-            image_ok = self._switch_media_state("image", input_locator=input_locator, profile="prompt")
+            detected_state = self.refresh_detected_media_state(
+                ensure_session=False,
+                input_locator=input_locator,
+                profile="prompt",
+                write_log=True,
+            )
+            if detected_state not in ("image", "video"):
+                raise RuntimeError("현재 생성 기본값을 읽지 못했습니다.")
+            target_state = "video" if detected_state == "image" else "image"
+            first_ok = self._switch_media_state(target_state, input_locator=input_locator, profile="prompt")
+            second_ok = self._switch_media_state(detected_state, input_locator=input_locator, profile="prompt")
 
             self.log(
-                f"🧪 생성 옵션 테스트 | 이미지패널={'OK' if bool(image_sel) else 'FAIL'} | "
-                f"동영상패널={'OK' if bool(video_sel) else 'FAIL'} | "
-                f"전환={'OK' if (video_ok and image_ok) else 'FAIL'}"
+                f"🧪 생성 옵션 테스트 | 현재={detected_state} | "
+                f"{detected_state}→{target_state}={'OK' if first_ok else 'FAIL'} | "
+                f"{target_state}→{detected_state}={'OK' if second_ok else 'FAIL'}"
             )
-            if video_ok and image_ok:
+            if first_ok and second_ok:
                 self.update_status_label("✅ 생성 옵션 테스트 통과", self.color_success)
             else:
                 self.update_status_label("⚠️ 생성 옵션 확인 필요", self.color_error)
@@ -8268,21 +8927,24 @@ class FlowVisionApp:
             if input_locator is None:
                 self.log("ℹ️ S입력칸 미탐지 상태 - 생성 옵션만 전역 탐색으로 테스트합니다.")
 
-            image_sel = str(self.cfg.get(self._panel_selector_key("asset", "image"), "") or "").strip()
-            video_sel = str(self.cfg.get(self._panel_selector_key("asset", "video"), "") or "").strip()
-            if not image_sel or not video_sel:
-                raise RuntimeError("S 생성 옵션 자동찾기를 먼저 실행해주세요.")
-
-            self.current_media_state = "image"
-            video_ok = self._switch_media_state("video", input_locator=input_locator, profile="asset")
-            image_ok = self._switch_media_state("image", input_locator=input_locator, profile="asset")
+            detected_state = self.refresh_detected_media_state(
+                ensure_session=False,
+                input_locator=input_locator,
+                profile="asset",
+                write_log=True,
+            )
+            if detected_state not in ("image", "video"):
+                raise RuntimeError("현재 S 생성 기본값을 읽지 못했습니다.")
+            target_state = "video" if detected_state == "image" else "image"
+            first_ok = self._switch_media_state(target_state, input_locator=input_locator, profile="asset")
+            second_ok = self._switch_media_state(detected_state, input_locator=input_locator, profile="asset")
 
             self.log(
-                f"🧪 S 생성 옵션 테스트 | 이미지패널={'OK' if bool(image_sel) else 'FAIL'} | "
-                f"동영상패널={'OK' if bool(video_sel) else 'FAIL'} | "
-                f"전환={'OK' if (video_ok and image_ok) else 'FAIL'}"
+                f"🧪 S 생성 옵션 테스트 | 현재={detected_state} | "
+                f"{detected_state}→{target_state}={'OK' if first_ok else 'FAIL'} | "
+                f"{target_state}→{detected_state}={'OK' if second_ok else 'FAIL'}"
             )
-            if video_ok and image_ok:
+            if first_ok and second_ok:
                 self.update_status_label("✅ S 생성 옵션 테스트 통과", self.color_success)
             else:
                 self.update_status_label("⚠️ S 생성 옵션 확인 필요", self.color_error)
