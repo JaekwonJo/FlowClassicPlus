@@ -4670,9 +4670,10 @@ class FlowVisionApp:
         if (not self.page) or input_locator is None:
             raise RuntimeError("프롬프트 입력창이 없어 @ 레퍼런스 호출을 할 수 없습니다.")
         try:
-            input_locator.click(timeout=1200)
+            input_locator.focus(timeout=1200)
         except Exception:
             pass
+        self._stabilize_prompt_caret_after_reference(input_locator)
         deadline = time.time() + max(1.0, timeout_sec)
         last_error = "search-input-not-found"
         trigger_methods = (
@@ -4741,7 +4742,8 @@ class FlowVisionApp:
                     return search_input, search_sel or ""
                 # 검색창이 안 뜨거나, @ 없이 상단 입력칸만 잘못 잡힌 경우 입력 흔적 정리 후 다음 방법 재시도
                 try:
-                    input_locator.click(timeout=800)
+                    input_locator.focus(timeout=800)
+                    self._stabilize_prompt_caret_after_reference(input_locator)
                     current_text = self._read_input_text(input_locator)
                     extra_count = max(0, len(current_text) - len(before_text))
                     if extra_count > 0 and current_text.startswith(before_text):
@@ -4995,6 +4997,22 @@ class FlowVisionApp:
             parts.append({"type": "text", "value": text[cursor:]})
         return parts
 
+    def _type_prompt_inline_text_chunk(self, chunk, input_locator):
+        text = str(chunk or "")
+        if (not text) or (not self.page) or input_locator is None:
+            return
+        try:
+            input_locator.focus(timeout=800)
+        except Exception:
+            pass
+        self._stabilize_prompt_caret_after_reference(input_locator)
+        self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] inline 텍스트 직선 입력 시작 (len={len(text)})")
+        try:
+            self.page.keyboard.insert_text(text)
+        except Exception:
+            self.page.keyboard.type(text)
+        self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] inline 텍스트 직선 입력 완료")
+
     def _type_prompt_with_inline_references(self, prompt_text, input_locator, input_mode="typing"):
         parts = self._split_prompt_inline_reference_parts(prompt_text)
         if not any(part.get("type") == "reference" for part in parts):
@@ -5008,9 +5026,12 @@ class FlowVisionApp:
             if part.get("type") == "text":
                 chunk = str(part.get("value", "") or "")
                 if chunk:
-                    # 레퍼런스 첨부 뒤에는 이미 같은 입력창 안에 커서가 살아 있으므로,
-                    # 다시 클릭해서 커서를 옮기지 않고 현재 위치에서 이어서 입력한다.
-                    self.actor.type_text(chunk, input_locator=None if keep_focus_only else input_locator, mode=input_mode)
+                    if keep_focus_only:
+                        # inline 레퍼런스가 섞인 뒤에는 오타/멈칫/재클릭을 빼고
+                        # 현재 커서 위치에서 그대로 이어서 써야 칩 주변이 덜 흔들린다.
+                        self._type_prompt_inline_text_chunk(chunk, input_locator)
+                    else:
+                        self.actor.type_text(chunk, input_locator=input_locator, mode=input_mode)
                     next_is_reference = idx + 1 < total_parts and parts[idx + 1].get("type") == "reference"
                     if keep_focus_only and next_is_reference:
                         compact = chunk.strip()
