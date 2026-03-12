@@ -4964,20 +4964,12 @@ class FlowVisionApp:
         self.page.keyboard.press("Enter")
         self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 Enter 선택: {asset_tag}")
         self.actor.random_action_delay("레퍼런스 Enter 반영 대기", 0.08, 0.18)
-
-        overlay_after_enter, _overlay_sel = self._resolve_prompt_reference_search_overlay_input(timeout_sec=0.22)
-        clicked = True
-        result_sel = ""
-        if overlay_after_enter is not None:
-            self.log("ℹ️ Enter 후에도 레퍼런스 검색창이 남아 있어 첫 결과 클릭 폴백을 시도합니다.")
-            clicked, result_sel = self._click_prompt_reference_first_result(search_input=overlay_after_enter, asset_tag=asset_tag, timeout_sec=0.65)
-            if not clicked:
-                raise RuntimeError(f"레퍼런스 첫 결과 선택 실패: {asset_tag}")
-        if result_sel:
-            self.cfg["prompt_reference_result_selector"] = result_sel
         self.log(f"✅ 레퍼런스 첨부 요청 완료: {asset_tag}")
         self.actor.random_action_delay("레퍼런스 첨부 반영 대기", 0.04, 0.10)
-        self.log("🧭 레퍼런스 첨부 후 입력창 복귀: 추가 조작 없음")
+        # 실제 화면에서는 Enter만으로 첨부가 끝나도, 남아 있지 않은 검색창을
+        # 오탐해서 첫 결과를 다시 클릭하는 경우가 있었다.
+        # inline 레퍼런스 본체 실행에서는 Enter 뒤 추가 클릭을 하지 않는다.
+        self.log("🧭 레퍼런스 첨부 후 입력창 복귀: Enter만 사용")
         return input_locator
 
     def _split_prompt_inline_reference_parts(self, prompt_text):
@@ -7456,49 +7448,27 @@ class FlowVisionApp:
             except Exception:
                 pass
 
-            search_input, trigger_sel = self._open_prompt_reference_search_via_keyboard(input_locator, timeout_sec=2.4)
-            search_input, filled_sel = self._fill_prompt_reference_search_input(search_input, tag)
-            search_sel = filled_sel or trigger_sel or ""
-
-            self.actor.random_action_delay("레퍼런스 결과 표시 대기", 0.35, 0.9)
-            result_ok, result_sel = self._click_prompt_reference_first_result(search_input=search_input, asset_tag=tag, timeout_sec=2.4)
-            if not result_ok:
-                self.page.keyboard.press("Enter")
-                self.actor.random_action_delay("레퍼런스 결과 재탐색 대기", 0.3, 0.8)
-                result_ok, result_sel = self._click_prompt_reference_first_result(search_input=search_input, asset_tag=tag, timeout_sec=1.8)
-            if not result_ok:
-                raise RuntimeError(f"레퍼런스 첫 결과 선택 실패: {tag}")
-
-            refreshed_input, refreshed_selector = self._resolve_prompt_input_locator(
-                input_selector,
-                timeout_ms=2600,
-                near_locator=input_locator,
-            )
-            if refreshed_input is not None:
-                input_locator = refreshed_input
+            input_locator = self._attach_prompt_reference_asset(input_locator, tag)
+            search_sel = self.cfg.get("prompt_reference_search_input_selector", "") or ""
             if not test_only:
                 self.cfg["prompt_reference_search_input_selector"] = search_sel or self.cfg.get("prompt_reference_search_input_selector", "")
-                self.cfg["prompt_reference_result_selector"] = result_sel or self.cfg.get("prompt_reference_result_selector", "")
                 self.save_config()
 
             summary = (
                 f"🧪 레퍼런스 첨부 {mode_label} | "
-                f"@호출({trigger_sel or 'Shift+2'})=OK | "
+                f"@호출(page type('@'))=OK | "
                 f"검색입력({search_sel or '직접입력'})=OK | "
-                f"첫결과({result_sel or '위치기반 결과'})=OK"
+                "Enter선택=OK"
             )
             self.log(summary)
             self.update_status_label(f"✅ 레퍼런스 첨부 {mode_label} 통과", self.color_success)
             if hasattr(self, "lbl_prompt_reference_probe_status"):
                 self.lbl_prompt_reference_probe_status.config(text=f"{tag} OK", fg=self.color_success)
 
-            # 테스트는 첨부 흐름 확인만 하고, 마지막에 상단 다른 입력칸까지 건드리지 않도록
-            # 프롬프트 입력창 근처 복귀가 확인된 경우에만 정리한다.
-            if refreshed_input is not None:
-                try:
-                    self.actor.clear_input_field(input_locator, label="입력창")
-                except Exception:
-                    pass
+            try:
+                self.actor.clear_input_field(input_locator, label="입력창")
+            except Exception:
+                pass
         except Exception as e:
             self.log(f"❌ 레퍼런스 첨부 {mode_label} 실패: {e}")
             self.update_status_label(f"❌ 레퍼런스 첨부 {mode_label} 실패", self.color_error)
