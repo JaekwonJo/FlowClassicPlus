@@ -109,6 +109,10 @@ DEFAULT_CONFIG = {
     "prompt_variant_count": "x1",
     "prompt_reference_enabled": False,
     "prompt_reference_items": [],
+    "prompt_reference_test_tag": "S999",
+    "prompt_reference_add_selector": "",
+    "prompt_reference_search_input_selector": "",
+    "prompt_reference_result_selector": "",
     "prompt_media_mode_selector": "",
     "prompt_orientation_selector": "",
     "prompt_variant_selector": "",
@@ -4562,9 +4566,21 @@ class FlowVisionApp:
         self.log(f"✅ Step2 에셋 검색 입력 완료: {asset_tag}")
         self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.2, 1.0)
 
+    def _prompt_reference_search_input_candidates(self):
+        cands = []
+        cands.extend(self._normalize_candidate_list(self.cfg.get("prompt_reference_search_input_selector", "")))
+        cands.extend(self._normalize_candidate_list(self.cfg.get("asset_search_input_selector", "")))
+        cands.extend(self._asset_search_input_candidates())
+        return list(dict.fromkeys([x for x in cands if x]))
+
     def _resolve_prompt_reference_add_button(self, input_locator, timeout_sec=3):
         if (not self.page) or input_locator is None:
             return None, None
+        stored = self._normalize_candidate_list(self.cfg.get("prompt_reference_add_selector", ""))
+        if stored:
+            loc, sel = self._resolve_best_locator(stored, near_locator=input_locator, timeout_ms=900, prefer_enabled=False)
+            if loc is not None:
+                return loc, sel
         end_ts = time.time() + max(1, timeout_sec)
         while time.time() < end_ts:
             try:
@@ -4615,12 +4631,209 @@ class FlowVisionApp:
                         score -= 500.0
                     if score > best_score:
                         best = cand
-                        best_sel = sel
+                        best_sel = self._locator_selector_hint(cand) or sel
                         best_score = score
             if best is not None and best_score > -120:
                 return best, best_sel
             time.sleep(0.18)
         return None, None
+
+    def _resolve_prompt_reference_result(self, search_input=None, timeout_sec=3):
+        if not self.page:
+            return None, None, None
+        try:
+            search_box = search_input.bounding_box() if search_input is not None else None
+        except Exception:
+            search_box = None
+
+        stored = self._normalize_candidate_list(self.cfg.get("prompt_reference_result_selector", ""))
+        generic = [
+            "button:has(img)",
+            "[role='button']:has(img)",
+            "div[role='button']:has(img)",
+            "li:has(img)",
+            "a:has(img)",
+            "button:has(canvas)",
+            "[role='button']:has(canvas)",
+            "div[role='button']:has(canvas)",
+            "li:has(canvas)",
+            "a:has(canvas)",
+        ]
+        candidates = list(dict.fromkeys([x for x in (stored + generic) if x]))
+        end_ts = time.time() + max(1, timeout_sec)
+        while time.time() < end_ts:
+            best = None
+            best_sel = None
+            best_score = float("-inf")
+            for sel in candidates:
+                try:
+                    loc = self.page.locator(sel)
+                    total = min(loc.count(), 40)
+                except Exception:
+                    continue
+                for i in range(total):
+                    cand = loc.nth(i)
+                    try:
+                        if not cand.is_visible(timeout=350):
+                            continue
+                        box = cand.bounding_box()
+                    except Exception:
+                        continue
+                    if not box:
+                        continue
+                    if box["width"] < 28 or box["height"] < 28:
+                        continue
+                    if box["width"] > 220 or box["height"] > 220:
+                        continue
+                    if search_box:
+                        if box["y"] < (search_box["y"] + search_box["height"] + 12):
+                            continue
+                        if box["x"] > (search_box["x"] + search_box["width"] * 0.42):
+                            continue
+                    meta = self._locator_meta_text(cand)
+                    score = 0.0
+                    score += max(0.0, 240.0 - box["y"])
+                    score -= box["x"] * 0.35
+                    score -= abs(box["width"] - 96.0) * 0.4
+                    score -= abs(box["height"] - 96.0) * 0.4
+                    if any(k in meta for k in ("recent", "최근 사용", "검색", "search", "menu", "설정")):
+                        score -= 900.0
+                    if any(k in meta for k in ("image", "이미지", "asset", "에셋", "reference", "참조")):
+                        score += 120.0
+                    if score > best_score:
+                        best = cand
+                        best_sel = self._locator_selector_hint(cand) or sel
+                        best_score = score
+            if best is not None and best_score > -300:
+                try:
+                    return best, best_sel, best.bounding_box()
+                except Exception:
+                    return best, best_sel, None
+
+            try:
+                result = self.page.evaluate(
+                    """(payload) => {
+                        const searchBox = payload && payload.searchBox ? payload.searchBox : null;
+                        const isVisible = (el) => {
+                            if (!el) return false;
+                            const r = el.getBoundingClientRect();
+                            if (!r || r.width < 28 || r.height < 28) return false;
+                            const st = window.getComputedStyle(el);
+                            if (!st) return false;
+                            return st.display !== "none" && st.visibility !== "hidden" && st.opacity !== "0";
+                        };
+                        const selectorHint = (el) => {
+                            if (!el) return "";
+                            const esc = (value) => String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+                            const tag = (el.tagName || "").toLowerCase();
+                            if (el.id) return `#${el.id}`;
+                            const aria = el.getAttribute("aria-label") || "";
+                            if (aria) return `${tag || "*"}[aria-label="${esc(aria)}"]`;
+                            const title = el.getAttribute("title") || "";
+                            if (title) return `${tag || "*"}[title="${esc(title)}"]`;
+                            const cls = String(el.className || "").trim().split(/\\s+/).filter(Boolean).slice(0, 2);
+                            if (tag && cls.length) return `${tag}.${cls.join(".")}`;
+                            return tag || "*";
+                        };
+                        let best = null;
+                        let bestScore = -1e9;
+                        for (const el of Array.from(document.querySelectorAll("img, canvas, video"))) {
+                            if (!isVisible(el)) continue;
+                            const r = el.getBoundingClientRect();
+                            if (r.top < 70) continue;
+                            if (r.width > 180 || r.height > 180) continue;
+                            if (searchBox) {
+                                if (r.top < (searchBox.y + searchBox.height + 12)) continue;
+                                if (r.left > (searchBox.x + searchBox.width * 0.42)) continue;
+                            } else if (r.left > window.innerWidth * 0.42) {
+                                continue;
+                            }
+                            let score = 0;
+                            score += Math.max(0, 240 - r.top);
+                            score -= r.left * 0.35;
+                            score -= Math.abs(r.width - 96) * 0.4;
+                            score -= Math.abs(r.height - 96) * 0.4;
+                            if (score > bestScore) {
+                                best = el;
+                                bestScore = score;
+                            }
+                        }
+                        if (!best) return null;
+                        const box = best.getBoundingClientRect();
+                        return {
+                            selector: selectorHint(best),
+                            box: {x: box.x, y: box.y, width: box.width, height: box.height},
+                        };
+                    }""",
+                    {"searchBox": search_box},
+                )
+            except Exception:
+                result = None
+            if result and result.get("box"):
+                box = result.get("box") or {}
+                return None, str(result.get("selector") or "위치기반 결과"), box
+            time.sleep(0.18)
+        return None, None, None
+
+    def _fill_prompt_reference_search_input(self, search_input, asset_tag):
+        if not self.page:
+            return None, None
+        used_selector = None
+        if search_input is not None:
+            try:
+                search_input.click(timeout=1200)
+            except Exception:
+                pass
+            try:
+                self.page.keyboard.press("Control+A")
+                self.page.keyboard.press("Backspace")
+            except Exception:
+                pass
+            try:
+                search_input.fill(asset_tag)
+                used_selector = self._locator_selector_hint(search_input)
+            except Exception:
+                try:
+                    search_input.type(asset_tag, delay=random.randint(25, 70))
+                    used_selector = self._locator_selector_hint(search_input)
+                except Exception:
+                    search_input = None
+        if search_input is None:
+            ok_dom, reason_dom = self._direct_fill_asset_search_via_dom(asset_tag)
+            if not ok_dom:
+                raise RuntimeError(f"레퍼런스 검색창을 찾지 못했습니다. ({reason_dom})")
+            used_selector = used_selector or "DOM 직접입력"
+        self.log(f"🔎 레퍼런스 검색 입력: {asset_tag} ({used_selector or '직접입력'})")
+        self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 검색 입력: {asset_tag} ({used_selector or '직접입력'})")
+        return search_input, used_selector
+
+    def _click_prompt_reference_first_result(self, search_input=None, asset_tag="", timeout_sec=3):
+        end_ts = time.time() + max(1, timeout_sec)
+        last_selector = None
+        while time.time() < end_ts:
+            result_loc, result_sel, result_box = self._resolve_prompt_reference_result(search_input=search_input, timeout_sec=1)
+            last_selector = result_sel or last_selector
+            if result_loc is not None:
+                if self._click_with_actor_fallback(result_loc, "레퍼런스 첫 결과"):
+                    self.log(f"🖼️ 레퍼런스 첫 결과 클릭: {result_sel or '자동 탐색'}")
+                    self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 첫 결과 클릭: {result_sel or '자동 탐색'}")
+                    return True, result_sel or ""
+            elif result_box:
+                try:
+                    cx = float(result_box["x"]) + float(result_box["width"]) * 0.5
+                    cy = float(result_box["y"]) + float(result_box["height"]) * 0.5
+                    self.page.mouse.move(cx, cy, steps=8)
+                    self.actor.random_action_delay("레퍼런스 첫 결과 클릭 전 대기", 0.12, 0.38)
+                    self.page.mouse.click(cx, cy, delay=random.randint(30, 90))
+                    self.log(f"🖼️ 레퍼런스 첫 결과 클릭: {result_sel or '위치기반 결과'}")
+                    self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 첫 결과 클릭: {result_sel or '위치기반 결과'}")
+                    return True, result_sel or ""
+                except Exception:
+                    pass
+            time.sleep(0.18)
+        if asset_tag:
+            self.log(f"⚠️ 레퍼런스 첫 결과를 클릭하지 못했습니다: {asset_tag}")
+        return False, last_selector or ""
 
     def _attach_prompt_reference_asset(self, input_locator, asset_tag):
         if (not self.page) or input_locator is None or (not asset_tag):
@@ -4639,36 +4852,27 @@ class FlowVisionApp:
         self.actor.random_action_delay("레퍼런스 검색창 표시 대기", 0.4, 1.1)
 
         search_input, _ = self._resolve_best_locator_with_scroll(
-            self._asset_search_input_candidates(),
+            self._prompt_reference_search_input_candidates(),
             timeout_ms=2200,
             prefer_enabled=False,
             ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
         )
-        if search_input is not None:
-            try:
-                search_input.click(timeout=1200)
-            except Exception:
-                pass
-            try:
-                self.page.keyboard.press("Control+A")
-                self.page.keyboard.press("Backspace")
-            except Exception:
-                pass
-            try:
-                search_input.fill(asset_tag)
-            except Exception:
-                try:
-                    search_input.type(asset_tag, delay=random.randint(25, 70))
-                except Exception:
-                    search_input = None
-
-        if search_input is None:
-            ok_dom, reason_dom = self._direct_fill_asset_search_via_dom(asset_tag)
-            if not ok_dom:
-                raise RuntimeError(f"레퍼런스 검색창을 찾지 못했습니다. ({reason_dom})")
-
-        self.actor.random_action_delay("레퍼런스 검색 Enter 전 대기", 0.1, 0.4)
-        self.page.keyboard.press("Enter")
+        search_input, search_sel = self._fill_prompt_reference_search_input(search_input, asset_tag)
+        if search_sel:
+            self.cfg["prompt_reference_search_input_selector"] = search_sel
+        self.actor.random_action_delay("레퍼런스 결과 표시 대기", 0.35, 0.9)
+        clicked, result_sel = self._click_prompt_reference_first_result(search_input=search_input, asset_tag=asset_tag, timeout_sec=2.4)
+        if not clicked:
+            self.actor.random_action_delay("레퍼런스 결과 Enter 전 대기", 0.08, 0.25)
+            self.page.keyboard.press("Enter")
+            self.actor.random_action_delay("레퍼런스 결과 재탐색 대기", 0.3, 0.8)
+            clicked, result_sel = self._click_prompt_reference_first_result(search_input=search_input, asset_tag=asset_tag, timeout_sec=1.8)
+        if not clicked:
+            raise RuntimeError(f"레퍼런스 첫 결과 선택 실패: {asset_tag}")
+        if add_sel:
+            self.cfg["prompt_reference_add_selector"] = add_sel
+        if result_sel:
+            self.cfg["prompt_reference_result_selector"] = result_sel
         self.log(f"✅ 레퍼런스 첨부 요청 완료: {asset_tag}")
         self.actor.random_action_delay("레퍼런스 첨부 반영 대기", 0.5, 1.1)
 
@@ -6352,6 +6556,27 @@ class FlowVisionApp:
             justify="left",
         )
         self.lbl_prompt_inline_ref_hint.pack(fill="x", pady=(6, 0))
+        prompt_ref_test_f = tk.Frame(file_nav, bg=self.color_bg)
+        prompt_ref_test_f.pack(fill="x", pady=(4, 0))
+        tk.Label(prompt_ref_test_f, text="레퍼런스 테스트 번호:", font=self.font_small, bg=self.color_bg).pack(side="left")
+        self.prompt_reference_test_tag_var = tk.StringVar(value=str(self.cfg.get("prompt_reference_test_tag", "S999") or "S999"))
+        self.entry_prompt_reference_test_tag = tk.Entry(
+            prompt_ref_test_f,
+            width=8,
+            textvariable=self.prompt_reference_test_tag_var,
+            font=self.font_mono_small,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+        )
+        self.entry_prompt_reference_test_tag.pack(side="left", padx=(6, 8), ipady=2)
+        self.entry_prompt_reference_test_tag.bind("<FocusOut>", self.on_option_toggle)
+        self.entry_prompt_reference_test_tag.bind("<Return>", self.on_option_toggle)
+        ToolTip(self.entry_prompt_reference_test_tag, "예: S999 또는 999")
+        ttk.Button(prompt_ref_test_f, text="🔍 레퍼런스 첨부 자동찾기", command=self.on_auto_detect_prompt_reference_attach).pack(side="left", padx=(0, 6))
+        ttk.Button(prompt_ref_test_f, text="🧪 레퍼런스 첨부 TEST", command=self.on_test_prompt_reference_attach).pack(side="left")
+        self.lbl_prompt_reference_probe_status = tk.Label(prompt_ref_test_f, text="", font=self.font_small, bg=self.color_bg, fg=self.color_text_sec)
+        self.lbl_prompt_reference_probe_status.pack(side="left", padx=(8, 0))
 
         btn_f = tk.Frame(bottom, bg=self.color_bg)
         btn_f.pack(fill="x", pady=8)
@@ -7065,6 +7290,115 @@ class FlowVisionApp:
         self.log(f"🧩 프롬프트 개별 실행 자동채움: {spec} ({source_text})")
         messagebox.showinfo("자동채움", f"최근 실패한 프롬프트 번호를 불러왔습니다.\n출처: {source_text}\n번호: {spec}")
 
+    def _normalized_prompt_reference_test_tag(self):
+        raw = ""
+        if hasattr(self, "prompt_reference_test_tag_var"):
+            raw = str(self.prompt_reference_test_tag_var.get() or "").strip()
+        if not raw:
+            raw = str(self.cfg.get("prompt_reference_test_tag", "S999") or "S999").strip()
+        return self._normalize_reference_asset_tag(raw) or "S999"
+
+    def on_auto_detect_prompt_reference_attach(self):
+        if self.running:
+            messagebox.showwarning("안내", "자동화 실행 중에는 레퍼런스 첨부 탐색을 할 수 없습니다.\n먼저 중지 후 시도해주세요.")
+            return
+        self.on_option_toggle()
+        self._prompt_reference_attach_probe_worker(test_only=False)
+
+    def on_test_prompt_reference_attach(self):
+        if self.running:
+            messagebox.showwarning("안내", "자동화 실행 중에는 레퍼런스 첨부 테스트를 할 수 없습니다.\n먼저 중지 후 시도해주세요.")
+            return
+        self.on_option_toggle()
+        self._prompt_reference_attach_probe_worker(test_only=True)
+
+    def _prompt_reference_attach_probe_worker(self, test_only=False):
+        opened_here = False
+        tag = self._normalized_prompt_reference_test_tag()
+        mode_label = "TEST" if test_only else "자동탐색"
+        try:
+            if not self.action_log_fp:
+                self._open_action_log("prompt_reference_attach_test" if test_only else "prompt_reference_attach_detect")
+                opened_here = True
+            self.update_status_label(f"🧪 레퍼런스 첨부 {mode_label} 중...", self.color_info)
+            self._ensure_browser_session()
+            self.actor.set_page(self.page)
+
+            start_url = (self.cfg.get("start_url") or "").strip()
+            if start_url and start_url not in (self.page.url or ""):
+                self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+            time.sleep(random.uniform(0.8, 1.6))
+            self._prepare_page_for_selector_detection()
+
+            input_selector = (self.cfg.get("input_selector") or "").strip()
+            input_locator, resolved_input_selector = self._resolve_prompt_input_locator(input_selector, timeout_ms=2600)
+            if input_locator is None:
+                raise RuntimeError("프롬프트 입력칸을 찾지 못했습니다.")
+            self.log(f"🧭 레퍼런스 테스트 입력창: {resolved_input_selector or '자동 탐색'}")
+            try:
+                input_locator.click(timeout=1200)
+            except Exception:
+                pass
+
+            add_btn, add_sel = self._resolve_prompt_reference_add_button(input_locator, timeout_sec=3)
+            add_ok = add_btn is not None
+            if not add_ok:
+                raise RuntimeError("레퍼런스 + 버튼을 찾지 못했습니다.")
+            if not self._click_with_actor_fallback(add_btn, "레퍼런스 + 버튼"):
+                raise RuntimeError("레퍼런스 + 버튼 클릭 실패")
+            self.actor.random_action_delay("레퍼런스 검색창 표시 대기", 0.4, 1.1)
+
+            search_input, input_sel = self._resolve_best_locator_with_scroll(
+                self._prompt_reference_search_input_candidates(),
+                timeout_ms=2200,
+                prefer_enabled=False,
+                ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
+            )
+            search_input, filled_sel = self._fill_prompt_reference_search_input(search_input, tag)
+            search_sel = filled_sel or input_sel or ""
+
+            self.actor.random_action_delay("레퍼런스 결과 표시 대기", 0.35, 0.9)
+            result_ok, result_sel = self._click_prompt_reference_first_result(search_input=search_input, asset_tag=tag, timeout_sec=2.4)
+            if not result_ok:
+                self.page.keyboard.press("Enter")
+                self.actor.random_action_delay("레퍼런스 결과 재탐색 대기", 0.3, 0.8)
+                result_ok, result_sel = self._click_prompt_reference_first_result(search_input=search_input, asset_tag=tag, timeout_sec=1.8)
+            if not result_ok:
+                raise RuntimeError(f"레퍼런스 첫 결과 선택 실패: {tag}")
+
+            refreshed_input, refreshed_selector = self._resolve_prompt_input_locator(input_selector, timeout_ms=2600)
+            if refreshed_input is not None:
+                input_locator = refreshed_input
+            if not test_only:
+                self.cfg["prompt_reference_add_selector"] = add_sel or self.cfg.get("prompt_reference_add_selector", "")
+                self.cfg["prompt_reference_search_input_selector"] = search_sel or self.cfg.get("prompt_reference_search_input_selector", "")
+                self.cfg["prompt_reference_result_selector"] = result_sel or self.cfg.get("prompt_reference_result_selector", "")
+                self.save_config()
+
+            summary = (
+                f"🧪 레퍼런스 첨부 {mode_label} | "
+                f"+버튼({add_sel or '위치기반'})=OK | "
+                f"검색입력({search_sel or '직접입력'})=OK | "
+                f"첫결과({result_sel or '위치기반 결과'})=OK"
+            )
+            self.log(summary)
+            self.update_status_label(f"✅ 레퍼런스 첨부 {mode_label} 통과", self.color_success)
+            if hasattr(self, "lbl_prompt_reference_probe_status"):
+                self.lbl_prompt_reference_probe_status.config(text=f"{tag} OK", fg=self.color_success)
+
+            try:
+                self.actor.clear_input_field(input_locator, label="입력창")
+            except Exception:
+                pass
+        except Exception as e:
+            self.log(f"❌ 레퍼런스 첨부 {mode_label} 실패: {e}")
+            self.update_status_label(f"❌ 레퍼런스 첨부 {mode_label} 실패", self.color_error)
+            if hasattr(self, "lbl_prompt_reference_probe_status"):
+                self.lbl_prompt_reference_probe_status.config(text="실패", fg=self.color_error)
+        finally:
+            if opened_here:
+                self._close_action_log()
+
     def on_add_prompt_reference_item(self):
         items = list(self.cfg.get("prompt_reference_items", []) or [])
         items.append({"name": "", "asset_tag": "", "scene_spec": ""})
@@ -7169,6 +7503,7 @@ class FlowVisionApp:
         self.cfg["asset_search_button_selector"] = self.asset_search_btn_selector_var.get().strip() if hasattr(self, "asset_search_btn_selector_var") else self.cfg.get("asset_search_button_selector", "")
         self.cfg["asset_search_input_selector"] = self.asset_search_input_selector_var.get().strip() if hasattr(self, "asset_search_input_selector_var") else self.cfg.get("asset_search_input_selector", "")
         self.cfg["prompt_manual_selection"] = self.prompt_manual_selection_var.get().strip() if hasattr(self, "prompt_manual_selection_var") else str(self.cfg.get("prompt_manual_selection", "") or "").strip()
+        self.cfg["prompt_reference_test_tag"] = self._normalized_prompt_reference_test_tag()
         self.cfg["prompt_reference_enabled"] = self.prompt_reference_enabled_var.get() if hasattr(self, "prompt_reference_enabled_var") else bool(self.cfg.get("prompt_reference_enabled", False))
         if hasattr(self, "prompt_reference_row_vars"):
             prompt_ref_items = []
@@ -7617,6 +7952,28 @@ class FlowVisionApp:
                         (el.innerText || ""),
                     ];
                     return parts.join(" ").toLowerCase();
+                }"""
+            ) or ""
+        except Exception:
+            return ""
+
+    def _locator_selector_hint(self, locator):
+        try:
+            return locator.evaluate(
+                """(el) => {
+                    const esc = (value) => String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+                    const tag = (el.tagName || "").toLowerCase();
+                    const id = el.id || "";
+                    if (id) return `#${id}`;
+                    const aria = el.getAttribute("aria-label") || "";
+                    if (aria) return `${tag || "*"}[aria-label="${esc(aria)}"]`;
+                    const title = el.getAttribute("title") || "";
+                    if (title) return `${tag || "*"}[title="${esc(title)}"]`;
+                    const name = el.getAttribute("name") || "";
+                    if (name) return `${tag || "*"}[name="${esc(name)}"]`;
+                    const cls = String(el.className || "").trim().split(/\\s+/).filter(Boolean).slice(0, 2);
+                    if (tag && cls.length) return `${tag}.${cls.join(".")}`;
+                    return tag || "*";
                 }"""
             ) or ""
         except Exception:
