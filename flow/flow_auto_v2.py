@@ -4676,14 +4676,23 @@ class FlowVisionApp:
         deadline = time.time() + max(1.0, timeout_sec)
         last_error = "search-input-not-found"
         trigger_methods = (
+            "page_type_at",
+            "locator_type_at",
             "page_shift2",
             "locator_shift2",
             "js_dispatch",
         )
         while time.time() < deadline:
             for method in trigger_methods:
+                before_text = self._read_input_text(input_locator)
                 try:
-                    if method == "page_shift2":
+                    if method == "page_type_at":
+                        self.page.keyboard.type("@")
+                        self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 @ 트리거 입력: page type('@')")
+                    elif method == "locator_type_at":
+                        input_locator.type("@", delay=random.randint(30, 80), timeout=1200)
+                        self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 @ 트리거 입력: locator type('@')")
+                    elif method == "page_shift2":
                         self.page.keyboard.down("Shift")
                         self.page.keyboard.press("2")
                         self.page.keyboard.up("Shift")
@@ -4724,15 +4733,21 @@ class FlowVisionApp:
                 except Exception as e:
                     last_error = str(e)
                 self.actor.random_action_delay("레퍼런스 검색창 표시 대기", 0.25, 0.7)
+                after_text = self._read_input_text(input_locator)
+                typed_at = after_text.endswith("@") or (after_text.count("@") > before_text.count("@"))
                 search_input, search_sel = self._resolve_prompt_reference_search_overlay_input(timeout_sec=0.9)
-                if search_input is not None:
+                if search_input is not None and typed_at:
                     self.log(f"🔡 레퍼런스 @ 호출 성공: {method} -> {search_sel or '자동 탐색'}")
                     return search_input, search_sel or ""
-                # 검색창이 안 뜬 경우, 입력창에 찍힌 @를 지우고 다음 방법으로 재시도
+                # 검색창이 안 뜨거나, @ 없이 상단 입력칸만 잘못 잡힌 경우 입력 흔적 정리 후 다음 방법 재시도
                 try:
                     input_locator.click(timeout=800)
                     current_text = self._read_input_text(input_locator)
-                    if current_text.endswith("@"):
+                    extra_count = max(0, len(current_text) - len(before_text))
+                    if extra_count > 0 and current_text.startswith(before_text):
+                        for _ in range(extra_count):
+                            self.page.keyboard.press("Backspace")
+                    elif current_text.endswith("@"):
                         self.page.keyboard.press("Backspace")
                 except Exception:
                     pass
