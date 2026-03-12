@@ -4980,6 +4980,7 @@ class FlowVisionApp:
             near_locator=input_locator,
         )
         if refreshed_input is not None:
+            self._stabilize_prompt_caret_after_reference(refreshed_input)
             self.log(f"🧭 레퍼런스 첨부 후 입력창 복귀: {refreshed_selector or '자동 탐색'}")
             return refreshed_input
         return input_locator
@@ -9210,6 +9211,43 @@ class FlowVisionApp:
             return (val or "").strip()
         except Exception:
             return ""
+
+    def _stabilize_prompt_caret_after_reference(self, input_locator):
+        if (not self.page) or input_locator is None:
+            return
+        try:
+            input_locator.evaluate(
+                """(el) => {
+                    if (!el) return false;
+                    try { el.focus(); } catch (e) {}
+                    if ("value" in el && typeof el.value === "string") {
+                        const len = el.value.length;
+                        if (el.setSelectionRange) el.setSelectionRange(len, len);
+                        return true;
+                    }
+                    if (el.isContentEditable) {
+                        const sel = window.getSelection();
+                        if (!sel) return true;
+                        const range = document.createRange();
+                        range.selectNodeContents(el);
+                        range.collapse(false);
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                        return true;
+                    }
+                    return true;
+                }"""
+            )
+        except Exception:
+            try:
+                input_locator.focus(timeout=800)
+            except Exception:
+                pass
+        try:
+            self.page.keyboard.press("ArrowRight")
+        except Exception:
+            pass
+        self.actor.random_action_delay("레퍼런스 커서 안정화", 0.05, 0.12)
 
     def _is_generation_indicator_visible(self):
         if not self.page:
