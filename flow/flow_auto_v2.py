@@ -4570,7 +4570,101 @@ class FlowVisionApp:
         cands.extend(self._normalize_candidate_list(self.cfg.get("prompt_reference_search_input_selector", "")))
         cands.extend(self._normalize_candidate_list(self.cfg.get("asset_search_input_selector", "")))
         cands.extend(self._asset_search_input_candidates())
+        cands.extend([
+            "input",
+            "textarea",
+            "[role='searchbox']",
+            "[role='textbox']",
+            "[contenteditable='true']",
+            "[contenteditable='plaintext-only']",
+        ])
         return list(dict.fromkeys([x for x in cands if x]))
+
+    def _resolve_prompt_reference_search_overlay_input(self, timeout_sec=2.0):
+        if not self.page:
+            return None, None
+        end_ts = time.time() + max(1.0, timeout_sec)
+        best_dump = []
+        dumped = False
+        while time.time() < end_ts:
+            best = None
+            best_sel = None
+            best_score = float("-inf")
+            dump_rows = []
+            selectors = self._prompt_reference_search_input_candidates()
+            for sel in selectors:
+                try:
+                    loc = self.page.locator(sel)
+                    total = min(loc.count(), 40)
+                except Exception:
+                    continue
+                for idx in range(total):
+                    cand = loc.nth(idx)
+                    try:
+                        if not cand.is_visible(timeout=250):
+                            continue
+                        box = cand.bounding_box()
+                    except Exception:
+                        continue
+                    if not box:
+                        continue
+                    meta = self._locator_meta_text(cand)
+                    width = float(box["width"] or 0.0)
+                    height = float(box["height"] or 0.0)
+                    x = float(box["x"] or 0.0)
+                    y = float(box["y"] or 0.0)
+                    cx = x + width / 2.0
+                    score = 0.0
+                    if width < 120 or height < 20:
+                        score -= 800.0
+                    if y < 8.0:
+                        score -= 120.0
+                    if y <= 180.0:
+                        score += 720.0
+                    elif y <= 260.0:
+                        score += 260.0
+                    else:
+                        score -= 1600.0
+                    if 220.0 <= width <= 980.0:
+                        score += 220.0
+                    elif width > 1200.0:
+                        score -= 400.0
+                    score -= abs(cx - 420.0) * 0.22
+                    if any(k in meta for k in ("검색", "search", "asset", "에셋", "recent", "최근")):
+                        score += 520.0
+                    if any(k in meta for k in ("무엇을 만들", "prompt", "프롬프트", "message", "메시지")):
+                        score -= 1800.0
+                    if any(k in meta for k in ("nano banana", "veo", "video", "동영상", "이미지", "x1", "x2", "x3", "x4")):
+                        score -= 1200.0
+                    dump_rows.append((score, sel, meta[:100], box))
+                    if score > best_score:
+                        best = cand
+                        best_sel = self._locator_selector_hint(cand) or sel
+                        best_score = score
+            if dump_rows:
+                best_dump = sorted(dump_rows, key=lambda x: x[0], reverse=True)[:12]
+            if best is not None and best_score > 150.0:
+                if not dumped and best_dump:
+                    self.log("🧩 레퍼런스 검색창 후보 덤프")
+                    for idx, row in enumerate(best_dump, start=1):
+                        box = row[3] or {}
+                        self.log(
+                            f"   {idx:02d}. score={row[0]:.1f} sel={row[1]} meta='{row[2]}' "
+                            f"box=({float(box.get('x') or 0.0):.1f}, {float(box.get('y') or 0.0):.1f}, "
+                            f"{float(box.get('width') or 0.0):.1f}, {float(box.get('height') or 0.0):.1f})"
+                        )
+                return best, best_sel
+            time.sleep(0.12)
+        if best_dump:
+            self.log("🧩 레퍼런스 검색창 후보 덤프(실패)")
+            for idx, row in enumerate(best_dump, start=1):
+                box = row[3] or {}
+                self.log(
+                    f"   {idx:02d}. score={row[0]:.1f} sel={row[1]} meta='{row[2]}' "
+                    f"box=({float(box.get('x') or 0.0):.1f}, {float(box.get('y') or 0.0):.1f}, "
+                    f"{float(box.get('width') or 0.0):.1f}, {float(box.get('height') or 0.0):.1f})"
+                )
+        return None, None
 
     def _open_prompt_reference_search_via_keyboard(self, input_locator, timeout_sec=2.2):
         if (not self.page) or input_locator is None:
@@ -4581,30 +4675,68 @@ class FlowVisionApp:
             pass
         deadline = time.time() + max(1.0, timeout_sec)
         last_error = "search-input-not-found"
+        trigger_methods = (
+            "page_shift2",
+            "locator_shift2",
+            "js_dispatch",
+        )
         while time.time() < deadline:
-            try:
-                self.page.keyboard.down("Shift")
-                self.page.keyboard.press("2")
-                self.page.keyboard.up("Shift")
-                self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 @ 트리거 입력: Shift+2")
-            except Exception as e:
-                last_error = str(e)
-            self.actor.random_action_delay("레퍼런스 검색창 표시 대기", 0.25, 0.7)
-            search_input, search_sel = self._resolve_best_locator(
-                self._prompt_reference_search_input_candidates(),
-                timeout_ms=1200,
-                prefer_enabled=False,
-            )
-            if search_input is not None:
-                self.log(f"🔡 레퍼런스 @ 호출 성공: {search_sel or '자동 탐색'}")
-                return search_input, search_sel or ""
-            # 검색창이 안 뜬 경우, 입력창에 찍힌 @를 지우고 한 번 더 시도
-            try:
-                input_locator.click(timeout=800)
-                self.page.keyboard.press("Backspace")
-            except Exception:
-                pass
-            time.sleep(0.12)
+            for method in trigger_methods:
+                try:
+                    if method == "page_shift2":
+                        self.page.keyboard.down("Shift")
+                        self.page.keyboard.press("2")
+                        self.page.keyboard.up("Shift")
+                        self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 @ 트리거 입력: page Shift+2")
+                    elif method == "locator_shift2":
+                        input_locator.press("Shift+2", timeout=1200)
+                        self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 @ 트리거 입력: locator Shift+2")
+                    else:
+                        self.page.evaluate(
+                            """() => {
+                                const el = document.activeElement;
+                                if (!el) return false;
+                                const fireKey = (type) => el.dispatchEvent(new KeyboardEvent(type, {
+                                    key: "@",
+                                    code: "Digit2",
+                                    shiftKey: true,
+                                    bubbles: true,
+                                    cancelable: true,
+                                }));
+                                fireKey("keydown");
+                                try {
+                                    if ("value" in el) {
+                                        const start = el.selectionStart ?? String(el.value || "").length;
+                                        const end = el.selectionEnd ?? start;
+                                        const next = String(el.value || "").slice(0, start) + "@" + String(el.value || "").slice(end);
+                                        el.value = next;
+                                        if (el.setSelectionRange) el.setSelectionRange(start + 1, start + 1);
+                                    } else if (el.isContentEditable) {
+                                        document.execCommand("insertText", false, "@");
+                                    }
+                                } catch (e) {}
+                                el.dispatchEvent(new InputEvent("input", {bubbles:true, data:"@", inputType:"insertText"}));
+                                fireKey("keyup");
+                                return true;
+                            }"""
+                        )
+                        self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 @ 트리거 입력: js dispatch")
+                except Exception as e:
+                    last_error = str(e)
+                self.actor.random_action_delay("레퍼런스 검색창 표시 대기", 0.25, 0.7)
+                search_input, search_sel = self._resolve_prompt_reference_search_overlay_input(timeout_sec=0.9)
+                if search_input is not None:
+                    self.log(f"🔡 레퍼런스 @ 호출 성공: {method} -> {search_sel or '자동 탐색'}")
+                    return search_input, search_sel or ""
+                # 검색창이 안 뜬 경우, 입력창에 찍힌 @를 지우고 다음 방법으로 재시도
+                try:
+                    input_locator.click(timeout=800)
+                    current_text = self._read_input_text(input_locator)
+                    if current_text.endswith("@"):
+                        self.page.keyboard.press("Backspace")
+                except Exception:
+                    pass
+                time.sleep(0.10)
         raise RuntimeError(f"@ 레퍼런스 검색창 호출 실패 ({last_error})")
 
     def _resolve_prompt_reference_result(self, search_input=None, timeout_sec=3):
