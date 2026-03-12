@@ -180,6 +180,9 @@ DEFAULT_CONFIG = {
     "last_startup_preflight_summary": "",
     "last_startup_preflight_at": "",
     "enter_submit_rate": 0.5,
+    "work_break_every_count": 40,
+    "work_break_minutes": 12,
+    "work_break_random_ratio": 0.30,
     "use_ref_images": False,
     "ref_image_count": 1,
     "add_btn1_area": None,
@@ -454,6 +457,7 @@ class FlowVisionApp:
         self.actor = HumanActor(action_logger=self._action_log, status_callback=self._actor_status)
         self.actor.language_mode = self.cfg.get("language_mode", "en")
         self.actor.set_typing_speed_profile(self.cfg.get("typing_speed_profile", "x5"))
+        self._apply_actor_break_settings(reset_batch=True)
         
         self.root = tk.Tk()
         self.root.title(f"{APP_NAME} - 작업창")
@@ -6001,6 +6005,31 @@ class FlowVisionApp:
         )
         self.lbl_typing_speed_value.pack(side="left", padx=(10, 0))
 
+        break_f = tk.Frame(left_card, bg=self.color_bg)
+        break_f.pack(fill="x", pady=(6, 8))
+        tk.Label(break_f, text="☕ 휴식 설정 (프롬프트/S반복 전용)", bg=self.color_bg, font=self.font_body_bold).grid(row=0, column=0, columnspan=4, sticky="w")
+        tk.Label(break_f, text="몇 개 작업 후", bg=self.color_bg, font=self.font_small).grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.work_break_every_var = tk.StringVar(value=str(int(self.cfg.get("work_break_every_count", 40) or 40)))
+        self.entry_work_break_every = tk.Entry(break_f, textvariable=self.work_break_every_var, width=8, justify="center", bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono)
+        self.entry_work_break_every.grid(row=1, column=1, sticky="w", padx=(6, 10), pady=(6, 0))
+        tk.Label(break_f, text="개", bg=self.color_bg, font=self.font_small).grid(row=1, column=2, sticky="w", pady=(6, 0))
+        tk.Label(break_f, text="쉬는 시간", bg=self.color_bg, font=self.font_small).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.work_break_minutes_var = tk.StringVar(value=str(int(self.cfg.get("work_break_minutes", 12) or 12)))
+        self.entry_work_break_minutes = tk.Entry(break_f, textvariable=self.work_break_minutes_var, width=8, justify="center", bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono)
+        self.entry_work_break_minutes.grid(row=2, column=1, sticky="w", padx=(6, 10), pady=(6, 0))
+        tk.Label(break_f, text="분", bg=self.color_bg, font=self.font_small).grid(row=2, column=2, sticky="w", pady=(6, 0))
+        tk.Label(
+            break_f,
+            text="※ 실제 휴식은 설정값 기준으로 ±30% 랜덤 적용됩니다. 다운로드는 휴식 없이 계속 진행합니다.",
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            font=("Malgun Gothic", 9),
+        ).grid(row=3, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        self.entry_work_break_every.bind("<FocusOut>", self.on_option_toggle)
+        self.entry_work_break_every.bind("<Return>", self.on_option_toggle)
+        self.entry_work_break_minutes.bind("<FocusOut>", self.on_option_toggle)
+        self.entry_work_break_minutes.bind("<Return>", self.on_option_toggle)
+
         preset_body, _set_preset_open = self._create_collapsible_section(left_card, "프롬프트 자동화 전용 생성 옵션", opened=True)
         self._set_prompt_preset_open = _set_preset_open
         preset_f = tk.Frame(preset_body, bg=self.color_bg)
@@ -7611,6 +7640,17 @@ class FlowVisionApp:
         self.cfg["download_search_input_selector"] = self.download_search_input_selector_var.get().strip() if hasattr(self, "download_search_input_selector_var") else self.cfg.get("download_search_input_selector", "")
         self.cfg["download_video_filter_selector"] = self.download_video_filter_selector_var.get().strip() if hasattr(self, "download_video_filter_selector_var") else self.cfg.get("download_video_filter_selector", "")
         self.cfg["download_image_filter_selector"] = self.download_image_filter_selector_var.get().strip() if hasattr(self, "download_image_filter_selector_var") else self.cfg.get("download_image_filter_selector", "")
+        try:
+            raw_break_every = self.work_break_every_var.get().strip() if hasattr(self, "work_break_every_var") else str(self.cfg.get("work_break_every_count", 40))
+            self.cfg["work_break_every_count"] = max(1, min(9999, int(raw_break_every or 40)))
+        except Exception:
+            self.cfg["work_break_every_count"] = int(self.cfg.get("work_break_every_count", 40) or 40)
+        try:
+            raw_break_minutes = self.work_break_minutes_var.get().strip() if hasattr(self, "work_break_minutes_var") else str(self.cfg.get("work_break_minutes", 12))
+            self.cfg["work_break_minutes"] = max(1, min(180, int(raw_break_minutes or 12)))
+        except Exception:
+            self.cfg["work_break_minutes"] = int(self.cfg.get("work_break_minutes", 12) or 12)
+        self.cfg["work_break_random_ratio"] = 0.30
         # 실행 중에는 시작 시 확정한 입력방식을 유지(중간 변경으로 typing/paste 뒤바뀜 방지)
         self.cfg["input_mode"] = "typing"
         try:
@@ -7666,6 +7706,7 @@ class FlowVisionApp:
         if hasattr(self, 'actor'):
             self.actor.language_mode = self.cfg["language_mode"]
             self.actor.set_typing_speed_profile(self.cfg.get("typing_speed_profile", "normal"))
+            self._apply_actor_break_settings(reset_batch=False)
         if hasattr(self, "lbl_hud_mode"):
             self.lbl_hud_mode.config(text=f"입력: {self.cfg['input_mode']}")
         if self.page:
@@ -10186,7 +10227,10 @@ class FlowVisionApp:
 
             processed = self.actor.processed_count
             batch_size = self.actor.current_batch_size
-            next_break = max(0, batch_size - processed)
+            if self.current_run_mode == "download":
+                next_break_text = "휴식없음"
+            else:
+                next_break_text = str(max(0, batch_size - processed))
             active_traits = self.actor.get_active_traits()
             total = len(self.prompts)
             current = min(self.index, total)
@@ -10197,7 +10241,7 @@ class FlowVisionApp:
             if hasattr(self, "lbl_hud_persona"):
                 self.lbl_hud_persona.config(text=f"페르소나: {p_name}")
             if hasattr(self, "lbl_hud_meta"):
-                self.lbl_hud_meta.config(text=f"무드: {mood} | 속도: x{real_speed:.1f} | 다음휴식: {next_break}")
+                self.lbl_hud_meta.config(text=f"무드: {mood} | 속도: x{real_speed:.1f} | 다음휴식: {next_break_text}")
             if hasattr(self, "lbl_hud_trait"):
                 if active_traits:
                     self.lbl_hud_trait.config(text=f"특징: {active_traits[0]}")
@@ -10205,6 +10249,33 @@ class FlowVisionApp:
                     self.lbl_hud_trait.config(text="특징: 기본 모드")
         except Exception as e:
             print(f"Failed to update monitor UI: {e}")
+
+    def _normalize_work_break_config(self):
+        try:
+            every_count = int(self.cfg.get("work_break_every_count", 40) or 40)
+        except Exception:
+            every_count = 40
+        try:
+            break_minutes = int(self.cfg.get("work_break_minutes", 12) or 12)
+        except Exception:
+            break_minutes = 12
+        self.cfg["work_break_every_count"] = max(1, min(9999, every_count))
+        self.cfg["work_break_minutes"] = max(1, min(180, break_minutes))
+        self.cfg["work_break_random_ratio"] = 0.30
+
+    def _apply_actor_break_settings(self, reset_batch=False):
+        self._normalize_work_break_config()
+        if not hasattr(self, "actor") or self.actor is None:
+            return
+        try:
+            self.actor.set_break_policy(
+                base_count=self.cfg.get("work_break_every_count", 40),
+                base_minutes=self.cfg.get("work_break_minutes", 12),
+                random_ratio=self.cfg.get("work_break_random_ratio", 0.30),
+                reset_batch=reset_batch,
+            )
+        except Exception as e:
+            self.log(f"⚠️ 휴식 설정 적용 오류: {e}")
 
     def _set_run_mode(self, mode):
         self.current_run_mode = mode
@@ -10836,10 +10907,10 @@ class FlowVisionApp:
             return
 
         try:
-            if self.actor.processed_count >= self.actor.current_batch_size:
+            if self.current_run_mode in ("prompt", "asset") and self.actor.processed_count >= self.actor.current_batch_size:
                 print("Bio break triggered")
                 self.actor.take_bio_break(status_callback=lambda m: self.update_status_label(m, self.color_error))
-                self.actor.current_batch_size = self.actor._get_random_batch_size()
+                self.actor.update_batch_size()
                 self.actor.processed_count = 0
                 self.is_processing = False
                 return

@@ -49,6 +49,7 @@ class HumanActor:
         self.typing_speed_factor = 1.0
         self.action_delay_factor = 1.0
         self.thinking_delay_factor = 1.0
+        self.break_policy_override = None
 
         self.randomize_persona()
         self.current_batch_size = self._get_random_batch_size()
@@ -71,10 +72,40 @@ class HumanActor:
             self.status_callback(text)
 
     def _get_random_batch_size(self):
-        return random.randint(30, 50)
+        cfg = getattr(self, "cfg", {}) or {}
+        base_count = max(1, int(cfg.get("bio_break_base_interval", 40) or 40))
+        random_ratio = float(cfg.get("bio_break_random_ratio", 0.30) or 0.30)
+        random_ratio = max(0.0, min(0.9, random_ratio))
+        low = max(1, int(round(base_count * (1.0 - random_ratio))))
+        high = max(low, int(round(base_count * (1.0 + random_ratio))))
+        return random.randint(low, high)
 
     def update_batch_size(self):
         self.current_batch_size = self._get_random_batch_size()
+
+    def _apply_break_policy_override(self):
+        if not self.break_policy_override:
+            return
+        base_count = max(1, int(self.break_policy_override.get("base_count", 40) or 40))
+        base_minutes = max(1, int(self.break_policy_override.get("base_minutes", 12) or 12))
+        random_ratio = float(self.break_policy_override.get("random_ratio", 0.30) or 0.30)
+        random_ratio = max(0.0, min(0.9, random_ratio))
+        self.cfg["bio_break_base_interval"] = base_count
+        self.cfg["bio_break_random_ratio"] = random_ratio
+        self.cfg["long_break_base_minutes"] = base_minutes
+        break_sec = max(60, int(base_minutes * 60))
+        self.cfg["long_break_duration"] = (break_sec, break_sec)
+        self.cfg["bio_break_interval"] = base_count
+
+    def set_break_policy(self, base_count=40, base_minutes=12, random_ratio=0.30, reset_batch=False):
+        self.break_policy_override = {
+            "base_count": max(1, int(base_count or 40)),
+            "base_minutes": max(1, int(base_minutes or 12)),
+            "random_ratio": max(0.0, min(0.9, float(random_ratio or 0.30))),
+        }
+        self._apply_break_policy_override()
+        if reset_batch:
+            self.current_batch_size = max(self.processed_count + 1, self._get_random_batch_size())
 
     def randomize_persona(self):
         seed_id = random.randint(1000, 9999)
@@ -109,8 +140,12 @@ class HumanActor:
             "enter_submit_rate": random.uniform(0.25, 0.75),
             "gaze_simulation": random.uniform(0.1, 0.3),
             "bio_break_interval": random.randint(30, 50),
+            "bio_break_base_interval": 40,
+            "bio_break_random_ratio": 0.30,
+            "long_break_base_minutes": 12,
             "long_break_duration": (300, 1200),
         }
+        self._apply_break_policy_override()
 
         traits = []
         if self.cfg["typo_rate"] > 0.04:
@@ -180,8 +215,13 @@ class HumanActor:
         return True, "24/7 풀가동 중"
 
     def take_bio_break(self, status_callback=None):
-        min_sec, max_sec = self.cfg["long_break_duration"]
-        duration = random.randint(min_sec, max_sec)
+        cfg = getattr(self, "cfg", {}) or {}
+        base_minutes = max(1, int(cfg.get("long_break_base_minutes", 12) or 12))
+        random_ratio = float(cfg.get("bio_break_random_ratio", 0.30) or 0.30)
+        random_ratio = max(0.0, min(0.9, random_ratio))
+        low_sec = max(60, int(round(base_minutes * 60 * (1.0 - random_ratio))))
+        high_sec = max(low_sec, int(round(base_minutes * 60 * (1.0 + random_ratio))))
+        duration = random.randint(low_sec, high_sec)
         self._log_action(f"바이오 브레이크 시작 ({duration}초)")
 
         cb = status_callback or self.status_callback
