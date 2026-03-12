@@ -388,6 +388,8 @@ class LogWindow:
         self.root.lift()
 
 class FlowVisionApp:
+    PROMPT_CARET_SENTINEL = "\u200b"
+
     def __init__(self):
         self.base = Path(__file__).resolve().parent
         self.cfg_path = self.base / CONFIG_FILE
@@ -5008,10 +5010,41 @@ class FlowVisionApp:
         self._stabilize_prompt_caret_after_reference(input_locator)
         self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] inline 텍스트 직선 입력 시작 (len={len(text)})")
         try:
-            self.page.keyboard.insert_text(text)
+            self.page.keyboard.type(text, delay=random.randint(4, 10))
         except Exception:
-            self.page.keyboard.type(text)
+            self.page.keyboard.insert_text(text)
         self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] inline 텍스트 직선 입력 완료")
+
+    def _cleanup_prompt_reference_sentinels(self, input_locator):
+        if input_locator is None:
+            return
+        sentinel = self.PROMPT_CARET_SENTINEL
+        try:
+            input_locator.evaluate(
+                """([el, sentinel]) => {
+                    if (!el) return false;
+                    if ("value" in el && typeof el.value === "string") {
+                        el.value = String(el.value || "").split(sentinel).join("");
+                        return true;
+                    }
+                    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+                    const nodes = [];
+                    let node = walker.nextNode();
+                    while (node) {
+                        nodes.push(node);
+                        node = walker.nextNode();
+                    }
+                    for (const textNode of nodes) {
+                        if (textNode.textContent && textNode.textContent.includes(sentinel)) {
+                            textNode.textContent = textNode.textContent.split(sentinel).join("");
+                        }
+                    }
+                    return true;
+                }""",
+                [sentinel],
+            )
+        except Exception:
+            pass
 
     def _type_prompt_with_inline_references(self, prompt_text, input_locator, input_mode="typing"):
         parts = self._split_prompt_inline_reference_parts(prompt_text)
@@ -9239,9 +9272,10 @@ class FlowVisionApp:
     def _stabilize_prompt_caret_after_reference(self, input_locator):
         if (not self.page) or input_locator is None:
             return
+        sentinel = self.PROMPT_CARET_SENTINEL
         try:
             input_locator.evaluate(
-                """(el) => {
+                """([el, sentinel]) => {
                     if (!el) return false;
                     try { el.focus(); } catch (e) {}
                     if ("value" in el && typeof el.value === "string") {
@@ -9252,21 +9286,34 @@ class FlowVisionApp:
                     if (el.isContentEditable) {
                         const sel = window.getSelection();
                         if (!sel) return true;
+                        let tail = el.lastChild;
+                        if (!tail || tail.nodeType !== Node.TEXT_NODE) {
+                            tail = document.createTextNode(sentinel);
+                            el.appendChild(tail);
+                        }
+                        if (!String(tail.textContent || "").endsWith(sentinel)) {
+                            tail.textContent = String(tail.textContent || "") + sentinel;
+                        }
                         const range = document.createRange();
-                        range.selectNodeContents(el);
-                        range.collapse(false);
+                        range.setStart(tail, (tail.textContent || "").length);
+                        range.collapse(true);
                         sel.removeAllRanges();
                         sel.addRange(range);
                         return true;
                     }
                     return true;
-                }"""
+                }""",
+                [sentinel],
             )
         except Exception:
             try:
                 input_locator.focus(timeout=800)
             except Exception:
                 pass
+        try:
+            self.page.keyboard.press("End")
+        except Exception:
+            pass
         try:
             self.page.keyboard.press("ArrowRight")
         except Exception:
@@ -11069,13 +11116,19 @@ class FlowVisionApp:
             if len(typed_text.strip()) < max(4, min(24, len(prompt.strip()) // 6)):
                 raise RuntimeError("프롬프트 입력이 실제 입력창에 반영되지 않았습니다.")
 
+            if has_inline_prompt_refs := bool(re.search(r"@(S?\d{3,4})\b", str(prompt or ""), re.IGNORECASE)):
+                self._cleanup_prompt_reference_sentinels(input_locator)
+
             self.update_status_label("✅ 입력 완료!", self.color_success)
-            self.update_status_label("📖 검토 중...", self.color_info)
-            self.actor.read_prompt_pause(prompt)
+            if has_inline_prompt_refs:
+                self.log("ℹ️ inline 레퍼런스 프롬프트는 검토 대기를 생략합니다.")
+            else:
+                self.update_status_label("📖 검토 중...", self.color_info)
+                self.actor.read_prompt_pause(prompt)
             before_submit_text = self._read_input_text(input_locator)
 
             # 전체 흐름 불규칙성을 위해 가끔 예측 불가 행동 추가
-            if random.random() < 0.35:
+            if (not has_inline_prompt_refs) and random.random() < 0.35:
                 self.actor.hesitate_on_submit()
 
             # 최종 제출
