@@ -107,6 +107,8 @@ DEFAULT_CONFIG = {
     "prompt_media_mode": "image",
     "prompt_orientation": "landscape",
     "prompt_variant_count": "x1",
+    "prompt_reference_enabled": False,
+    "prompt_reference_items": [],
     "prompt_media_mode_selector": "",
     "prompt_orientation_selector": "",
     "prompt_variant_selector": "",
@@ -549,6 +551,7 @@ class FlowVisionApp:
 
         self._ensure_prompt_slots()
         self._ensure_project_profiles()
+        self._ensure_prompt_reference_items()
         self._ensure_pipeline_steps()
         self._build_ui()
         self.on_reload()
@@ -1913,6 +1916,123 @@ class FlowVisionApp:
             changed = True
         if changed:
             self.save_config()
+
+    def _normalize_prompt_reference_item(self, item):
+        if not isinstance(item, dict):
+            item = {}
+        name = str(item.get("name", "") or "").strip()
+        asset_tag = self._normalize_reference_asset_tag(item.get("asset_tag", ""))
+        scene_spec = str(item.get("scene_spec", "") or "").strip()
+        return {
+            "name": name,
+            "asset_tag": asset_tag,
+            "scene_spec": scene_spec,
+        }
+
+    def _ensure_prompt_reference_items(self):
+        raw_items = self.cfg.get("prompt_reference_items", [])
+        normalized = []
+        if isinstance(raw_items, list):
+            for item in raw_items:
+                normalized.append(self._normalize_prompt_reference_item(item))
+        if raw_items != normalized:
+            self.cfg["prompt_reference_items"] = normalized
+            self.save_config()
+
+    def _normalize_reference_asset_tag(self, value):
+        raw = str(value or "").strip().upper()
+        if not raw:
+            return ""
+        prefix = (self.cfg.get("asset_loop_prefix") or "S").strip().upper() or "S"
+        if raw.isdigit():
+            return f"{prefix}{raw.zfill(self._asset_pad_width())}"
+        m = re.match(rf"^\s*{re.escape(prefix)}\s*0*([0-9]+)\s*$", raw, re.IGNORECASE)
+        if m:
+            return f"{prefix}{str(int(m.group(1))).zfill(self._asset_pad_width())}"
+        return raw
+
+    def _prompt_reference_scene_upper_bound(self):
+        return max(1, len(getattr(self, "prompt_source_prompts", []) or []))
+
+    def _prompt_reference_matches_for_scene(self, scene_no):
+        matches = []
+        try:
+            target = int(scene_no or 0)
+        except Exception:
+            target = 0
+        if target < 1 or not self.cfg.get("prompt_reference_enabled"):
+            return matches
+        for item in self.cfg.get("prompt_reference_items", []) or []:
+            normalized = self._normalize_prompt_reference_item(item)
+            asset_tag = normalized.get("asset_tag", "")
+            if not asset_tag:
+                continue
+            info = self._parse_manual_number_spec(
+                normalized.get("scene_spec", ""),
+                upper_bound=self._prompt_reference_scene_upper_bound(),
+            )
+            if target in set(info.get("numbers", []) or []):
+                matches.append(normalized)
+        return matches
+
+    def _prompt_reference_summary_text(self):
+        items = [self._normalize_prompt_reference_item(x) for x in (self.cfg.get("prompt_reference_items", []) or [])]
+        usable = [x for x in items if x.get("asset_tag") and x.get("scene_spec")]
+        if not usable:
+            return "레퍼런스 첨부 비사용"
+        return f"활성 {len(usable)}개 | 장면 시작 전에 @로 첨부"
+
+    def _refresh_prompt_reference_ui(self):
+        if hasattr(self, "prompt_reference_enabled_var"):
+            self.prompt_reference_enabled_var.set(bool(self.cfg.get("prompt_reference_enabled", False)))
+        if hasattr(self, "lbl_prompt_reference_status"):
+            self.lbl_prompt_reference_status.config(
+                text=self._prompt_reference_summary_text(),
+                fg=self.color_info if self.cfg.get("prompt_reference_enabled") else self.color_text_sec,
+            )
+        if not hasattr(self, "prompt_reference_rows_frame"):
+            return
+        for child in self.prompt_reference_rows_frame.winfo_children():
+            child.destroy()
+        self.prompt_reference_row_vars = []
+        items = list(self.cfg.get("prompt_reference_items", []) or [])
+        if not items:
+            hint = tk.Label(
+                self.prompt_reference_rows_frame,
+                text="아직 레퍼런스가 없습니다. `+ 레퍼런스 추가`로 한 줄씩 만들 수 있습니다.",
+                bg=self.color_bg,
+                fg=self.color_text_sec,
+                font=self.font_small,
+            )
+            hint.pack(anchor="w", pady=(2, 4))
+            return
+        for idx, item in enumerate(items):
+            row = tk.Frame(self.prompt_reference_rows_frame, bg=self.color_bg)
+            row.pack(fill="x", pady=(0, 6))
+            item = self._normalize_prompt_reference_item(item)
+            name_var = tk.StringVar(value=item.get("name", ""))
+            tag_var = tk.StringVar(value=item.get("asset_tag", ""))
+            spec_var = tk.StringVar(value=item.get("scene_spec", ""))
+            tk.Label(row, text=f"레퍼런스 {idx + 1}", bg=self.color_bg, font=self.font_small).pack(side="left")
+            tk.Label(row, text="이름", bg=self.color_bg, font=self.font_small).pack(side="left", padx=(10, 4))
+            name_entry = tk.Entry(row, textvariable=name_var, width=10, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_small)
+            name_entry.pack(side="left", padx=(0, 6), ipady=2)
+            tk.Label(row, text="참조 번호", bg=self.color_bg, font=self.font_small).pack(side="left", padx=(4, 4))
+            tag_entry = tk.Entry(row, textvariable=tag_var, width=9, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small)
+            tag_entry.pack(side="left", padx=(0, 6), ipady=2)
+            tk.Label(row, text="장면 번호", bg=self.color_bg, font=self.font_small).pack(side="left", padx=(4, 4))
+            spec_entry = tk.Entry(row, textvariable=spec_var, width=24, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small)
+            spec_entry.pack(side="left", fill="x", expand=True, padx=(0, 6), ipady=2)
+            ttk.Button(row, text="삭제", command=lambda i=idx: self.on_delete_prompt_reference_item(i), style="ControlCompact.TButton").pack(side="left")
+            for widget in (name_entry, tag_entry, spec_entry):
+                widget.bind("<FocusOut>", self.on_option_toggle)
+                widget.bind("<Return>", self.on_option_toggle)
+                widget.bind("<KeyRelease>", self.on_option_toggle)
+            self.prompt_reference_row_vars.append({
+                "name": name_var,
+                "asset_tag": tag_var,
+                "scene_spec": spec_var,
+            })
 
     def _project_profile_preview(self, item):
         return str(item.get("project_name", "") or "").strip() or "이름 없음"
@@ -4442,6 +4562,76 @@ class FlowVisionApp:
         self.log(f"✅ Step2 에셋 검색 입력 완료: {asset_tag}")
         self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.2, 1.0)
 
+    def _attach_prompt_reference_asset(self, input_locator, asset_tag):
+        if (not self.page) or input_locator is None or (not asset_tag):
+            return input_locator
+        try:
+            input_locator.click(timeout=1200)
+        except Exception:
+            pass
+        self.actor.random_action_delay("레퍼런스 첨부 @ 입력 전 대기", 0.1, 0.4)
+        try:
+            self.page.keyboard.insert_text("@")
+        except Exception:
+            try:
+                input_locator.type("@", delay=random.randint(20, 60))
+            except Exception as e:
+                raise RuntimeError(f"레퍼런스 @ 입력 실패: {e}")
+        self.log(f"🔖 레퍼런스 첨부 시작: {asset_tag}")
+        self.actor.random_action_delay("레퍼런스 검색창 표시 대기", 0.4, 1.1)
+
+        search_input, _ = self._resolve_best_locator_with_scroll(
+            self._asset_search_input_candidates(),
+            timeout_ms=2200,
+            prefer_enabled=False,
+            ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
+        )
+        if search_input is not None:
+            try:
+                search_input.click(timeout=1200)
+            except Exception:
+                pass
+            try:
+                self.page.keyboard.press("Control+A")
+                self.page.keyboard.press("Backspace")
+            except Exception:
+                pass
+            try:
+                search_input.fill(asset_tag)
+            except Exception:
+                try:
+                    search_input.type(asset_tag, delay=random.randint(25, 70))
+                except Exception:
+                    search_input = None
+
+        if search_input is None:
+            ok_dom, reason_dom = self._direct_fill_asset_search_via_dom(asset_tag)
+            if not ok_dom:
+                raise RuntimeError(f"레퍼런스 검색창을 찾지 못했습니다. ({reason_dom})")
+
+        self.actor.random_action_delay("레퍼런스 검색 Enter 전 대기", 0.1, 0.4)
+        self.page.keyboard.press("Enter")
+        self.log(f"✅ 레퍼런스 첨부 요청 완료: {asset_tag}")
+        self.actor.random_action_delay("레퍼런스 첨부 반영 대기", 0.5, 1.1)
+
+        input_selector = (self.cfg.get("input_selector") or "").strip()
+        refreshed_input, refreshed_selector = self._resolve_prompt_input_locator(input_selector, timeout_ms=2600)
+        if refreshed_input is not None:
+            self.log(f"🧭 레퍼런스 첨부 후 입력창 복귀: {refreshed_selector or '자동 탐색'}")
+            return refreshed_input
+        return input_locator
+
+    def _apply_prompt_references_for_scene(self, scene_no, input_locator):
+        refs = self._prompt_reference_matches_for_scene(scene_no)
+        if not refs:
+            return input_locator
+        for ref in refs:
+            name = ref.get("name") or ref.get("asset_tag") or "레퍼런스"
+            self.update_status_label(f"🖼️ 레퍼런스 첨부 중... ({name})", self.color_info)
+            self.log(f"🖼️ 레퍼런스 첨부 대상: {name} -> {ref.get('asset_tag', '')}")
+            input_locator = self._attach_prompt_reference_asset(input_locator, ref.get("asset_tag", ""))
+        return input_locator
+
     def _apply_download_used_selectors(self, mode, used):
         if not isinstance(used, dict):
             return
@@ -5475,6 +5665,52 @@ class FlowVisionApp:
         ttk.Button(preset_btn_f, text="🧪 이미지→동영상", command=self.on_test_prompt_image_to_video).pack(side="left")
         ttk.Button(preset_btn_f, text="🧪 동영상→이미지", command=self.on_test_prompt_video_to_image).pack(side="left", padx=6)
         self._refresh_manual_baseline_labels()
+
+        ref_body, _set_prompt_ref_open = self._create_collapsible_section(left_card, "프롬프트 레퍼런스 첨부", opened=False)
+        self._set_prompt_ref_open = _set_prompt_ref_open
+        ref_f = tk.Frame(ref_body, bg=self.color_bg)
+        ref_f.pack(fill="x", pady=6)
+        self.prompt_reference_enabled_var = tk.BooleanVar(value=bool(self.cfg.get("prompt_reference_enabled", False)))
+        tk.Checkbutton(
+            ref_f,
+            text="장면 시작 전에 @로 레퍼런스 첨부",
+            variable=self.prompt_reference_enabled_var,
+            command=self.on_option_toggle,
+            bg=self.color_bg,
+            font=self.font_body,
+            activebackground=self.color_bg,
+        ).pack(anchor="w")
+        tk.Label(
+            ref_f,
+            text="이름은 보기용이고, 참조 번호에는 S999 같은 레퍼런스 이미지를 적습니다.",
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            font=self.font_small,
+        ).pack(anchor="w", pady=(2, 0))
+        tk.Label(
+            ref_f,
+            text="장면 번호는 003,005,007 또는 020-025 형식으로 입력합니다. 한 장면에 여러 레퍼런스도 가능합니다.",
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            font=self.font_small,
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w", pady=(2, 6))
+        ref_action_f = tk.Frame(ref_f, bg=self.color_bg)
+        ref_action_f.pack(fill="x", pady=(0, 6))
+        ttk.Button(ref_action_f, text="+ 레퍼런스 추가", command=self.on_add_prompt_reference_item, style="ControlCompact.TButton").pack(side="left")
+        self.lbl_prompt_reference_status = tk.Label(
+            ref_action_f,
+            text="",
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            font=self.font_small,
+        )
+        self.lbl_prompt_reference_status.pack(side="left", padx=(10, 0))
+        self.prompt_reference_rows_frame = tk.Frame(ref_f, bg=self.color_bg)
+        self.prompt_reference_rows_frame.pack(fill="x")
+        self.prompt_reference_row_vars = []
+        self._refresh_prompt_reference_ui()
 
         asset_body, _set_asset_open = self._create_collapsible_section(left_card, "S001~S### 에셋 자동 반복", opened=True)
         self._set_asset_open = _set_asset_open
@@ -6783,6 +7019,26 @@ class FlowVisionApp:
         self.log(f"🧩 프롬프트 개별 실행 자동채움: {spec} ({source_text})")
         messagebox.showinfo("자동채움", f"최근 실패한 프롬프트 번호를 불러왔습니다.\n출처: {source_text}\n번호: {spec}")
 
+    def on_add_prompt_reference_item(self):
+        items = list(self.cfg.get("prompt_reference_items", []) or [])
+        items.append({"name": "", "asset_tag": "", "scene_spec": ""})
+        self.cfg["prompt_reference_items"] = [self._normalize_prompt_reference_item(x) for x in items]
+        self.save_config()
+        self._refresh_prompt_reference_ui()
+        self.log("➕ 프롬프트 레퍼런스 항목 추가")
+
+    def on_delete_prompt_reference_item(self, idx):
+        items = list(self.cfg.get("prompt_reference_items", []) or [])
+        if not (0 <= idx < len(items)):
+            return
+        removed = self._normalize_prompt_reference_item(items[idx])
+        items.pop(idx)
+        self.cfg["prompt_reference_items"] = [self._normalize_prompt_reference_item(x) for x in items]
+        self.save_config()
+        self._refresh_prompt_reference_ui()
+        label = removed.get("name") or removed.get("asset_tag") or f"{idx + 1}번"
+        self.log(f"🗑️ 프롬프트 레퍼런스 삭제: {label}")
+
     def on_option_toggle(self, event=None):
         self.cfg["scale_lock_enabled"] = False
         self.cfg["afk_mode"] = self.afk_var.get()
@@ -6867,6 +7123,16 @@ class FlowVisionApp:
         self.cfg["asset_search_button_selector"] = self.asset_search_btn_selector_var.get().strip() if hasattr(self, "asset_search_btn_selector_var") else self.cfg.get("asset_search_button_selector", "")
         self.cfg["asset_search_input_selector"] = self.asset_search_input_selector_var.get().strip() if hasattr(self, "asset_search_input_selector_var") else self.cfg.get("asset_search_input_selector", "")
         self.cfg["prompt_manual_selection"] = self.prompt_manual_selection_var.get().strip() if hasattr(self, "prompt_manual_selection_var") else str(self.cfg.get("prompt_manual_selection", "") or "").strip()
+        self.cfg["prompt_reference_enabled"] = self.prompt_reference_enabled_var.get() if hasattr(self, "prompt_reference_enabled_var") else bool(self.cfg.get("prompt_reference_enabled", False))
+        if hasattr(self, "prompt_reference_row_vars"):
+            prompt_ref_items = []
+            for row in self.prompt_reference_row_vars:
+                prompt_ref_items.append(self._normalize_prompt_reference_item({
+                    "name": row["name"].get().strip() if row.get("name") else "",
+                    "asset_tag": row["asset_tag"].get().strip() if row.get("asset_tag") else "",
+                    "scene_spec": row["scene_spec"].get().strip() if row.get("scene_spec") else "",
+                }))
+            self.cfg["prompt_reference_items"] = prompt_ref_items
         self.cfg["download_mode"] = self.download_mode_var.get().strip().lower() if hasattr(self, "download_mode_var") else self.cfg.get("download_mode", "video")
         if self.cfg["download_mode"] not in ("video", "image"):
             self.cfg["download_mode"] = "video"
@@ -6936,6 +7202,7 @@ class FlowVisionApp:
         self._refresh_prompt_preset_selector_label()
         self._sync_relay_selection_label()
         self._refresh_manual_selection_labels()
+        self._refresh_prompt_reference_ui()
         if hasattr(self, 'actor'):
             self.actor.language_mode = self.cfg["language_mode"]
             self.actor.set_typing_speed_profile(self.cfg.get("typing_speed_profile", "normal"))
@@ -10194,6 +10461,8 @@ class FlowVisionApp:
 
             self.update_status_label("🧹 입력창 초기화 중...", "white")
             self.actor.clear_input_field(input_locator, label="입력창")
+            if (not self.cfg.get("asset_loop_enabled")) and source_no:
+                input_locator = self._apply_prompt_references_for_scene(source_no, input_locator)
 
             print(f"Typing prompt: {prompt[:20]}...")
             self.update_status_label("✍️ 프롬프트 입력 중...", "white")
