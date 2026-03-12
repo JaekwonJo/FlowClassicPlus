@@ -4959,19 +4959,19 @@ class FlowVisionApp:
         search_input, search_sel = self._fill_prompt_reference_search_input(search_input, asset_tag)
         if search_sel:
             self.cfg["prompt_reference_search_input_selector"] = search_sel
-        self.actor.random_action_delay("레퍼런스 결과 표시 대기", 0.35, 0.9)
-        clicked, result_sel = self._click_prompt_reference_first_result(search_input=search_input, asset_tag=asset_tag, timeout_sec=2.4)
+        self.actor.random_action_delay("레퍼런스 결과 표시 대기", 0.12, 0.28)
+        clicked, result_sel = self._click_prompt_reference_first_result(search_input=search_input, asset_tag=asset_tag, timeout_sec=1.1)
         if not clicked:
-            self.actor.random_action_delay("레퍼런스 결과 Enter 전 대기", 0.08, 0.25)
+            self.actor.random_action_delay("레퍼런스 결과 Enter 전 대기", 0.06, 0.16)
             self.page.keyboard.press("Enter")
-            self.actor.random_action_delay("레퍼런스 결과 재탐색 대기", 0.3, 0.8)
-            clicked, result_sel = self._click_prompt_reference_first_result(search_input=search_input, asset_tag=asset_tag, timeout_sec=1.8)
+            self.actor.random_action_delay("레퍼런스 결과 재탐색 대기", 0.12, 0.32)
+            clicked, result_sel = self._click_prompt_reference_first_result(search_input=search_input, asset_tag=asset_tag, timeout_sec=0.8)
         if not clicked:
             raise RuntimeError(f"레퍼런스 첫 결과 선택 실패: {asset_tag}")
         if result_sel:
             self.cfg["prompt_reference_result_selector"] = result_sel
         self.log(f"✅ 레퍼런스 첨부 요청 완료: {asset_tag}")
-        self.actor.random_action_delay("레퍼런스 첨부 반영 대기", 0.5, 1.1)
+        self.actor.random_action_delay("레퍼런스 첨부 반영 대기", 0.08, 0.18)
 
         input_selector = (self.cfg.get("input_selector") or "").strip()
         refreshed_input, refreshed_selector = self._resolve_prompt_input_locator(
@@ -5006,17 +5006,22 @@ class FlowVisionApp:
             return input_locator
         ref_count = sum(1 for part in parts if part.get("type") == "reference")
         self.log(f"🔖 프롬프트 inline 레퍼런스 감지: {ref_count}개")
+        keep_focus_only = False
         for part in parts:
             if part.get("type") == "text":
                 chunk = str(part.get("value", "") or "")
                 if chunk:
-                    self.actor.type_text(chunk, input_locator=input_locator, mode=input_mode)
+                    # 레퍼런스 첨부 뒤에는 이미 같은 입력창 안에 커서가 살아 있으므로,
+                    # 다시 클릭해서 커서를 옮기지 않고 현재 위치에서 이어서 입력한다.
+                    self.actor.type_text(chunk, input_locator=None if keep_focus_only else input_locator, mode=input_mode)
+                    keep_focus_only = True
                 continue
             asset_tag = str(part.get("value", "") or "").strip()
             if not asset_tag:
                 continue
             self.update_status_label(f"🖼️ inline 레퍼런스 첨부 중... ({asset_tag})", self.color_info)
             input_locator = self._attach_prompt_reference_asset(input_locator, asset_tag)
+            keep_focus_only = True
         return input_locator
 
     def _apply_download_used_selectors(self, mode, used):
@@ -5829,7 +5834,7 @@ class FlowVisionApp:
         ttk.Button(display_mode_f, text="데스크탑 저장", command=lambda: self.on_save_display_mode("desktop")).pack(side="left", padx=6)
         self.lbl_display_mode_state = tk.Label(
             display_mode_f,
-            text="현재 적용: 노트북 모드",
+            text=f"현재 적용: {self._display_mode_labels().get(self._active_display_mode(), '노트북 모드')}",
             bg=self.color_bg,
             fg=self.color_success,
             font=self.font_small,
@@ -6674,8 +6679,7 @@ class FlowVisionApp:
         self.entry_prompt_reference_test_tag.bind("<FocusOut>", self.on_option_toggle)
         self.entry_prompt_reference_test_tag.bind("<Return>", self.on_option_toggle)
         ToolTip(self.entry_prompt_reference_test_tag, "예: S999 또는 999")
-        ttk.Button(prompt_ref_test_f, text="🔍 레퍼런스 첨부 자동찾기", command=self.on_auto_detect_prompt_reference_attach).pack(side="left", padx=(0, 6))
-        ttk.Button(prompt_ref_test_f, text="🧪 레퍼런스 첨부 TEST", command=self.on_test_prompt_reference_attach).pack(side="left")
+        ttk.Button(prompt_ref_test_f, text="🧪 레퍼런스 첨부 TEST", command=self.on_test_prompt_reference_attach).pack(side="left", padx=(0, 6))
         self.lbl_prompt_reference_probe_status = tk.Label(prompt_ref_test_f, text="", font=self.font_small, bg=self.color_bg, fg=self.color_text_sec)
         self.lbl_prompt_reference_probe_status.pack(side="left", padx=(8, 0))
 
