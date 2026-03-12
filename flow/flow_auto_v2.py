@@ -4577,10 +4577,6 @@ class FlowVisionApp:
         if (not self.page) or input_locator is None:
             return None, None
         stored = self._normalize_candidate_list(self.cfg.get("prompt_reference_add_selector", ""))
-        if stored:
-            loc, sel = self._resolve_best_locator(stored, near_locator=input_locator, timeout_ms=900, prefer_enabled=False)
-            if loc is not None:
-                return loc, sel
         end_ts = time.time() + max(1, timeout_sec)
         while time.time() < end_ts:
             try:
@@ -4593,7 +4589,7 @@ class FlowVisionApp:
             best = None
             best_sel = None
             best_score = float("-inf")
-            for sel in ("button, [role='button']", "[aria-label]", "[title]"):
+            for sel in list(dict.fromkeys(stored + ["button, [role='button']", "[aria-label]", "[title]"])):
                 try:
                     loc = self.page.locator(sel)
                     total = min(loc.count(), 80)
@@ -4629,6 +4625,8 @@ class FlowVisionApp:
                         score += 260.0
                     if any(k in meta for k in ("video", "동영상", "download", "다운로드", "menu", "설정")):
                         score -= 500.0
+                    if sel in stored:
+                        score += 220.0
                     if score > best_score:
                         best = cand
                         best_sel = self._locator_selector_hint(cand) or sel
@@ -4877,7 +4875,11 @@ class FlowVisionApp:
         self.actor.random_action_delay("레퍼런스 첨부 반영 대기", 0.5, 1.1)
 
         input_selector = (self.cfg.get("input_selector") or "").strip()
-        refreshed_input, refreshed_selector = self._resolve_prompt_input_locator(input_selector, timeout_ms=2600)
+        refreshed_input, refreshed_selector = self._resolve_prompt_input_locator(
+            input_selector,
+            timeout_ms=2600,
+            near_locator=input_locator,
+        )
         if refreshed_input is not None:
             self.log(f"🧭 레퍼런스 첨부 후 입력창 복귀: {refreshed_selector or '자동 탐색'}")
             return refreshed_input
@@ -7366,7 +7368,11 @@ class FlowVisionApp:
             if not result_ok:
                 raise RuntimeError(f"레퍼런스 첫 결과 선택 실패: {tag}")
 
-            refreshed_input, refreshed_selector = self._resolve_prompt_input_locator(input_selector, timeout_ms=2600)
+            refreshed_input, refreshed_selector = self._resolve_prompt_input_locator(
+                input_selector,
+                timeout_ms=2600,
+                near_locator=input_locator,
+            )
             if refreshed_input is not None:
                 input_locator = refreshed_input
             if not test_only:
@@ -7386,10 +7392,13 @@ class FlowVisionApp:
             if hasattr(self, "lbl_prompt_reference_probe_status"):
                 self.lbl_prompt_reference_probe_status.config(text=f"{tag} OK", fg=self.color_success)
 
-            try:
-                self.actor.clear_input_field(input_locator, label="입력창")
-            except Exception:
-                pass
+            # 테스트는 첨부 흐름 확인만 하고, 마지막에 상단 다른 입력칸까지 건드리지 않도록
+            # 프롬프트 입력창 근처 복귀가 확인된 경우에만 정리한다.
+            if refreshed_input is not None:
+                try:
+                    self.actor.clear_input_field(input_locator, label="입력창")
+                except Exception:
+                    pass
         except Exception as e:
             self.log(f"❌ 레퍼런스 첨부 {mode_label} 실패: {e}")
             self.update_status_label(f"❌ 레퍼런스 첨부 {mode_label} 실패", self.color_error)
@@ -8069,6 +8078,8 @@ class FlowVisionApp:
             score += 260.0
         elif y_ratio < 0.22:
             score -= 260.0
+        elif y_ratio < 0.34:
+            score -= 520.0
 
         if text_len > 160:
             score -= 700.0
@@ -8093,7 +8104,7 @@ class FlowVisionApp:
         has_prompt = any(k in meta for k in prompt_keys)
         return has_search and (not has_prompt)
 
-    def _resolve_prompt_input_locator(self, input_selector, timeout_ms=2500):
+    def _resolve_prompt_input_locator(self, input_selector, timeout_ms=2500, near_locator=None):
         # 동적 UI에서 ref 재할당이 발생해도 매번 "프롬프트 입력칸"을 다시 찾도록 강제한다.
         configured = self._normalize_candidate_list(input_selector)
         specific = [sel for sel in configured if not self._is_generic_input_selector(sel)]
@@ -8113,6 +8124,12 @@ class FlowVisionApp:
         best = None
         best_selector = None
         best_score = float("-inf")
+        near_box = None
+        if near_locator is not None:
+            try:
+                near_box = near_locator.bounding_box()
+            except Exception:
+                near_box = None
 
         def _consider(container):
             nonlocal best, best_selector, best_score
@@ -8133,6 +8150,20 @@ class FlowVisionApp:
                     if self._is_asset_search_like_locator(cand):
                         continue
                     score = self._locator_prompt_input_score(cand, sel)
+                    if near_box:
+                        try:
+                            box = cand.bounding_box()
+                        except Exception:
+                            box = None
+                        if box:
+                            near_cx = float(near_box["x"]) + float(near_box["width"]) * 0.5
+                            near_cy = float(near_box["y"]) + float(near_box["height"]) * 0.5
+                            cx = float(box["x"]) + float(box["width"]) * 0.5
+                            cy = float(box["y"]) + float(box["height"]) * 0.5
+                            dist = ((cx - near_cx) ** 2 + (cy - near_cy) ** 2) ** 0.5
+                            score -= dist * 0.9
+                            if cy < (near_cy - 120.0):
+                                score -= 1200.0
                     score -= idx * 6.0
                     if score > best_score:
                         best = cand
@@ -8155,6 +8186,7 @@ class FlowVisionApp:
         # 마지막 폴백: 기존 일반 탐색 1회
         input_loc, resolved_selector = self._resolve_best_locator(
             candidates,
+            near_locator=near_locator,
             timeout_ms=timeout_ms,
             reject_fn=lambda cand, _sel: self._is_asset_search_like_locator(cand),
         )
