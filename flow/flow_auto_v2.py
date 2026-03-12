@@ -9310,14 +9310,6 @@ class FlowVisionApp:
                 input_locator.focus(timeout=800)
             except Exception:
                 pass
-        try:
-            self.page.keyboard.press("End")
-        except Exception:
-            pass
-        try:
-            self.page.keyboard.press("ArrowRight")
-        except Exception:
-            pass
         self.actor.random_action_delay("레퍼런스 커서 안정화", 0.05, 0.12)
 
     def _is_generation_indicator_visible(self):
