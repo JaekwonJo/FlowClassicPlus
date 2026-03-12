@@ -5008,18 +5008,26 @@ class FlowVisionApp:
         ref_count = sum(1 for part in parts if part.get("type") == "reference")
         self.log(f"🔖 프롬프트 inline 레퍼런스 감지: {ref_count}개")
         keep_focus_only = False
-        for part in parts:
+        total_parts = len(parts)
+        for idx, part in enumerate(parts):
             if part.get("type") == "text":
                 chunk = str(part.get("value", "") or "")
                 if chunk:
                     # 레퍼런스 첨부 뒤에는 이미 같은 입력창 안에 커서가 살아 있으므로,
                     # 다시 클릭해서 커서를 옮기지 않고 현재 위치에서 이어서 입력한다.
                     self.actor.type_text(chunk, input_locator=None if keep_focus_only else input_locator, mode=input_mode)
+                    next_is_reference = idx + 1 < total_parts and parts[idx + 1].get("type") == "reference"
+                    if keep_focus_only and next_is_reference:
+                        compact = chunk.strip()
+                        if len(compact) <= 4:
+                            self._stabilize_prompt_caret_after_reference(input_locator)
                     keep_focus_only = True
                 continue
             asset_tag = str(part.get("value", "") or "").strip()
             if not asset_tag:
                 continue
+            if keep_focus_only:
+                self._stabilize_prompt_caret_after_reference(input_locator)
             self.update_status_label(f"🖼️ inline 레퍼런스 첨부 중... ({asset_tag})", self.color_info)
             input_locator = self._attach_prompt_reference_asset(input_locator, asset_tag)
             keep_focus_only = True
