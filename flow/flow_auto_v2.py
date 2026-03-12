@@ -4675,7 +4675,6 @@ class FlowVisionApp:
             input_locator.focus(timeout=1200)
         except Exception:
             pass
-        self._stabilize_prompt_caret_after_reference(input_locator)
         deadline = time.time() + max(1.0, timeout_sec)
         last_error = "search-input-not-found"
         trigger_methods = (
@@ -4745,7 +4744,6 @@ class FlowVisionApp:
                 # 검색창이 안 뜨거나, @ 없이 상단 입력칸만 잘못 잡힌 경우 입력 흔적 정리 후 다음 방법 재시도
                 try:
                     input_locator.focus(timeout=800)
-                    self._stabilize_prompt_caret_after_reference(input_locator)
                     current_text = self._read_input_text(input_locator)
                     extra_count = max(0, len(current_text) - len(before_text))
                     if extra_count > 0 and current_text.startswith(before_text):
@@ -4980,8 +4978,8 @@ class FlowVisionApp:
             self.cfg["prompt_reference_result_selector"] = result_sel
         self.log(f"✅ 레퍼런스 첨부 요청 완료: {asset_tag}")
         self.actor.random_action_delay("레퍼런스 첨부 반영 대기", 0.04, 0.10)
-        self._stabilize_prompt_caret_after_reference(input_locator)
-        self.log("🧭 레퍼런스 첨부 후 입력창 복귀: 기존 입력창 유지")
+        self._click_prompt_input_and_move_end(input_locator)
+        self.log("🧭 레퍼런스 첨부 후 입력창 복귀: 입력창 클릭 + End")
         return input_locator
 
     def _split_prompt_inline_reference_parts(self, prompt_text):
@@ -5003,11 +5001,6 @@ class FlowVisionApp:
         text = str(chunk or "")
         if (not text) or (not self.page) or input_locator is None:
             return
-        try:
-            input_locator.focus(timeout=800)
-        except Exception:
-            pass
-        self._stabilize_prompt_caret_after_reference(input_locator)
         self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] inline 텍스트 직선 입력 시작 (len={len(text)})")
         try:
             self.page.keyboard.type(text, delay=random.randint(4, 10))
@@ -5065,22 +5058,44 @@ class FlowVisionApp:
                         self._type_prompt_inline_text_chunk(chunk, input_locator)
                     else:
                         self.actor.type_text(chunk, input_locator=input_locator, mode=input_mode)
-                    next_is_reference = idx + 1 < total_parts and parts[idx + 1].get("type") == "reference"
-                    if keep_focus_only and next_is_reference:
-                        compact = chunk.strip()
-                        if len(compact) <= 4:
-                            self._stabilize_prompt_caret_after_reference(input_locator)
                     keep_focus_only = True
                 continue
             asset_tag = str(part.get("value", "") or "").strip()
             if not asset_tag:
                 continue
-            if keep_focus_only:
-                self._stabilize_prompt_caret_after_reference(input_locator)
             self.update_status_label(f"🖼️ inline 레퍼런스 첨부 중... ({asset_tag})", self.color_info)
             input_locator = self._attach_prompt_reference_asset(input_locator, asset_tag)
             keep_focus_only = True
         return input_locator
+
+    def _click_prompt_input_and_move_end(self, input_locator):
+        if (not self.page) or input_locator is None:
+            return
+        try:
+            box = input_locator.bounding_box()
+        except Exception:
+            box = None
+        if not box:
+            try:
+                input_locator.focus(timeout=800)
+                self.page.keyboard.press("End")
+            except Exception:
+                pass
+            return
+        safe_x = float(box["x"]) + max(120.0, float(box["width"]) * 0.72)
+        safe_x = min(safe_x, float(box["x"]) + float(box["width"]) - 48.0)
+        safe_y = float(box["y"]) + min(float(box["height"]) * 0.72, float(box["height"]) - 10.0)
+        try:
+            self.page.mouse.move(safe_x, safe_y, steps=6)
+            self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 입력창 복귀 클릭 위치: ({safe_x:.1f}, {safe_y:.1f})")
+            self.page.mouse.click(safe_x, safe_y, delay=random.randint(30, 80))
+            self.page.keyboard.press("End")
+        except Exception:
+            try:
+                input_locator.focus(timeout=800)
+                self.page.keyboard.press("End")
+            except Exception:
+                pass
 
     def _apply_download_used_selectors(self, mode, used):
         if not isinstance(used, dict):
