@@ -397,6 +397,8 @@ class FlowVisionApp:
         self.cfg_path = self.base / CONFIG_FILE
         self.cfg = load_config_from_file(self.cfg_path)
         self._normalize_display_mode_config()
+        self._normalize_generation_preset_config()
+        self._normalize_media_panel_selector_cache()
         self.logs_dir = self.base.parent / "logs"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         
@@ -684,6 +686,29 @@ class FlowVisionApp:
         active = normalized[active_mode]
         self.cfg["browser_window_scale_percent"] = active["browser_window_scale_percent"]
         self.cfg["browser_zoom_percent"] = active["browser_zoom_percent"]
+
+    def _normalize_generation_preset_config(self):
+        changed = False
+        for key in ("prompt_mode_preset_enabled", "asset_prompt_mode_preset_enabled"):
+            if self.cfg.get(key, True) is not True:
+                self.cfg[key] = True
+                changed = True
+        if changed:
+            self.save_config()
+
+    def _normalize_media_panel_selector_cache(self):
+        changed = False
+        for profile in ("prompt", "asset"):
+            image_key = self._panel_selector_key(profile, "image")
+            video_key = self._panel_selector_key(profile, "video")
+            image_sel = str(self.cfg.get(image_key, "") or "").strip()
+            video_sel = str(self.cfg.get(video_key, "") or "").strip()
+            if image_sel and video_sel and image_sel == video_sel:
+                self.cfg[image_key] = ""
+                self.cfg[video_key] = ""
+                changed = True
+        if changed:
+            self.save_config()
 
     def _active_display_mode(self):
         mode = str(self.cfg.get("work_env_mode", "laptop") or "laptop").strip().lower()
@@ -6035,15 +6060,13 @@ class FlowVisionApp:
         preset_f = tk.Frame(preset_body, bg=self.color_bg)
         preset_f.pack(fill="x", pady=6)
 
-        self.prompt_mode_preset_enabled_var = tk.BooleanVar(value=self.cfg.get("prompt_mode_preset_enabled", True))
-        tk.Checkbutton(
+        self.prompt_mode_preset_enabled_var = tk.BooleanVar(value=True)
+        tk.Label(
             preset_f,
-            text="프롬프트 입력 전에 생성 옵션 자동 맞추기",
-            variable=self.prompt_mode_preset_enabled_var,
-            command=self.on_option_toggle,
+            text="프롬프트 생성 옵션 자동 맞춤: 항상 켜짐",
             bg=self.color_bg,
+            fg=self.color_text_sec,
             font=self.font_body,
-            activebackground=self.color_bg,
         ).pack(anchor="w")
 
         preset_row = tk.Frame(preset_f, bg=self.color_bg)
@@ -6243,17 +6266,13 @@ class FlowVisionApp:
         )
         asset_preset_box.pack(fill="x", pady=(10, 0))
 
-        self.asset_prompt_mode_preset_enabled_var = tk.BooleanVar(
-            value=self.cfg.get("asset_prompt_mode_preset_enabled", True)
-        )
-        tk.Checkbutton(
+        self.asset_prompt_mode_preset_enabled_var = tk.BooleanVar(value=True)
+        tk.Label(
             asset_preset_box,
-            text="S자동화 시작 전 생성 옵션 자동 맞추기",
-            variable=self.asset_prompt_mode_preset_enabled_var,
-            command=self.on_option_toggle,
+            text="S자동화 생성 옵션 자동 맞춤: 항상 켜짐",
             bg=self.color_bg,
+            fg=self.color_text_sec,
             font=self.font_body,
-            activebackground=self.color_bg,
         ).pack(anchor="w")
 
         asset_preset_row = tk.Frame(asset_preset_box, bg=self.color_bg)
@@ -7540,14 +7559,18 @@ class FlowVisionApp:
                 self._active_display_mode(),
             )
         self.cfg["language_mode"] = "ko_en" if self.lang_var.get() else "en"
-        self.cfg["prompt_mode_preset_enabled"] = self.prompt_mode_preset_enabled_var.get() if hasattr(self, "prompt_mode_preset_enabled_var") else self.cfg.get("prompt_mode_preset_enabled", True)
+        if hasattr(self, "prompt_mode_preset_enabled_var"):
+            self.prompt_mode_preset_enabled_var.set(True)
+        self.cfg["prompt_mode_preset_enabled"] = True
         media_label = self.prompt_media_mode_var.get().strip() if hasattr(self, "prompt_media_mode_var") else ""
         self.cfg["prompt_media_mode"] = PROMPT_MEDIA_VALUES.get(media_label, self.cfg.get("prompt_media_mode", "image"))
         orientation_label = self.prompt_orientation_var.get().strip() if hasattr(self, "prompt_orientation_var") else ""
         self.cfg["prompt_orientation"] = PROMPT_ORIENTATION_VALUES.get(orientation_label, self.cfg.get("prompt_orientation", "landscape"))
         variant_value = self.prompt_variant_count_var.get().strip().lower() if hasattr(self, "prompt_variant_count_var") else ""
         self.cfg["prompt_variant_count"] = variant_value if variant_value in {"x1", "x2", "x3", "x4"} else str(self.cfg.get("prompt_variant_count", "x1")).strip().lower() or "x1"
-        self.cfg["asset_prompt_mode_preset_enabled"] = self.asset_prompt_mode_preset_enabled_var.get() if hasattr(self, "asset_prompt_mode_preset_enabled_var") else self.cfg.get("asset_prompt_mode_preset_enabled", True)
+        if hasattr(self, "asset_prompt_mode_preset_enabled_var"):
+            self.asset_prompt_mode_preset_enabled_var.set(True)
+        self.cfg["asset_prompt_mode_preset_enabled"] = True
         asset_media_label = self.asset_prompt_media_mode_var.get().strip() if hasattr(self, "asset_prompt_media_mode_var") else ""
         self.cfg["asset_prompt_media_mode"] = PROMPT_MEDIA_VALUES.get(asset_media_label, self.cfg.get("asset_prompt_media_mode", "video"))
         asset_orientation_label = self.asset_prompt_orientation_var.get().strip() if hasattr(self, "asset_prompt_orientation_var") else ""
@@ -8762,11 +8785,16 @@ class FlowVisionApp:
             return
         profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
         enabled_key = self._preset_cfg_key(profile, "mode_preset_enabled")
-        if not self.cfg.get(enabled_key, True):
-            self.log("ℹ️ 생성 옵션 자동 맞춤: 사용 안 함")
-            return
         desired_state = str(self.cfg.get(self._preset_cfg_key(profile, "media_mode"), "image")).strip().lower()
         desired_state = "video" if desired_state == "video" else "image"
+
+        # S자동화는 동영상 모드가 사실상 필수라서, 체크가 꺼져 있어도 자동 맞춤을 막지 않는다.
+        force_for_asset = (profile == "asset" and desired_state == "video")
+        if (not force_for_asset) and (not self.cfg.get(enabled_key, True)):
+            self.log("ℹ️ 생성 옵션 자동 맞춤: 사용 안 함")
+            return
+        if force_for_asset and (not self.cfg.get(enabled_key, True)):
+            self.log("ℹ️ S자동화는 동영상 모드 자동 맞춤을 계속 적용합니다.")
         ok = self._switch_media_state(desired_state, input_locator=input_locator, profile=profile)
         if not ok:
             raise RuntimeError("생성 모드 전환에 실패했습니다. 상태 확인과 이미지/동영상 전환 테스트를 다시 확인해주세요.")
@@ -8880,8 +8908,10 @@ class FlowVisionApp:
         return found, used
 
     def _resolve_prompt_preset_toggle_button(self, input_locator=None, timeout_ms=1200):
-        if (not self.page) or (input_locator is None):
+        if not self.page:
             return None, None
+        if input_locator is None:
+            return self._resolve_prompt_preset_toggle_button_global(timeout_ms=timeout_ms)
         try:
             input_locator.scroll_into_view_if_needed(timeout=900)
         except Exception:
@@ -8891,7 +8921,7 @@ class FlowVisionApp:
         except Exception:
             ib = None
         if not ib:
-            return None, None
+            return self._resolve_prompt_preset_toggle_button_global(timeout_ms=timeout_ms)
 
         input_left = ib["x"]
         input_right = ib["x"] + ib["width"]
@@ -8981,6 +9011,104 @@ class FlowVisionApp:
                 score += 380.0
             if has_count_chip and has_mode_hint:
                 score -= 220.0
+
+            if score < best_score:
+                best = cand
+                best_desc = meta[:80] or "프롬프트 생성 옵션 패널 버튼"
+                best_score = score
+
+        if best is not None:
+            return best, best_desc
+        return self._resolve_prompt_preset_toggle_button_global(timeout_ms=timeout_ms)
+
+    def _resolve_prompt_preset_toggle_button_global(self, timeout_ms=1200):
+        if not self.page:
+            return None, None
+
+        best = None
+        best_desc = None
+        best_score = float("inf")
+        try:
+            viewport = getattr(self.page, "viewport_size", None) or {}
+            viewport_w = float(viewport.get("width") or 1600.0)
+            viewport_h = float(viewport.get("height") or 900.0)
+        except Exception:
+            viewport_w = 1600.0
+            viewport_h = 900.0
+
+        target_x = max(540.0, viewport_w * 0.66)
+        target_y = min(viewport_h * 0.74, viewport_h - 150.0)
+
+        try:
+            loc = self.page.locator("button, [role='button']")
+            total = loc.count()
+        except Exception:
+            return None, None
+
+        upper = min(total, 260)
+        for i in range(upper):
+            cand = loc.nth(i)
+            try:
+                if not cand.is_visible(timeout=timeout_ms):
+                    continue
+            except Exception:
+                continue
+            try:
+                box = cand.bounding_box()
+            except Exception:
+                box = None
+            if not box:
+                continue
+            if box["width"] < 70 or box["height"] < 24:
+                continue
+            if box["x"] < 120:
+                continue
+
+            cx = box["x"] + box["width"] / 2.0
+            cy = box["y"] + box["height"] / 2.0
+            try:
+                meta = cand.evaluate(
+                    """(el) => ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '') + ' ' + (el.getAttribute('title') || '')).toLowerCase()"""
+                ) or ""
+            except Exception:
+                meta = ""
+
+            has_count_chip = any(x in meta for x in ("x1", "x2", "x3", "x4"))
+            looks_like_model_dropdown = any(
+                x in meta for x in (
+                    "quality", "lower priority", "priority", "fast", "arrow_drop_down",
+                    "veo 3.1", "veo 2", "veo3.1", "veo2",
+                )
+            )
+            has_mode_hint = any(x in meta for x in ("nano banana", "동영상", "image", "video", "이미지", "영상"))
+            bad_tokens = (
+                "카메라", "camera", "삽입", "삭제", "확장", "mute", "fullscreen", "play", "pause",
+                "search", "검색", "필터", "정렬", "장면 빌더", "scene builder", "미디어 추가",
+                "dashboard", "대시보드", "옵션 더보기", "more_vert", "보기", "view",
+            )
+
+            if any(x in meta for x in ("생성", "generate", "submit", "send", "보내", "arrow_forward", "메인 메뉴", "설정", "닫기", "close")):
+                continue
+            if looks_like_model_dropdown:
+                continue
+            if any(x.lower() in meta for x in bad_tokens):
+                continue
+            if not (has_count_chip or has_mode_hint):
+                continue
+            if box["width"] > 320 or box["height"] > 74:
+                continue
+
+            score = abs(cx - target_x) + (abs(cy - target_y) * 2.8)
+            if cy < max(120.0, viewport_h * 0.20):
+                score += 920.0
+            if cy > (viewport_h - 50.0):
+                score += 520.0
+            if has_count_chip:
+                score -= 280.0
+            if has_mode_hint:
+                score -= 180.0
+            if any(x in meta for x in ("nano banana", "동영상", "영상", "이미지", "image", "video")):
+                score -= 120.0
 
             if score < best_score:
                 best = cand
@@ -9088,6 +9216,10 @@ class FlowVisionApp:
         selector = str(self.cfg.get(self._panel_selector_key(profile, state), "") or "").strip()
         if not selector or not self.page:
             return None, selector
+        other_state = "video" if state == "image" else "image"
+        other_selector = str(self.cfg.get(self._panel_selector_key(profile, other_state), "") or "").strip()
+        if other_selector and selector == other_selector:
+            return None, selector
         loc, used = self._resolve_best_locator([selector], timeout_ms=1200, prefer_enabled=False)
         return loc, used or selector
 
@@ -9120,6 +9252,10 @@ class FlowVisionApp:
 
     def _resolve_current_media_panel_button(self, input_locator=None, profile="prompt"):
         opener, opener_desc = self._resolve_prompt_preset_toggle_button(input_locator=input_locator)
+        opener_state = self._infer_media_state_from_locator(opener)
+        if opener is not None:
+            return opener, opener_desc or "", opener_state
+        opener, opener_desc = self._resolve_prompt_preset_toggle_button_global(timeout_ms=900)
         opener_state = self._infer_media_state_from_locator(opener)
         if opener is not None:
             return opener, opener_desc or "", opener_state
