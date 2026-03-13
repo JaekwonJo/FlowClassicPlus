@@ -4953,6 +4953,128 @@ class FlowVisionApp:
         self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 검색 입력: {asset_tag} ({used_selector or '직접입력'})")
         return search_input, used_selector
 
+    def _resolve_prompt_reference_sort_button(self, search_input=None, timeout_sec=1.6):
+        if not self.page:
+            return None, None
+        try:
+            search_box = search_input.bounding_box() if search_input is not None else None
+        except Exception:
+            search_box = None
+
+        labels = ("최근 사용", "가장 많이 사용", "최신순", "오래된 순")
+        end_ts = time.time() + max(1.0, timeout_sec)
+        while time.time() < end_ts:
+            best = None
+            best_sel = None
+            best_score = float("-inf")
+            for sel in ("button", "[role='button']", "div[role='button']"):
+                try:
+                    loc = self.page.locator(sel)
+                    total = min(loc.count(), 40)
+                except Exception:
+                    continue
+                for idx in range(total):
+                    cand = loc.nth(idx)
+                    try:
+                        if not cand.is_visible(timeout=250):
+                            continue
+                        box = cand.bounding_box()
+                    except Exception:
+                        continue
+                    if not box:
+                        continue
+                    meta = self._locator_meta_text(cand)
+                    if not any(label in meta for label in labels):
+                        continue
+                    score = 0.0
+                    if search_box:
+                        score -= abs(float(box["y"]) - float(search_box["y"])) * 1.2
+                        score -= abs((float(box["x"]) + float(box["width"]) * 0.5) - (float(search_box["x"]) + float(search_box["width"]) + 70.0)) * 0.18
+                        if float(box["x"]) < float(search_box["x"]) + float(search_box["width"]) - 40.0:
+                            score -= 600.0
+                    score += 240.0
+                    if "최근 사용" in meta:
+                        score += 120.0
+                    if score > best_score:
+                        best = cand
+                        best_sel = self._locator_selector_hint(cand) or sel
+                        best_score = score
+            if best is not None and best_score > -300.0:
+                return best, best_sel or ""
+            time.sleep(0.10)
+        return None, None
+
+    def _resolve_prompt_reference_oldest_option(self, timeout_sec=1.6):
+        if not self.page:
+            return None, None
+        end_ts = time.time() + max(1.0, timeout_sec)
+        while time.time() < end_ts:
+            for sel in (
+                "button",
+                "[role='button']",
+                "div[role='button']",
+                "[role='menuitem']",
+                "li",
+            ):
+                try:
+                    loc = self.page.locator(sel)
+                    total = min(loc.count(), 50)
+                except Exception:
+                    continue
+                for idx in range(total):
+                    cand = loc.nth(idx)
+                    try:
+                        if not cand.is_visible(timeout=250):
+                            continue
+                        box = cand.bounding_box()
+                    except Exception:
+                        continue
+                    if not box:
+                        continue
+                    meta = self._locator_meta_text(cand)
+                    if "오래된 순" not in meta:
+                        continue
+                    return cand, self._locator_selector_hint(cand) or sel
+            time.sleep(0.10)
+        return None, None
+
+    def _set_prompt_reference_sort_oldest(self, search_input=None):
+        if not self.page:
+            return search_input
+        sort_button, sort_sel = self._resolve_prompt_reference_sort_button(search_input=search_input, timeout_sec=1.5)
+        if sort_button is None:
+            self.log("⚠️ 레퍼런스 정렬 버튼을 찾지 못해 기본 정렬로 계속합니다.")
+            return search_input
+        try:
+            sort_button.click(timeout=1200)
+        except Exception:
+            if not self._click_with_actor_fallback(sort_button, "레퍼런스 정렬 버튼"):
+                self.log("⚠️ 레퍼런스 정렬 버튼 클릭에 실패해 기본 정렬로 계속합니다.")
+                return search_input
+        self.log(f"↕️ 레퍼런스 정렬 버튼 클릭: {sort_sel or '자동 탐색'}")
+        self.actor.random_action_delay("레퍼런스 정렬 메뉴 표시 대기", 0.08, 0.18)
+        oldest_button, oldest_sel = self._resolve_prompt_reference_oldest_option(timeout_sec=1.4)
+        if oldest_button is None:
+            self.log("⚠️ `오래된 순` 항목을 찾지 못해 기본 정렬로 계속합니다.")
+            return search_input
+        try:
+            oldest_button.click(timeout=1200)
+        except Exception:
+            if not self._click_with_actor_fallback(oldest_button, "레퍼런스 오래된 순"):
+                self.log("⚠️ `오래된 순` 클릭에 실패해 기본 정렬로 계속합니다.")
+                return search_input
+        self.log(f"↕️ 레퍼런스 정렬 선택: 오래된 순 ({oldest_sel or '자동 탐색'})")
+        self.actor.random_action_delay("레퍼런스 정렬 반영 대기", 0.10, 0.22)
+        refreshed_input, refreshed_sel = self._resolve_prompt_reference_search_overlay_input(timeout_sec=1.2)
+        if refreshed_input is not None:
+            try:
+                refreshed_input.click(timeout=1200)
+            except Exception:
+                pass
+            self.log(f"🔎 레퍼런스 검색창 재확인: {refreshed_sel or '자동 탐색'}")
+            return refreshed_input
+        return search_input
+
     def _click_prompt_reference_first_result(self, search_input=None, asset_tag="", timeout_sec=3):
         end_ts = time.time() + max(1, timeout_sec)
         last_selector = None
@@ -4986,6 +5108,7 @@ class FlowVisionApp:
             return input_locator
         self.log(f"🔖 레퍼런스 첨부 시작: {asset_tag}")
         search_input, search_sel = self._open_prompt_reference_search_via_keyboard(input_locator, timeout_sec=2.4)
+        search_input = self._set_prompt_reference_sort_oldest(search_input=search_input)
         search_input, search_sel = self._fill_prompt_reference_search_input(search_input, asset_tag)
         if search_sel:
             self.cfg["prompt_reference_search_input_selector"] = search_sel
@@ -5057,9 +5180,23 @@ class FlowVisionApp:
                 chunk = str(part.get("value", "") or "")
                 if chunk:
                     if keep_focus_only:
-                        # inline 레퍼런스가 섞인 뒤에는 오타/멈칫/재클릭을 빼고
-                        # 현재 커서 위치에서 그대로 이어서 써야 칩 주변이 덜 흔들린다.
-                        self._type_prompt_inline_text_chunk(chunk, input_locator)
+                        next_has_reference = any(
+                            later.get("type") == "reference"
+                            for later in parts[idx + 1 :]
+                        )
+                        if next_has_reference:
+                            # 다음 레퍼런스가 남아 있으면 칩이 선택되지 않게 단순 입력만 한다.
+                            self._type_prompt_inline_text_chunk(chunk, input_locator)
+                        else:
+                            # 마지막 레퍼런스 뒤 본문은 앞부분만 보호 입력하고,
+                            # 그 뒤부터는 다시 사람처럼 오타/멈칫이 들어가도록 복귀한다.
+                            protected_len = min(len(chunk), 18)
+                            protected_chunk = chunk[:protected_len]
+                            remaining_chunk = chunk[protected_len:]
+                            if protected_chunk:
+                                self._type_prompt_inline_text_chunk(protected_chunk, input_locator)
+                            if remaining_chunk:
+                                self.actor.type_text(remaining_chunk, input_locator=None, mode=input_mode)
                     else:
                         self.actor.type_text(chunk, input_locator=input_locator, mode=input_mode)
                     keep_focus_only = True
