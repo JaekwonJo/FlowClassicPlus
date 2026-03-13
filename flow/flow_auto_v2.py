@@ -5021,10 +5021,26 @@ class FlowVisionApp:
         if (not text) or (not self.page) or input_locator is None:
             return
         self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] inline 텍스트 직선 입력 시작 (len={len(text)})")
-        try:
-            self.page.keyboard.type(text, delay=random.randint(4, 10))
-        except Exception:
-            self.page.keyboard.insert_text(text)
+        fatigue = self.actor.get_fatigue_factor() if hasattr(self, "actor") else 1.0
+        typing_speed = getattr(self.actor, "typing_speed_factor", 1.0) if hasattr(self, "actor") else 1.0
+        for ch in text:
+            try:
+                if ch == "\n":
+                    self.page.keyboard.press("Shift+Enter")
+                else:
+                    self.page.keyboard.type(ch)
+            except Exception:
+                self.page.keyboard.insert_text(ch)
+            if ch in [" ", "\n"]:
+                base_min, base_max = 0.015, 0.06
+            elif ch in [".", ",", "!", "?", ":", ";", ")", "(", "]", "["]:
+                base_min, base_max = 0.02, 0.09
+            else:
+                base_min, base_max = 0.025, 0.11
+            speed = max(0.45, min(typing_speed * random.uniform(0.7, 1.3), 8.0))
+            fatigue_slow = 1.0 + max(0.0, (1.0 - fatigue)) * 0.45
+            delay = random.uniform(base_min, base_max) * (1.0 / speed) * fatigue_slow
+            time.sleep(max(0.004, min(delay, 0.18)))
         self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] inline 텍스트 직선 입력 완료")
 
     def _type_prompt_with_inline_references(self, prompt_text, input_locator, input_mode="typing"):
@@ -6063,10 +6079,10 @@ class FlowVisionApp:
         self.prompt_mode_preset_enabled_var = tk.BooleanVar(value=True)
         tk.Label(
             preset_f,
-            text="프롬프트 생성 옵션 자동 맞춤: 항상 켜짐",
+            text="프롬프트 입력 전에 생성 옵션 자동 맞추기: 항상 ON",
             bg=self.color_bg,
-            fg=self.color_text_sec,
-            font=self.font_body,
+            font=self.font_body_bold,
+            fg=self.color_success,
         ).pack(anchor="w")
 
         preset_row = tk.Frame(preset_f, bg=self.color_bg)
@@ -6269,10 +6285,10 @@ class FlowVisionApp:
         self.asset_prompt_mode_preset_enabled_var = tk.BooleanVar(value=True)
         tk.Label(
             asset_preset_box,
-            text="S자동화 생성 옵션 자동 맞춤: 항상 켜짐",
+            text="S자동화 시작 전 생성 옵션 자동 맞추기: 항상 ON",
             bg=self.color_bg,
-            fg=self.color_text_sec,
-            font=self.font_body,
+            font=self.font_body_bold,
+            fg=self.color_success,
         ).pack(anchor="w")
 
         asset_preset_row = tk.Frame(asset_preset_box, bg=self.color_bg)
@@ -7559,24 +7575,16 @@ class FlowVisionApp:
                 self._active_display_mode(),
             )
         self.cfg["language_mode"] = "ko_en" if self.lang_var.get() else "en"
-        if hasattr(self, "prompt_mode_preset_enabled_var"):
-            self.prompt_mode_preset_enabled_var.set(True)
         self.cfg["prompt_mode_preset_enabled"] = True
         media_label = self.prompt_media_mode_var.get().strip() if hasattr(self, "prompt_media_mode_var") else ""
         self.cfg["prompt_media_mode"] = PROMPT_MEDIA_VALUES.get(media_label, self.cfg.get("prompt_media_mode", "image"))
-        orientation_label = self.prompt_orientation_var.get().strip() if hasattr(self, "prompt_orientation_var") else ""
-        self.cfg["prompt_orientation"] = PROMPT_ORIENTATION_VALUES.get(orientation_label, self.cfg.get("prompt_orientation", "landscape"))
-        variant_value = self.prompt_variant_count_var.get().strip().lower() if hasattr(self, "prompt_variant_count_var") else ""
-        self.cfg["prompt_variant_count"] = variant_value if variant_value in {"x1", "x2", "x3", "x4"} else str(self.cfg.get("prompt_variant_count", "x1")).strip().lower() or "x1"
-        if hasattr(self, "asset_prompt_mode_preset_enabled_var"):
-            self.asset_prompt_mode_preset_enabled_var.set(True)
+        if hasattr(self, "prompt_mode_preset_enabled_var"):
+            self.prompt_mode_preset_enabled_var.set(True)
         self.cfg["asset_prompt_mode_preset_enabled"] = True
         asset_media_label = self.asset_prompt_media_mode_var.get().strip() if hasattr(self, "asset_prompt_media_mode_var") else ""
         self.cfg["asset_prompt_media_mode"] = PROMPT_MEDIA_VALUES.get(asset_media_label, self.cfg.get("asset_prompt_media_mode", "video"))
-        asset_orientation_label = self.asset_prompt_orientation_var.get().strip() if hasattr(self, "asset_prompt_orientation_var") else ""
-        self.cfg["asset_prompt_orientation"] = PROMPT_ORIENTATION_VALUES.get(asset_orientation_label, self.cfg.get("asset_prompt_orientation", "landscape"))
-        asset_variant_value = self.asset_prompt_variant_count_var.get().strip().lower() if hasattr(self, "asset_prompt_variant_count_var") else ""
-        self.cfg["asset_prompt_variant_count"] = asset_variant_value if asset_variant_value in {"x1", "x2", "x3", "x4"} else str(self.cfg.get("asset_prompt_variant_count", "x1")).strip().lower() or "x1"
+        if hasattr(self, "asset_prompt_mode_preset_enabled_var"):
+            self.asset_prompt_mode_preset_enabled_var.set(True)
         self.cfg["asset_loop_enabled"] = self.asset_loop_var.get() if hasattr(self, "asset_loop_var") else self.cfg.get("asset_loop_enabled", False)
         raw_start = ""
         raw_end = ""
@@ -8732,59 +8740,11 @@ class FlowVisionApp:
             self._log_panel_media_candidates_dump(desired_state, last_candidates, stage_label=dump_stage_label or "최종 실패 dump")
         return None, None
 
-    def _prompt_orientation_candidates(self, orientation, profile="prompt"):
-        orientation = "portrait" if str(orientation).strip().lower() == "portrait" else "landscape"
-        target = "세로 모드" if orientation == "portrait" else "가로 모드"
-        key = "세로" if orientation == "portrait" else "가로"
-        cands = []
-        cands.extend(self._normalize_candidate_list(self.cfg.get(self._preset_cfg_key(profile, "orientation_selector"), "")))
-        cands.extend([
-            f"button:text-is('{target}')",
-            f"[role='button']:text-is('{target}')",
-            f"button:has-text('{target}')",
-            f"[role='button']:has-text('{target}')",
-            f"button[aria-label*='{key}' i]",
-            f"[role='button'][aria-label*='{key}' i]",
-        ])
-        return self._normalize_candidate_list(cands)
-
-    def _prompt_variant_candidates(self, variant_count, profile="prompt"):
-        target = str(variant_count or "x1").strip().lower()
-        if target not in {"x1", "x2", "x3", "x4"}:
-            target = "x1"
-        upper = target.upper()
-        cands = []
-        cands.extend(self._normalize_candidate_list(self.cfg.get(self._preset_cfg_key(profile, "variant_selector"), "")))
-        cands.extend([
-            f"button:text-is('{target}')",
-            f"[role='button']:text-is('{target}')",
-            f"button:text-is('{upper}')",
-            f"[role='button']:text-is('{upper}')",
-            f"button:has-text('{target}')",
-            f"[role='button']:has-text('{target}')",
-        ])
-        return self._normalize_candidate_list(cands)
-
-    def _apply_prompt_preset_used_selectors(self, used, profile="prompt"):
-        if not isinstance(used, dict):
-            return
-        mapping = {
-            "media": self._preset_cfg_key(profile, "media_mode_selector"),
-            "orientation": self._preset_cfg_key(profile, "orientation_selector"),
-            "variant": self._preset_cfg_key(profile, "variant_selector"),
-        }
-        for key, cfg_key in mapping.items():
-            val = str(used.get(key, "") or "").strip()
-            if val:
-                self.cfg[cfg_key] = val
-        self.save_config()
-        self._refresh_prompt_preset_selector_label()
-
     def _apply_prompt_generation_preset(self, input_locator=None, profile="prompt"):
         if not self.page:
             return
         profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
-        enabled_key = self._preset_cfg_key(profile, "mode_preset_enabled")
+        self.cfg[self._preset_cfg_key(profile, "mode_preset_enabled")] = True
         desired_state = str(self.cfg.get(self._preset_cfg_key(profile, "media_mode"), "image")).strip().lower()
         desired_state = "video" if desired_state == "video" else "image"
 
@@ -8891,8 +8851,6 @@ class FlowVisionApp:
 
         defs = [
             ("media", "생성 모드", self._prompt_media_candidates(self.cfg.get(self._preset_cfg_key(profile, "media_mode"), "image"), profile=profile)),
-            ("orientation", "화면 방향", self._prompt_orientation_candidates(self.cfg.get(self._preset_cfg_key(profile, "orientation"), "landscape"), profile=profile)),
-            ("variant", "생성 개수", self._prompt_variant_candidates(self.cfg.get(self._preset_cfg_key(profile, "variant_count"), "x1"), profile=profile)),
         ]
         found = {}
         used = {}
@@ -9199,7 +9157,7 @@ class FlowVisionApp:
         opener = None
         opener_desc = None
         opened_now = False
-        if visible_count >= 2:
+        if visible_count >= 1:
             return found, used, opener, opener_desc, opened_now
 
         opener, opener_desc = self._resolve_prompt_preset_toggle_button(input_locator=input_locator)
