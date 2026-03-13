@@ -8747,14 +8747,6 @@ class FlowVisionApp:
         self.cfg[self._preset_cfg_key(profile, "mode_preset_enabled")] = True
         desired_state = str(self.cfg.get(self._preset_cfg_key(profile, "media_mode"), "image")).strip().lower()
         desired_state = "video" if desired_state == "video" else "image"
-
-        # S자동화는 동영상 모드가 사실상 필수라서, 체크가 꺼져 있어도 자동 맞춤을 막지 않는다.
-        force_for_asset = (profile == "asset" and desired_state == "video")
-        if (not force_for_asset) and (not self.cfg.get(enabled_key, True)):
-            self.log("ℹ️ 생성 옵션 자동 맞춤: 사용 안 함")
-            return
-        if force_for_asset and (not self.cfg.get(enabled_key, True)):
-            self.log("ℹ️ S자동화는 동영상 모드 자동 맞춤을 계속 적용합니다.")
         ok = self._switch_media_state(desired_state, input_locator=input_locator, profile=profile)
         if not ok:
             raise RuntimeError("생성 모드 전환에 실패했습니다. 상태 확인과 이미지/동영상 전환 테스트를 다시 확인해주세요.")
