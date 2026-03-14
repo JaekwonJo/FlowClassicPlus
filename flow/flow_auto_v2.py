@@ -7,6 +7,7 @@ import queue
 import re
 import calendar
 import traceback 
+import copy
 from pathlib import Path
 from datetime import datetime, timedelta
 import importlib 
@@ -92,6 +93,8 @@ DEFAULT_CONFIG = {
     "active_project_profile": 0,
     "pipeline_steps": [],
     "active_pipeline_step": 0,
+    "pipeline_presets": [],
+    "active_pipeline_preset": 0,
     "relay_mode": False,
     "relay_count": 1,
     "relay_start_slot": None,
@@ -442,10 +445,13 @@ class FlowVisionApp:
         self.current_selection_input = ""
         self.home_window = None
         self.pipeline_window = None
+        self.onetouch_window = None
         self.pipeline_runtime_active = False
         self.pipeline_run_order = []
         self.pipeline_run_position = -1
         self.pipeline_active_output_dir = ""
+        self.pipeline_runtime_steps_override = None
+        self.pipeline_runtime_source_name = ""
         self.prompt_image_baseline_ready = bool(self.cfg.get("prompt_image_baseline_ready", False))
         self.asset_image_baseline_ready = bool(self.cfg.get("asset_image_baseline_ready", False))
         current_media_state = str(self.cfg.get("current_media_state", "") or "").strip().lower()
@@ -563,6 +569,7 @@ class FlowVisionApp:
         self._ensure_project_profiles()
         self._ensure_prompt_reference_items()
         self._ensure_pipeline_steps()
+        self._ensure_pipeline_presets()
         self._build_ui()
         self.on_reload()
         self.root.after(1000, self._tick)
@@ -2488,6 +2495,105 @@ class FlowVisionApp:
                 return candidate
             suffix += 1
 
+    def _clone_pipeline_steps(self, steps=None):
+        source = steps if steps is not None else (self.cfg.get("pipeline_steps", []) or [])
+        out = []
+        for idx, item in enumerate(source, start=1):
+            if not isinstance(item, dict):
+                continue
+            copied = copy.deepcopy(item)
+            copied["name"] = str(copied.get("name", "") or f"{idx}번 작업").strip() or f"{idx}번 작업"
+            out.append(copied)
+        return out
+
+    def _pipeline_preset_names(self):
+        return [str(item.get("name", "") or f"프리셋 {idx+1}") for idx, item in enumerate(self.cfg.get("pipeline_presets", []) or [])]
+
+    def _clamp_pipeline_preset_index(self, idx, default=0):
+        presets = self.cfg.get("pipeline_presets", []) or []
+        if not presets:
+            return 0
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            idx = default
+        return max(0, min(len(presets) - 1, idx))
+
+    def _make_unique_pipeline_preset_name(self, base_name):
+        base_name = str(base_name or "").strip() or "프리셋"
+        existing = {str(item.get("name", "") or "").strip() for item in (self.cfg.get("pipeline_presets", []) or [])}
+        if base_name not in existing:
+            return base_name
+        suffix = 2
+        while True:
+            candidate = f"{base_name} ({suffix})"
+            if candidate not in existing:
+                return candidate
+            suffix += 1
+
+    def _default_pipeline_preset(self, preset_no=1):
+        return {
+            "name": f"프리셋 {preset_no}",
+            "steps": [self._default_pipeline_step(1)],
+        }
+
+    def _ensure_pipeline_presets(self):
+        raw_presets = self.cfg.get("pipeline_presets", [])
+        normalized = []
+        changed = False
+        if isinstance(raw_presets, list):
+            for idx, item in enumerate(raw_presets, start=1):
+                if not isinstance(item, dict):
+                    continue
+                steps = self._clone_pipeline_steps(item.get("steps", []) or [])
+                if not steps:
+                    continue
+                normalized.append({
+                    "name": str(item.get("name", "") or f"프리셋 {idx}").strip() or f"프리셋 {idx}",
+                    "steps": steps,
+                })
+        if raw_presets != normalized:
+            self.cfg["pipeline_presets"] = normalized
+            changed = True
+        active = self._clamp_pipeline_preset_index(self.cfg.get("active_pipeline_preset", 0))
+        if self.cfg.get("active_pipeline_preset") != active:
+            self.cfg["active_pipeline_preset"] = active
+            changed = True
+        if changed:
+            self.save_config()
+
+    def _sync_pipeline_preset_ui(self):
+        names = self._pipeline_preset_names()
+        active = self._clamp_pipeline_preset_index(self.cfg.get("active_pipeline_preset", 0))
+        if hasattr(self, "combo_pipeline_preset"):
+            self.combo_pipeline_preset["values"] = names
+            if names:
+                self.combo_pipeline_preset.current(active)
+            else:
+                self.combo_pipeline_preset.set("")
+        if hasattr(self, "combo_onetouch_preset"):
+            self.combo_onetouch_preset["values"] = names
+            if names:
+                self.combo_onetouch_preset.current(active)
+            else:
+                self.combo_onetouch_preset.set("")
+        if hasattr(self, "lbl_pipeline_preset_status"):
+            if names:
+                preset = (self.cfg.get("pipeline_presets", []) or [])[active]
+                self.lbl_pipeline_preset_status.config(
+                    text=f"저장된 프리셋 {len(names)}개 | 현재: {preset.get('name', f'프리셋 {active+1}')} | 작업 {len(preset.get('steps', []) or [])}개"
+                )
+            else:
+                self.lbl_pipeline_preset_status.config(text="저장된 프리셋이 없습니다. 현재 작업 단계를 먼저 프리셋으로 저장해 주세요.")
+        if hasattr(self, "lbl_onetouch_status"):
+            if names:
+                preset = (self.cfg.get("pipeline_presets", []) or [])[active]
+                self.lbl_onetouch_status.config(
+                    text=f"원터치 대기 중 | {preset.get('name', f'프리셋 {active+1}')} | 작업 {len(preset.get('steps', []) or [])}개"
+                )
+            else:
+                self.lbl_onetouch_status.config(text="원터치 대기 중 | 저장된 프리셋 없음")
+
     def _ensure_pipeline_steps(self):
         changed = False
         raw_steps = self.cfg.get("pipeline_steps", [])
@@ -2737,6 +2843,436 @@ class FlowVisionApp:
         self._sync_pipeline_step_ui()
         self.log(f"🧩 이어달리기 작업 추가: {self._pipeline_type_labels().get(step_type, step_type)}")
 
+    def on_pipeline_preset_select(self, event=None):
+        widget = getattr(event, "widget", None)
+        if widget is None:
+            widget = getattr(self, "combo_pipeline_preset", None)
+        if widget is None:
+            return
+        idx = widget.current()
+        if idx < 0:
+            return
+        self.cfg["active_pipeline_preset"] = self._clamp_pipeline_preset_index(idx)
+        self.save_config()
+        self._sync_pipeline_preset_ui()
+
+    def on_add_pipeline_preset(self):
+        self._save_pipeline_step_fields()
+        steps = self._clone_pipeline_steps()
+        if not steps:
+            messagebox.showwarning("안내", "먼저 작업 단계를 하나 이상 만들어 주세요.", parent=self.pipeline_window)
+            return
+        presets = self.cfg.get("pipeline_presets", []) or []
+        suggested = self._make_unique_pipeline_preset_name(f"프리셋 {len(presets) + 1}")
+        name = simpledialog.askstring("프리셋 추가", "프리셋 이름을 입력하세요:", initialvalue=suggested, parent=self.pipeline_window)
+        if name is None:
+            return
+        name = self._make_unique_pipeline_preset_name(name)
+        presets.append({"name": name, "steps": steps})
+        self.cfg["pipeline_presets"] = presets
+        self.cfg["active_pipeline_preset"] = len(presets) - 1
+        self.save_config()
+        self._sync_pipeline_preset_ui()
+        self.log(f"💾 이어달리기 프리셋 저장: {name} | 작업 {len(steps)}개")
+
+    def on_load_pipeline_preset(self):
+        presets = self.cfg.get("pipeline_presets", []) or []
+        if not presets:
+            messagebox.showwarning("안내", "불러올 프리셋이 없습니다.", parent=self.pipeline_window)
+            return
+        idx = self._clamp_pipeline_preset_index(self.cfg.get("active_pipeline_preset", 0))
+        preset = presets[idx]
+        name = str(preset.get("name", "") or f"프리셋 {idx+1}")
+        if not messagebox.askyesno("프리셋 불러오기", f"'{name}' 프리셋으로 현재 작업 단계를 바꿀까요?", parent=self.pipeline_window):
+            return
+        self.cfg["pipeline_steps"] = self._clone_pipeline_steps(preset.get("steps", []) or [])
+        self.cfg["active_pipeline_step"] = 0
+        self.save_config()
+        self._sync_pipeline_step_ui()
+        self.log(f"📥 이어달리기 프리셋 불러오기: {name}")
+
+    def on_rename_pipeline_preset(self):
+        presets = self.cfg.get("pipeline_presets", []) or []
+        if not presets:
+            messagebox.showwarning("안내", "이름을 바꿀 프리셋이 없습니다.", parent=self.pipeline_window)
+            return
+        idx = self._clamp_pipeline_preset_index(self.cfg.get("active_pipeline_preset", 0))
+        current = str(presets[idx].get("name", "") or f"프리셋 {idx+1}")
+        name = simpledialog.askstring("프리셋 이름 변경", "새 프리셋 이름을 입력하세요:", initialvalue=current, parent=self.pipeline_window)
+        if name is None:
+            return
+        presets[idx]["name"] = str(name or "").strip() or current
+        self.save_config()
+        self._sync_pipeline_preset_ui()
+        self.log(f"✏️ 이어달리기 프리셋 이름 변경: {current} -> {presets[idx]['name']}")
+
+    def on_delete_pipeline_preset(self):
+        presets = self.cfg.get("pipeline_presets", []) or []
+        if not presets:
+            messagebox.showwarning("안내", "삭제할 프리셋이 없습니다.", parent=self.pipeline_window)
+            return
+        idx = self._clamp_pipeline_preset_index(self.cfg.get("active_pipeline_preset", 0))
+        name = str(presets[idx].get("name", "") or f"프리셋 {idx+1}")
+        if not messagebox.askyesno("프리셋 삭제", f"'{name}' 프리셋을 삭제할까요?", parent=self.pipeline_window):
+            return
+        presets.pop(idx)
+        self.cfg["active_pipeline_preset"] = self._clamp_pipeline_preset_index(idx, default=0)
+        self.save_config()
+        self._sync_pipeline_preset_ui()
+        self.log(f"🗑️ 이어달리기 프리셋 삭제: {name}")
+
+    def _pipeline_preset_has_type(self, preset, step_type):
+        step_type = str(step_type or "").strip().lower()
+        for step in (preset.get("steps", []) or []):
+            if str(step.get("type", "") or "").strip().lower() == step_type:
+                return True
+        return False
+
+    def show_onetouch_window(self):
+        if self.onetouch_window and self.onetouch_window.winfo_exists():
+            self.hide_home_menu()
+            self.hide_pipeline_window()
+            self.onetouch_window.deiconify()
+            self.onetouch_window.lift()
+            self.onetouch_window.focus_force()
+            self._sync_pipeline_preset_ui()
+            return
+        self.onetouch_window = tk.Toplevel(self.root)
+        self.onetouch_window.title(f"{APP_NAME} - 원터치 실행")
+        self.onetouch_window.configure(bg=self.color_bg)
+        self.onetouch_window.resizable(False, False)
+        self.onetouch_window.minsize(280, 220)
+        try:
+            icon_path = self.base.parent / "icon.ico"
+            if icon_path.exists():
+                self.onetouch_window.iconbitmap(str(icon_path))
+        except Exception:
+            pass
+        self.onetouch_window.protocol("WM_DELETE_WINDOW", self.show_home_menu)
+
+        wrap = tk.Frame(self.onetouch_window, bg=self.color_bg)
+        wrap.pack(fill="both", expand=True, padx=18, pady=18)
+
+        top = tk.Frame(wrap, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
+        top.pack(fill="both", expand=True)
+        tk.Label(top, text="원터치 실행", font=self.font_section, bg=self.color_card, fg=self.color_text).pack(anchor="w", padx=16, pady=(16, 6))
+        tk.Label(
+            top,
+            text="START를 누르면 프리셋, 프롬프트 슬롯, 다운로드 폴더, 번호 방식만 고르고 바로 전체 실행합니다.",
+            font=self.font_small,
+            bg=self.color_card,
+            fg=self.color_text_sec,
+            wraplength=240,
+            justify="left",
+        ).pack(anchor="w", padx=16, pady=(0, 10))
+
+        self.combo_onetouch_preset = ttk.Combobox(top, state="readonly", font=self.font_small)
+        self.combo_onetouch_preset.pack(fill="x", padx=16, pady=(0, 10))
+        self.combo_onetouch_preset.bind("<<ComboboxSelected>>", self.on_pipeline_preset_select)
+
+        self.lbl_onetouch_status = tk.Label(top, text="원터치 대기 중", font=self.font_small, bg=self.color_card, fg=self.color_text_sec, justify="left", anchor="w")
+        self.lbl_onetouch_status.pack(fill="x", padx=16, pady=(0, 12))
+
+        btn_row = tk.Frame(top, bg=self.color_card)
+        btn_row.pack(fill="x", padx=16, pady=(0, 16))
+        ttk.Button(btn_row, text="▶ START", command=self.on_start_onetouch_run).pack(side="left", fill="x", expand=True)
+        ttk.Button(btn_row, text="⏹ STOP", command=self.on_stop_onetouch_run).pack(side="left", fill="x", expand=True, padx=(8, 0))
+
+        bottom = tk.Frame(wrap, bg=self.color_bg)
+        bottom.pack(fill="x", pady=(10, 0))
+        ttk.Button(bottom, text="🏠 메인창", command=self.show_home_menu).pack(side="left")
+        ttk.Button(bottom, text="🏃 이어달리기창", command=self.show_pipeline_window).pack(side="right")
+
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        w, h = 320, 250
+        x = max(sw - w - 40, 0)
+        y = max(sh - h - 90, 0)
+        self.onetouch_window.geometry(f"{w}x{h}+{x}+{y}")
+        self.hide_home_menu()
+        self.hide_pipeline_window()
+        self.onetouch_window.deiconify()
+        self.onetouch_window.lift()
+        self.onetouch_window.focus_force()
+        self._sync_pipeline_preset_ui()
+
+    def hide_onetouch_window(self):
+        if self.onetouch_window and self.onetouch_window.winfo_exists():
+            try:
+                self.onetouch_window.withdraw()
+            except Exception:
+                pass
+
+    def _open_onetouch_start_dialog(self):
+        presets = self.cfg.get("pipeline_presets", []) or []
+        if not presets:
+            messagebox.showwarning("안내", "원터치로 실행할 프리셋이 없습니다.\n먼저 이어달리기창에서 프리셋을 저장해 주세요.", parent=self.onetouch_window or self.root)
+            return None
+
+        result = {"confirmed": False}
+        win = tk.Toplevel(self.onetouch_window or self.root)
+        win.title("원터치 실행 설정")
+        win.configure(bg=self.color_bg)
+        win.transient(self.onetouch_window or self.root)
+        win.grab_set()
+        win.resizable(False, False)
+        win.minsize(520, 420)
+
+        outer = tk.Frame(win, bg=self.color_bg)
+        outer.pack(fill="both", expand=True, padx=16, pady=16)
+
+        tk.Label(outer, text="원터치 실행 설정", font=self.font_section, bg=self.color_bg, fg=self.color_text).pack(anchor="w")
+        tk.Label(
+            outer,
+            text="프리셋은 작업 세트만 저장하고, 프롬프트 슬롯 / 다운로드 폴더 / 번호는 이번 실행에만 따로 받습니다.",
+            font=self.font_small,
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            wraplength=480,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 14))
+
+        form = tk.Frame(outer, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
+        form.pack(fill="both", expand=True)
+        form.grid_columnconfigure(1, weight=1)
+
+        preset_names = self._pipeline_preset_names()
+        active_idx = self._clamp_pipeline_preset_index(self.cfg.get("active_pipeline_preset", 0))
+        preset_var = tk.StringVar(value=preset_names[active_idx] if preset_names else "")
+        prompt_slot_var = tk.StringVar()
+        number_mode_var = tk.StringVar(value="range")
+        start_var = tk.StringVar(value="1")
+        end_var = tk.StringVar(value="1")
+        manual_var = tk.StringVar()
+        output_dir_var = tk.StringVar()
+
+        def _selected_preset():
+            idx = max(0, preset_names.index(preset_var.get())) if preset_var.get() in preset_names else active_idx
+            return idx, presets[idx]
+
+        def _refresh_fields(*_args):
+            idx, preset = _selected_preset()
+            self.cfg["active_pipeline_preset"] = self._clamp_pipeline_preset_index(idx)
+            has_prompt = self._pipeline_preset_has_type(preset, "prompt")
+            has_download = self._pipeline_preset_has_type(preset, "download")
+            slot_names = self._prompt_slot_names()
+            self.combo_onetouch_dialog_slot["values"] = slot_names
+            if slot_names and (not prompt_slot_var.get() or prompt_slot_var.get() not in slot_names):
+                prompt_slot_var.set(slot_names[self._clamp_slot_index(self.cfg.get("active_prompt_slot", 0))])
+            slot_state = "readonly" if has_prompt else "disabled"
+            self.combo_onetouch_dialog_slot.config(state=slot_state)
+            self.lbl_onetouch_dialog_slot_help.config(
+                text="프롬프트 자동화가 들어 있는 프리셋입니다." if has_prompt else "이 프리셋에는 프롬프트 자동화 단계가 없습니다."
+            )
+            folder_state = "normal" if has_download else "disabled"
+            self.entry_onetouch_dialog_output.config(state=folder_state)
+            self.btn_onetouch_dialog_output.config(state=folder_state)
+            self.lbl_onetouch_dialog_output_help.config(
+                text="다운로드 자동화가 들어 있는 프리셋입니다." if has_download else "이 프리셋에는 다운로드 자동화 단계가 없습니다."
+            )
+            if has_download and not output_dir_var.get():
+                output_dir_var.set(str(self.cfg.get("download_output_dir", "") or self._resolve_download_output_dir()))
+            if not has_download:
+                output_dir_var.set("")
+            self._sync_pipeline_preset_ui()
+
+        tk.Label(form, text="프리셋 선택", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=0, column=0, sticky="w", padx=14, pady=(14, 6))
+        combo_preset = ttk.Combobox(form, textvariable=preset_var, state="readonly", values=preset_names, font=self.font_small)
+        combo_preset.grid(row=0, column=1, sticky="ew", padx=(0, 14), pady=(14, 6))
+        combo_preset.bind("<<ComboboxSelected>>", _refresh_fields)
+
+        tk.Label(form, text="프롬프트 슬롯", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=1, column=0, sticky="w", padx=14, pady=6)
+        self.combo_onetouch_dialog_slot = ttk.Combobox(form, textvariable=prompt_slot_var, state="readonly", font=self.font_small)
+        self.combo_onetouch_dialog_slot.grid(row=1, column=1, sticky="ew", padx=(0, 14), pady=6)
+        self.lbl_onetouch_dialog_slot_help = tk.Label(form, text="", font=self.font_small, bg=self.color_card, fg=self.color_text_sec)
+        self.lbl_onetouch_dialog_slot_help.grid(row=2, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 6))
+
+        tk.Label(form, text="다운로드 폴더", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=14, pady=6)
+        output_wrap = tk.Frame(form, bg=self.color_card)
+        output_wrap.grid(row=3, column=1, sticky="ew", padx=(0, 14), pady=6)
+        output_wrap.grid_columnconfigure(0, weight=1)
+        self.entry_onetouch_dialog_output = tk.Entry(output_wrap, textvariable=output_dir_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small)
+        self.entry_onetouch_dialog_output.grid(row=0, column=0, sticky="ew", ipady=3)
+        self.btn_onetouch_dialog_output = ttk.Button(
+            output_wrap,
+            text="폴더선택",
+            command=lambda: self._pick_onetouch_output_dir(output_dir_var, win),
+        )
+        self.btn_onetouch_dialog_output.grid(row=0, column=1, padx=(6, 0))
+        self.lbl_onetouch_dialog_output_help = tk.Label(form, text="", font=self.font_small, bg=self.color_card, fg=self.color_text_sec)
+        self.lbl_onetouch_dialog_output_help.grid(row=4, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 6))
+
+        tk.Label(form, text="번호 방식", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=5, column=0, sticky="w", padx=14, pady=6)
+        number_wrap = tk.Frame(form, bg=self.color_card)
+        number_wrap.grid(row=5, column=1, sticky="w", padx=(0, 14), pady=6)
+        ttk.Radiobutton(number_wrap, text="연속 범위", value="range", variable=number_mode_var).pack(side="left")
+        ttk.Radiobutton(number_wrap, text="개별 번호", value="manual", variable=number_mode_var).pack(side="left", padx=(10, 0))
+
+        number_help = tk.Label(form, text="연속 범위: 001~120처럼 순서대로 실행 / 개별 번호: 001,005,009-012", font=self.font_small, bg=self.color_card, fg=self.color_info)
+        number_help.grid(row=6, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 6))
+
+        tk.Label(form, text="시작 번호", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=7, column=0, sticky="w", padx=14, pady=6)
+        self.entry_onetouch_dialog_start = tk.Entry(form, textvariable=start_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
+        self.entry_onetouch_dialog_start.grid(row=7, column=1, sticky="ew", padx=(0, 14), pady=6, ipady=3)
+
+        tk.Label(form, text="끝 번호", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=8, column=0, sticky="w", padx=14, pady=6)
+        self.entry_onetouch_dialog_end = tk.Entry(form, textvariable=end_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
+        self.entry_onetouch_dialog_end.grid(row=8, column=1, sticky="ew", padx=(0, 14), pady=6, ipady=3)
+
+        tk.Label(form, text="개별 번호", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=9, column=0, sticky="w", padx=14, pady=6)
+        self.entry_onetouch_dialog_manual = tk.Entry(form, textvariable=manual_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small)
+        self.entry_onetouch_dialog_manual.grid(row=9, column=1, sticky="ew", padx=(0, 14), pady=6, ipady=3)
+
+        def _refresh_number_mode(*_args):
+            is_range = number_mode_var.get() != "manual"
+            self.entry_onetouch_dialog_start.config(state="normal" if is_range else "disabled")
+            self.entry_onetouch_dialog_end.config(state="normal" if is_range else "disabled")
+            self.entry_onetouch_dialog_manual.config(state="disabled" if is_range else "normal")
+
+        number_mode_var.trace_add("write", _refresh_number_mode)
+        _refresh_number_mode()
+        _refresh_fields()
+
+        btn_row = tk.Frame(outer, bg=self.color_bg)
+        btn_row.pack(fill="x", pady=(12, 0))
+
+        def _confirm():
+            idx, preset = _selected_preset()
+            has_prompt = self._pipeline_preset_has_type(preset, "prompt")
+            has_download = self._pipeline_preset_has_type(preset, "download")
+            slot_idx = self._clamp_slot_index(self.cfg.get("active_prompt_slot", 0))
+            if has_prompt:
+                slot_names = self._prompt_slot_names()
+                if prompt_slot_var.get() not in slot_names:
+                    messagebox.showwarning("안내", "프롬프트 슬롯을 선택해주세요.", parent=win)
+                    return
+                slot_idx = slot_names.index(prompt_slot_var.get())
+            mode = str(number_mode_var.get() or "range").strip().lower()
+            if mode == "manual":
+                manual_text = str(manual_var.get() or "").strip()
+                if not manual_text:
+                    messagebox.showwarning("안내", "개별 번호를 입력해주세요.", parent=win)
+                    return
+                start_no = 1
+                end_no = 1
+            else:
+                try:
+                    start_no = max(1, int(str(start_var.get() or "1").strip()))
+                    end_no = max(1, int(str(end_var.get() or start_no).strip()))
+                except Exception:
+                    messagebox.showwarning("안내", "시작 번호와 끝 번호를 숫자로 입력해주세요.", parent=win)
+                    return
+                if start_no > end_no:
+                    start_no, end_no = end_no, start_no
+                manual_text = ""
+            output_dir = str(output_dir_var.get() or "").strip() if has_download else ""
+            if has_download and not output_dir:
+                messagebox.showwarning("안내", "다운로드 폴더를 선택해주세요.", parent=win)
+                return
+            runtime_steps = self._build_pipeline_runtime_steps(
+                preset.get("steps", []) or [],
+                prompt_slot_idx=slot_idx,
+                output_dir=output_dir,
+                number_mode=mode,
+                start=start_no,
+                end=end_no,
+                manual_text=manual_text,
+            )
+            result.update({
+                "confirmed": True,
+                "preset_index": idx,
+                "preset_name": str(preset.get("name", "") or f"프리셋 {idx+1}"),
+                "runtime_steps": runtime_steps,
+            })
+            win.destroy()
+
+        ttk.Button(btn_row, text="▶ 실행", command=_confirm).pack(side="left")
+        ttk.Button(btn_row, text="취소", command=win.destroy).pack(side="right")
+
+        win.update_idletasks()
+        sw = win.winfo_screenwidth()
+        sh = win.winfo_screenheight()
+        w = max(560, win.winfo_reqwidth() + 20)
+        h = max(470, win.winfo_reqheight() + 20)
+        x = max((sw - w) // 2, 0)
+        y = max((sh - h) // 2, 0)
+        win.geometry(f"{w}x{h}+{x}+{y}")
+        win.wait_window()
+        return result if result.get("confirmed") else None
+
+    def _pick_onetouch_output_dir(self, output_dir_var, parent):
+        initial = str(output_dir_var.get() or "").strip()
+        if not initial:
+            initial = str(self.cfg.get("download_output_dir", "") or self._resolve_download_output_dir())
+        try:
+            initial_path = Path(initial).expanduser()
+        except Exception:
+            initial_path = self._resolve_download_output_dir()
+        if not initial_path.exists():
+            initial_path = self._resolve_download_output_dir()
+        picked = filedialog.askdirectory(
+            parent=parent,
+            initialdir=str(initial_path),
+            mustexist=False,
+            title="원터치 다운로드 폴더 선택",
+        )
+        if picked:
+            output_dir_var.set(picked)
+
+    def _start_pipeline_runtime(self, steps, source_name=""):
+        runtime_steps = self._clone_pipeline_steps(steps)
+        if not runtime_steps:
+            return False
+        self.pipeline_runtime_active = True
+        self.pipeline_runtime_steps_override = runtime_steps
+        self.pipeline_runtime_source_name = str(source_name or "").strip()
+        self.pipeline_run_order = list(range(len(runtime_steps)))
+        self.pipeline_run_position = -1
+        if hasattr(self, "btn_pipeline_start"):
+            self.btn_pipeline_start.config(state="disabled")
+        if hasattr(self, "lbl_pipeline_runtime_status"):
+            prefix = f"{self.pipeline_runtime_source_name} | " if self.pipeline_runtime_source_name else ""
+            self.lbl_pipeline_runtime_status.config(text=f"{prefix}이어달리기 시작 준비 | 총 {len(runtime_steps)}개 작업")
+        if hasattr(self, "lbl_onetouch_status"):
+            self.lbl_onetouch_status.config(text=f"원터치 실행 중 | {self.pipeline_runtime_source_name or '즉시 실행'} | 총 {len(runtime_steps)}개 작업")
+        self.log(f"⚡ 원터치 시작 | {self.pipeline_runtime_source_name or '임시 실행'} | 총 {len(runtime_steps)}개 작업")
+        self._run_pipeline_step_at(0)
+        return True
+
+    def on_start_onetouch_run(self):
+        if self.pipeline_runtime_active:
+            messagebox.showwarning("안내", "원터치 또는 이어달리기가 이미 실행 중입니다.", parent=self.onetouch_window or self.root)
+            return
+        if self.running or self.is_processing or self.paused:
+            messagebox.showwarning("안내", "기존 자동화가 실행 중입니다. 먼저 중지 후 다시 시작해주세요.", parent=self.onetouch_window or self.root)
+            return
+        payload = self._open_onetouch_start_dialog()
+        if not payload:
+            return
+        self.cfg["active_pipeline_preset"] = self._clamp_pipeline_preset_index(payload.get("preset_index", 0))
+        self.save_config()
+        self._sync_pipeline_preset_ui()
+        self.hide_home_menu()
+        self.hide_pipeline_window()
+        self._start_pipeline_runtime(payload.get("runtime_steps", []), payload.get("preset_name", ""))
+
+    def on_stop_onetouch_run(self):
+        if self.running or self.is_processing or self.paused or self.pipeline_runtime_active:
+            self.on_stop()
+        else:
+            self._clear_pipeline_runtime(cancelled=True)
+        self.hide_pipeline_window()
+        try:
+            self.root.withdraw()
+        except Exception:
+            pass
+        if self.onetouch_window and self.onetouch_window.winfo_exists():
+            self.onetouch_window.deiconify()
+            self.onetouch_window.lift()
+            self.onetouch_window.focus_force()
+        if hasattr(self, "lbl_onetouch_status"):
+            self.lbl_onetouch_status.config(text="원터치 중지됨")
+
     def on_duplicate_pipeline_step(self):
         steps = self.cfg.get("pipeline_steps", [])
         if not steps:
@@ -2789,6 +3325,44 @@ class FlowVisionApp:
             start, end = end, start
         return f"{start}-{end}"
 
+    def _get_pipeline_steps_source(self, steps_override=None):
+        if steps_override is not None:
+            return steps_override
+        if self.pipeline_runtime_steps_override is not None:
+            return self.pipeline_runtime_steps_override
+        return self.cfg.get("pipeline_steps", []) or []
+
+    def _build_pipeline_runtime_steps(self, base_steps, prompt_slot_idx=0, output_dir="", number_mode="range", start=1, end=1, manual_text=""):
+        runtime_steps = self._clone_pipeline_steps(base_steps)
+        mode = str(number_mode or "range").strip().lower()
+        if mode not in {"range", "manual"}:
+            mode = "range"
+        try:
+            start = max(1, int(start))
+        except Exception:
+            start = 1
+        try:
+            end = max(1, int(end))
+        except Exception:
+            end = start
+        if start > end:
+            start, end = end, start
+        manual_text = str(manual_text or "").strip()
+        for step in runtime_steps:
+            step_type = str(step.get("type", "prompt") or "prompt").strip().lower()
+            step["number_mode"] = mode
+            if mode == "manual":
+                step["manual_selection"] = manual_text
+            else:
+                step["manual_selection"] = ""
+                step["start"] = start
+                step["end"] = end
+            if step_type == "prompt":
+                step["prompt_slot"] = self._clamp_slot_index(prompt_slot_idx)
+            if step_type == "download":
+                step["output_dir"] = str(output_dir or "").strip()
+        return runtime_steps
+
     def _focus_work_target(self, target):
         try:
             if hasattr(self, "_set_asset_open"):
@@ -2814,7 +3388,7 @@ class FlowVisionApp:
     def _apply_pipeline_step_to_work_config(self, step_index=None, open_root=True):
         self.on_save_project_profile_detail()
         self._save_pipeline_step_fields()
-        steps = self.cfg.get("pipeline_steps", [])
+        steps = self._get_pipeline_steps_source()
         if not steps:
             return None
         active = self._clamp_pipeline_step_index(
@@ -2950,12 +3524,16 @@ class FlowVisionApp:
         self.pipeline_run_order = []
         self.pipeline_run_position = -1
         self.pipeline_active_output_dir = ""
+        self.pipeline_runtime_steps_override = None
+        self.pipeline_runtime_source_name = ""
         if hasattr(self, "btn_pipeline_start"):
             self.btn_pipeline_start.config(state="normal")
         if hasattr(self, "lbl_pipeline_runtime_status"):
             self.lbl_pipeline_runtime_status.config(
                 text="이어달리기 중지됨" if cancelled else "이어달리기 대기 중"
             )
+        if hasattr(self, "lbl_onetouch_status"):
+            self.lbl_onetouch_status.config(text="원터치 대기 중" if not cancelled else "원터치 중지됨")
 
     def _run_pipeline_step_at(self, position):
         if not self.pipeline_runtime_active:
@@ -3036,10 +3614,14 @@ class FlowVisionApp:
             return
         self.on_save_project_profile_detail()
         self._save_pipeline_step_fields()
-        steps = self.cfg.get("pipeline_steps", [])
+        self.pipeline_runtime_steps_override = None
+        self.pipeline_runtime_source_name = ""
+        steps = self._get_pipeline_steps_source()
         if not steps:
             messagebox.showwarning("안내", "이어달리기 작업이 없습니다.", parent=self.pipeline_window)
             return
+        self.pipeline_runtime_steps_override = None
+        self.pipeline_runtime_source_name = ""
         self.pipeline_runtime_active = True
         self.pipeline_run_order = list(range(len(steps)))
         self.pipeline_run_position = -1
@@ -7034,7 +7616,7 @@ class FlowVisionApp:
         self._make_home_card(grid, 1, 0, "📝 프롬프트 자동화", "작업창을 열고 프롬프트 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("prompt"))
         self._make_home_card(grid, 1, 1, "🔁 S001 자동화", "작업창을 열고 S001 반복 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("asset"))
         self._make_home_card(grid, 2, 0, "⬇ 다운로드 자동화", "작업창을 열고 다운로드 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("download"))
-        self._make_home_card(grid, 2, 1, "⚙ 전체 설정 보기", "작업창 전체 설정 화면을 바로 엽니다.", lambda: self.open_home_target("all"))
+        self._make_home_card(grid, 2, 1, "⚡ 원터치 실행", "프리셋 하나를 골라 START / STOP만으로 바로 실행합니다.", lambda: self.open_home_target("onetouch"))
         self.root.withdraw()
         self.home_window.deiconify()
         self.home_window.lift()
@@ -7068,6 +7650,7 @@ class FlowVisionApp:
 
     def show_home_menu(self):
         self.hide_pipeline_window()
+        self.hide_onetouch_window()
         if self.home_window and self.home_window.winfo_exists():
             try:
                 self.root.withdraw()
@@ -7117,6 +7700,7 @@ class FlowVisionApp:
         ).pack(anchor="w", pady=(4, 0))
         top_right = tk.Frame(header, bg=self.color_header)
         top_right.pack(side="right", padx=14, pady=12)
+        ttk.Button(top_right, text="⚡ 원터치", command=self.show_onetouch_window).pack(side="left", padx=(0, 6))
         ttk.Button(top_right, text="🤖 봇작업창 열기", command=self.on_open_pipeline_bot_work_window).pack(side="left", padx=(0, 6))
         ttk.Button(top_right, text="🛠 작업창 열기", command=lambda: self.open_home_target("all")).pack(side="left", padx=(0, 6))
         ttk.Button(top_right, text="🏠 메인창", command=self.show_home_menu).pack(side="left")
@@ -7279,6 +7863,34 @@ class FlowVisionApp:
         ttk.Button(left_btns2, text="🗑 삭제", command=self.on_delete_pipeline_step).pack(side="left", padx=6)
         ttk.Button(left_btns2, text="▲", width=3, command=lambda: self.on_move_pipeline_step(-1)).pack(side="right")
         ttk.Button(left_btns2, text="▼", width=3, command=lambda: self.on_move_pipeline_step(1)).pack(side="right", padx=(0, 6))
+
+        preset_box = tk.Frame(list_card, bg="#13233A", highlightbackground="#28405F", highlightthickness=1)
+        preset_box.pack(fill="x", padx=16, pady=(0, 16))
+        tk.Label(preset_box, text="프리셋 저장", font=self.font_body_bold, bg="#13233A", fg=self.color_info).pack(anchor="w", padx=14, pady=(12, 8))
+        tk.Label(
+            preset_box,
+            text="지금 작업 단계 목록 전체를 프리셋으로 저장해 두고, 나중에 원터치 실행에서 그대로 불러와 돌릴 수 있습니다.",
+            font=self.font_small,
+            bg="#13233A",
+            fg=self.color_text_sec,
+            wraplength=740,
+            justify="left",
+        ).pack(anchor="w", padx=14, pady=(0, 10))
+        preset_row = tk.Frame(preset_box, bg="#13233A")
+        preset_row.pack(fill="x", padx=14, pady=(0, 8))
+        self.combo_pipeline_preset = ttk.Combobox(preset_row, state="readonly", font=self.font_small)
+        self.combo_pipeline_preset.pack(side="left", fill="x", expand=True)
+        self.combo_pipeline_preset.bind("<<ComboboxSelected>>", self.on_pipeline_preset_select)
+        ttk.Button(preset_row, text="💾 프리셋추가", command=self.on_add_pipeline_preset).pack(side="left", padx=(8, 0))
+        ttk.Button(preset_row, text="📥 불러오기", command=self.on_load_pipeline_preset).pack(side="left", padx=(6, 0))
+        preset_btn_row = tk.Frame(preset_box, bg="#13233A")
+        preset_btn_row.pack(fill="x", padx=14, pady=(0, 12))
+        ttk.Button(preset_btn_row, text="✏ 이름변경", command=self.on_rename_pipeline_preset).pack(side="left")
+        ttk.Button(preset_btn_row, text="🗑 프리셋삭제", command=self.on_delete_pipeline_preset).pack(side="left", padx=(6, 0))
+        ttk.Button(preset_btn_row, text="⚡ 원터치 열기", command=self.show_onetouch_window).pack(side="right")
+        self.lbl_pipeline_preset_status = tk.Label(preset_box, text="", font=self.font_small, bg="#13233A", fg=self.color_text_sec, justify="left")
+        self.lbl_pipeline_preset_status.pack(fill="x", padx=14, pady=(0, 12))
+        self._sync_pipeline_preset_ui()
 
         detail_card = tk.Frame(body_scrollable, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
         detail_card.pack(fill="x", padx=2, pady=(0, 14))
@@ -7475,6 +8087,7 @@ class FlowVisionApp:
                 self.root.withdraw()
             except Exception:
                 pass
+            self.hide_onetouch_window()
             self.pipeline_window.deiconify()
             self.pipeline_window.lift()
             self.pipeline_window.focus_force()
@@ -7491,7 +8104,11 @@ class FlowVisionApp:
         if target == "relay":
             self.show_pipeline_window()
             return
+        if target == "onetouch":
+            self.show_onetouch_window()
+            return
         self.hide_pipeline_window()
+        self.hide_onetouch_window()
         try:
             self.root.deiconify()
             self.root.lift()
