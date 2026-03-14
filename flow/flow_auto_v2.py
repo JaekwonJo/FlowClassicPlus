@@ -2209,6 +2209,12 @@ class FlowVisionApp:
     def _pipeline_mode_values(self):
         return {v: k for k, v in self._pipeline_mode_labels().items()}
 
+    def _pipeline_number_mode_labels(self):
+        return {"range": "연속 범위", "manual": "개별 번호"}
+
+    def _pipeline_number_mode_values(self):
+        return {v: k for k, v in self._pipeline_number_mode_labels().items()}
+
     def _pipeline_download_quality_options(self, mode="video"):
         mode = "image" if str(mode or "").strip().lower() == "image" else "video"
         if mode == "image":
@@ -2348,10 +2354,16 @@ class FlowVisionApp:
             str(self.pipeline_step_download_mode_var.get() or "").strip(),
             str((step or {}).get("download_mode", "video") or "video").strip().lower(),
         ) if hasattr(self, "pipeline_step_download_mode_var") else str((step or {}).get("download_mode", "video") or "video").strip().lower()
+        number_mode = self._pipeline_number_mode_values().get(
+            str(self.pipeline_step_number_mode_var.get() or "").strip(),
+            str((step or {}).get("number_mode", "range") or "range").strip().lower(),
+        ) if hasattr(self, "pipeline_step_number_mode_var") else str((step or {}).get("number_mode", "range") or "range").strip().lower()
         if step_type not in {"prompt", "asset", "download"}:
             step_type = "prompt"
         if download_mode not in {"image", "video"}:
             download_mode = "video"
+        if number_mode not in {"range", "manual"}:
+            number_mode = "range"
 
         if step_type == "prompt":
             fixed_mode = "image"
@@ -2364,6 +2376,35 @@ class FlowVisionApp:
             self.pipeline_step_media_mode_var.set(self._pipeline_mode_labels().get(fixed_mode, "이미지"))
         if hasattr(self, "combo_pipeline_media_mode"):
             self.combo_pipeline_media_mode.config(state="disabled")
+
+        if hasattr(self, "combo_pipeline_step_type"):
+            self.combo_pipeline_step_type.config(state="disabled")
+
+        range_enabled = (number_mode == "range")
+        if hasattr(self, "entry_pipeline_step_start"):
+            self.entry_pipeline_step_start.config(state="normal" if range_enabled else "disabled")
+        if hasattr(self, "entry_pipeline_step_end"):
+            self.entry_pipeline_step_end.config(state="normal" if range_enabled else "disabled")
+        if hasattr(self, "entry_pipeline_step_manual"):
+            self.entry_pipeline_step_manual.config(state="disabled" if range_enabled else "normal")
+        if hasattr(self, "lbl_pipeline_number_help"):
+            self.lbl_pipeline_number_help.config(
+                text=(
+                    "연속 범위: 001~120처럼 순서대로 실행"
+                    if range_enabled
+                    else "개별 번호: 001,005,009-012처럼 특정 번호만 실행"
+                ),
+                fg=self.color_info if step is not None else self.color_text_sec,
+            )
+        if hasattr(self, "lbl_pipeline_number_summary"):
+            if range_enabled:
+                start_val = str(getattr(self, "pipeline_step_start_var", tk.StringVar(value="1")).get() or "1").strip() or "1"
+                end_val = str(getattr(self, "pipeline_step_end_var", tk.StringVar(value="1")).get() or start_val).strip() or start_val
+                summary = f"현재 설정: 연속 범위 {start_val}~{end_val}"
+            else:
+                manual_text = str(getattr(self, "pipeline_step_manual_var", tk.StringVar(value="")).get() or "").strip()
+                summary = f"현재 설정: 개별 번호 {manual_text}" if manual_text else "현재 설정: 개별 번호를 입력해 주세요"
+            self.lbl_pipeline_number_summary.config(text=summary, fg=self.color_text_sec)
 
         prompt_enabled = (step_type == "prompt")
         if hasattr(self, "combo_pipeline_prompt_slot"):
@@ -2381,24 +2422,29 @@ class FlowVisionApp:
             else:
                 self.lbl_pipeline_prompt_range.config(text="프롬프트 자동화를 선택하면 파일과 범위가 표시됩니다.", fg=self.color_text_sec)
 
+        download_only = (step_type == "download")
+        for widget in getattr(self, "_pipeline_download_only_widgets", []):
+            try:
+                if download_only:
+                    widget.grid()
+                else:
+                    widget.grid_remove()
+            except Exception:
+                pass
+
         if hasattr(self, "combo_pipeline_download_mode"):
-            self.combo_pipeline_download_mode.config(state="readonly")
+            self.combo_pipeline_download_mode.config(state="readonly" if download_only else "disabled")
         if hasattr(self, "combo_pipeline_quality"):
             values = self._pipeline_download_quality_options(download_mode)
             self.combo_pipeline_quality["values"] = values
             current_quality = str(self.pipeline_step_quality_var.get() or "").strip()
             normalized_quality = self._normalize_pipeline_quality(current_quality, download_mode)
             self.pipeline_step_quality_var.set(normalized_quality)
-            self.combo_pipeline_quality.config(state="readonly")
-        if hasattr(self, "lbl_pipeline_quality"):
-            self.lbl_pipeline_quality.config(fg=self.color_text)
-
+            self.combo_pipeline_quality.config(state="readonly" if download_only else "disabled")
         if hasattr(self, "entry_pipeline_output_dir"):
             self.entry_pipeline_output_dir.config(state="readonly")
         if hasattr(self, "btn_pipeline_output_dir"):
-            self.btn_pipeline_output_dir.config(state="normal")
-        if hasattr(self, "lbl_pipeline_output_dir"):
-            self.lbl_pipeline_output_dir.config(fg=self.color_text)
+            self.btn_pipeline_output_dir.config(state="normal" if download_only else "disabled")
 
     def _default_pipeline_step(self, step_no=1):
         return {
@@ -2406,6 +2452,7 @@ class FlowVisionApp:
             "type": "prompt",
             "project_profile": 0,
             "prompt_slot": self._clamp_slot_index(self.cfg.get("active_prompt_slot", 0)),
+            "number_mode": "range",
             "start": 1,
             "end": 1,
             "manual_selection": "",
@@ -2472,6 +2519,9 @@ class FlowVisionApp:
                     end = start
                 if start > end:
                     start, end = end, start
+                number_mode = str(item.get("number_mode", "range") or "range").strip().lower()
+                if number_mode not in {"range", "manual"}:
+                    number_mode = "manual" if str(item.get("manual_selection", "") or "").strip() else "range"
                 try:
                     interval_seconds = max(1, int(item.get("interval_seconds", self.cfg.get("interval_seconds", 180) or 180)))
                 except Exception:
@@ -2481,6 +2531,7 @@ class FlowVisionApp:
                     "type": step_type,
                     "project_profile": project_profile,
                     "prompt_slot": self._clamp_slot_index(item.get("prompt_slot", self.cfg.get("active_prompt_slot", 0))),
+                    "number_mode": number_mode,
                     "start": start,
                     "end": end,
                     "manual_selection": str(item.get("manual_selection", "") or "").strip(),
@@ -2530,6 +2581,8 @@ class FlowVisionApp:
             self.pipeline_step_name_var.set(str(step.get("name", "") or ""))
         if hasattr(self, "pipeline_step_type_var"):
             self.pipeline_step_type_var.set(self._pipeline_type_labels().get(step.get("type", "prompt"), "프롬프트 자동화"))
+        if hasattr(self, "pipeline_step_number_mode_var"):
+            self.pipeline_step_number_mode_var.set(self._pipeline_number_mode_labels().get(step.get("number_mode", "range"), "연속 범위"))
         if hasattr(self, "combo_pipeline_prompt_slot"):
             slot_names = self._prompt_slot_names()
             self.combo_pipeline_prompt_slot["values"] = slot_names
@@ -2568,6 +2621,7 @@ class FlowVisionApp:
         step = steps[active]
         type_value = self._pipeline_type_values().get(str(self.pipeline_step_type_var.get() or "").strip(), "prompt")
         download_mode = self._pipeline_mode_values().get(str(self.pipeline_step_download_mode_var.get() or "").strip(), "video")
+        number_mode = self._pipeline_number_mode_values().get(str(self.pipeline_step_number_mode_var.get() or "").strip(), "range")
         prompt_slot_idx = self._clamp_slot_index(step.get("prompt_slot", self.cfg.get("active_prompt_slot", 0)))
         if hasattr(self, "combo_pipeline_prompt_slot") and self.combo_pipeline_prompt_slot.current() >= 0:
             prompt_slot_idx = self.combo_pipeline_prompt_slot.current()
@@ -2593,6 +2647,7 @@ class FlowVisionApp:
         step["type"] = type_value
         step["project_profile"] = self._clamp_project_profile_index(profile_idx)
         step["prompt_slot"] = prompt_slot_idx
+        step["number_mode"] = number_mode
         step["start"] = start
         step["end"] = end
         step["manual_selection"] = str(self.pipeline_step_manual_var.get() or "").strip()
@@ -2615,6 +2670,10 @@ class FlowVisionApp:
         self._save_pipeline_step_fields()
 
     def on_pipeline_step_prompt_slot_change(self, event=None):
+        self._refresh_pipeline_step_editor_state()
+        self._save_pipeline_step_fields()
+
+    def on_pipeline_step_number_mode_change(self, event=None):
         self._refresh_pipeline_step_editor_state()
         self._save_pipeline_step_fields()
 
@@ -2661,13 +2720,22 @@ class FlowVisionApp:
         self.save_config()
         self._sync_pipeline_step_ui()
 
-    def on_add_pipeline_step(self):
+    def on_add_pipeline_step(self, step_type="prompt"):
         steps = self.cfg.get("pipeline_steps", [])
-        steps.append(self._default_pipeline_step(len(steps) + 1))
+        step_type = str(step_type or "prompt").strip().lower()
+        if step_type not in {"prompt", "asset", "download"}:
+            step_type = "prompt"
+        step = self._default_pipeline_step(len(steps) + 1)
+        step["type"] = step_type
+        step["name"] = self._make_unique_pipeline_step_name(
+            f"{self._pipeline_type_labels().get(step_type, '작업')} {len(steps) + 1}"
+        )
+        step["media_mode"] = "image" if step_type == "prompt" else ("video" if step_type == "asset" else "video")
+        steps.append(step)
         self.cfg["active_pipeline_step"] = len(steps) - 1
         self.save_config()
         self._sync_pipeline_step_ui()
-        self.log(f"🧩 이어달리기 작업 추가: {len(steps)}번 작업")
+        self.log(f"🧩 이어달리기 작업 추가: {self._pipeline_type_labels().get(step_type, step_type)}")
 
     def on_duplicate_pipeline_step(self):
         steps = self.cfg.get("pipeline_steps", [])
@@ -2711,8 +2779,9 @@ class FlowVisionApp:
         self._sync_pipeline_step_ui()
 
     def _pipeline_prompt_selection_text(self, step):
+        number_mode = str(step.get("number_mode", "range") or "range").strip().lower()
         raw = str(step.get("manual_selection", "") or "").strip()
-        if raw:
+        if number_mode == "manual" and raw:
             return raw
         start = max(1, int(step.get("start", 1) or 1))
         end = max(1, int(step.get("end", start) or start))
@@ -7067,52 +7136,12 @@ class FlowVisionApp:
         body_canvas._scroll_canvas_target = body_canvas
         body_scrollable._scroll_canvas_target = body_canvas
 
-        left_card = tk.Frame(body_scrollable, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
-        left_card.pack(fill="x", padx=2, pady=(0, 14))
-        tk.Label(left_card, text="작업 단계 목록", font=self.font_section, bg=self.color_card, fg=self.color_text).pack(anchor="w", padx=16, pady=(16, 8))
+        design_card = tk.Frame(body_scrollable, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
+        design_card.pack(fill="x", padx=2, pady=(0, 14))
+        tk.Label(design_card, text="이어달리기 설계 화면", font=self.font_section, bg=self.color_card, fg=self.color_text).pack(anchor="w", padx=18, pady=(16, 8))
         tk.Label(
-            left_card,
-            text="작업 순서는 위에서 아래로 저장됩니다. 여기서 추가, 복제, 삭제, 순서 변경을 하면 됩니다.",
-            font=self.font_small,
-            bg=self.color_card,
-            fg=self.color_text_sec,
-            wraplength=760,
-            justify="left",
-        ).pack(anchor="w", padx=16)
-        left_list_row = tk.Frame(left_card, bg=self.color_card)
-        left_list_row.pack(fill="x", padx=16, pady=(12, 10))
-        self.pipeline_step_listbox = tk.Listbox(
-            left_list_row,
-            height=6,
-            bg="#0F1B2E",
-            fg=self.color_text,
-            selectbackground="#1B78D0",
-            selectforeground="white",
-            font=self.font_body,
-            borderwidth=0,
-            relief="flat",
-            highlightthickness=0,
-        )
-        self.pipeline_step_listbox.pack(side="left", fill="x", expand=True)
-        self.pipeline_step_listbox.bind("<<ListboxSelect>>", self.on_pipeline_step_select)
-        pipeline_step_scroll = ttk.Scrollbar(left_list_row, orient="vertical", command=self.pipeline_step_listbox.yview)
-        pipeline_step_scroll.pack(side="right", fill="y")
-        self.pipeline_step_listbox.config(yscrollcommand=pipeline_step_scroll.set, exportselection=False)
-
-        left_btns = tk.Frame(left_card, bg=self.color_card)
-        left_btns.pack(fill="x", padx=16, pady=(0, 16))
-        ttk.Button(left_btns, text="➕ 작업 추가", command=self.on_add_pipeline_step).pack(side="left")
-        ttk.Button(left_btns, text="📄 복제", command=self.on_duplicate_pipeline_step).pack(side="left", padx=6)
-        ttk.Button(left_btns, text="🗑 삭제", command=self.on_delete_pipeline_step).pack(side="left")
-        ttk.Button(left_btns, text="▲", width=3, command=lambda: self.on_move_pipeline_step(-1)).pack(side="right")
-        ttk.Button(left_btns, text="▼", width=3, command=lambda: self.on_move_pipeline_step(1)).pack(side="right", padx=(0, 6))
-
-        right_card = tk.Frame(body_scrollable, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
-        right_card.pack(fill="x", padx=2, pady=(0, 14))
-        tk.Label(right_card, text="이어달리기 설계 화면", font=self.font_section, bg=self.color_card, fg=self.color_text).pack(anchor="w", padx=18, pady=(16, 8))
-        tk.Label(
-            right_card,
-            text="프롬프트 자동화, S반복 자동화, 다운로드 자동화를 원하는 순서대로 저장해두는 화면입니다.",
+            design_card,
+            text="프롬프트 자동화, S반복 자동화, 다운로드 자동화를 원하는 순서대로 설계하고 저장하는 화면입니다.",
             font=self.font_body,
             bg=self.color_card,
             fg=self.color_text_sec,
@@ -7120,7 +7149,7 @@ class FlowVisionApp:
             justify="left",
         ).pack(anchor="w", padx=18, pady=(0, 16))
 
-        profile_card = tk.Frame(right_card, bg="#13233A", highlightbackground="#28405F", highlightthickness=1)
+        profile_card = tk.Frame(design_card, bg="#13233A", highlightbackground="#28405F", highlightthickness=1)
         profile_card.pack(fill="x", padx=18, pady=(0, 14))
         head_row = tk.Frame(profile_card, bg="#13233A")
         head_row.pack(fill="x", padx=14, pady=(12, 6))
@@ -7184,7 +7213,87 @@ class FlowVisionApp:
         self.lbl_pipeline_profile_status.pack(side="left", padx=(10, 0))
         self._sync_project_profile_ui()
 
-        step_detail_card = tk.Frame(right_card, bg="#13233A", highlightbackground="#28405F", highlightthickness=1)
+        info_box = tk.Frame(design_card, bg="#13233A", highlightbackground="#28405F", highlightthickness=1)
+        info_box.pack(fill="x", padx=18, pady=(0, 14))
+        tk.Label(info_box, text="다음에 붙일 핵심 기능", font=self.font_body_bold, bg="#13233A", fg=self.color_info).pack(anchor="w", padx=14, pady=(12, 6))
+        for text in (
+            "프로젝트 목록 저장: URL + 프로젝트 이름 저장 / 추가 / 삭제 / 이름 변경",
+            "작업 단계 저장: 프롬프트, S반복, 다운로드를 원하는 순서로 묶기",
+            "단계별 모드 전환: 이미지 기본값 / 동영상 기본값 자동 적용",
+            "이어달리기 실행: 시작 / 일시정지 / 수정 후 이어서 시작",
+        ):
+            tk.Label(info_box, text=f"• {text}", font=self.font_small, bg="#13233A", fg=self.color_text).pack(anchor="w", padx=14, pady=2)
+
+        preview_box = tk.Frame(design_card, bg=self.color_bg, highlightbackground="#24324B", highlightthickness=1)
+        preview_box.pack(fill="x", padx=18, pady=(0, 14))
+        tk.Label(preview_box, text="예상 실행 흐름", font=self.font_body_bold, bg=self.color_bg, fg=self.color_accent).pack(anchor="w", padx=14, pady=(12, 8))
+        preview_text = (
+            "1. 1번 작업: 프롬프트 자동화 (이미지)\n"
+            "2. 2번 작업: S반복 자동화 (동영상)\n"
+            "3. 3번 작업: 다운로드 자동화 (동영상)\n\n"
+            "이 흐름을 저장해두고, 이어달리기 시작 버튼으로 한 번에 돌리는 구조입니다."
+        )
+        tk.Label(preview_box, text=preview_text, font=self.font_small, bg=self.color_bg, fg=self.color_text_sec, justify="left").pack(anchor="w", padx=14, pady=(0, 14))
+
+        list_card = tk.Frame(body_scrollable, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
+        list_card.pack(fill="x", padx=2, pady=(0, 14))
+        tk.Label(list_card, text="작업 단계 목록", font=self.font_section, bg=self.color_card, fg=self.color_text).pack(anchor="w", padx=16, pady=(16, 8))
+        tk.Label(
+            list_card,
+            text="작업 추가할 때부터 종류를 고릅니다. 순서는 위에서 아래로 저장되고, 여기서 복제/삭제/순서 변경을 합니다.",
+            font=self.font_small,
+            bg=self.color_card,
+            fg=self.color_text_sec,
+            wraplength=760,
+            justify="left",
+        ).pack(anchor="w", padx=16)
+        left_list_row = tk.Frame(list_card, bg=self.color_card)
+        left_list_row.pack(fill="x", padx=16, pady=(12, 10))
+        self.pipeline_step_listbox = tk.Listbox(
+            left_list_row,
+            height=6,
+            bg="#0F1B2E",
+            fg=self.color_text,
+            selectbackground="#1B78D0",
+            selectforeground="white",
+            font=self.font_body,
+            borderwidth=0,
+            relief="flat",
+            highlightthickness=0,
+        )
+        self.pipeline_step_listbox.pack(side="left", fill="x", expand=True)
+        self.pipeline_step_listbox.bind("<<ListboxSelect>>", self.on_pipeline_step_select)
+        pipeline_step_scroll = ttk.Scrollbar(left_list_row, orient="vertical", command=self.pipeline_step_listbox.yview)
+        pipeline_step_scroll.pack(side="right", fill="y")
+        self.pipeline_step_listbox.config(yscrollcommand=pipeline_step_scroll.set, exportselection=False)
+
+        left_btns = tk.Frame(list_card, bg=self.color_card)
+        left_btns.pack(fill="x", padx=16, pady=(0, 8))
+        ttk.Button(left_btns, text="➕ 프롬프트 자동화", command=lambda: self.on_add_pipeline_step("prompt")).pack(side="left")
+        ttk.Button(left_btns, text="➕ S반복 자동화", command=lambda: self.on_add_pipeline_step("asset")).pack(side="left", padx=6)
+        ttk.Button(left_btns, text="➕ 다운로드 자동화", command=lambda: self.on_add_pipeline_step("download")).pack(side="left")
+
+        left_btns2 = tk.Frame(list_card, bg=self.color_card)
+        left_btns2.pack(fill="x", padx=16, pady=(0, 16))
+        ttk.Button(left_btns2, text="📄 복제", command=self.on_duplicate_pipeline_step).pack(side="left")
+        ttk.Button(left_btns2, text="🗑 삭제", command=self.on_delete_pipeline_step).pack(side="left", padx=6)
+        ttk.Button(left_btns2, text="▲", width=3, command=lambda: self.on_move_pipeline_step(-1)).pack(side="right")
+        ttk.Button(left_btns2, text="▼", width=3, command=lambda: self.on_move_pipeline_step(1)).pack(side="right", padx=(0, 6))
+
+        detail_card = tk.Frame(body_scrollable, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
+        detail_card.pack(fill="x", padx=2, pady=(0, 14))
+        tk.Label(detail_card, text="작업 상세 설정", font=self.font_section, bg=self.color_card, fg=self.color_text).pack(anchor="w", padx=18, pady=(16, 8))
+        tk.Label(
+            detail_card,
+            text="선택한 작업의 종류에 맞는 설정만 보이게 정리했습니다. 번호 방식도 하나만 선택해서 쓰면 됩니다.",
+            font=self.font_small,
+            bg=self.color_card,
+            fg=self.color_text_sec,
+            wraplength=760,
+            justify="left",
+        ).pack(anchor="w", padx=18, pady=(0, 12))
+
+        step_detail_card = tk.Frame(detail_card, bg="#13233A", highlightbackground="#28405F", highlightthickness=1)
         step_detail_card.pack(fill="x", padx=18, pady=(0, 14))
         tk.Label(step_detail_card, text="작업 상세 설정", font=self.font_body_bold, bg="#13233A", fg=self.color_info).pack(anchor="w", padx=14, pady=(12, 8))
 
@@ -7196,6 +7305,7 @@ class FlowVisionApp:
         self.pipeline_step_name_var = tk.StringVar()
         self.pipeline_step_type_var = tk.StringVar()
         self.pipeline_step_prompt_slot_var = tk.StringVar()
+        self.pipeline_step_number_mode_var = tk.StringVar()
         self.pipeline_step_start_var = tk.StringVar()
         self.pipeline_step_end_var = tk.StringVar()
         self.pipeline_step_manual_var = tk.StringVar()
@@ -7229,47 +7339,86 @@ class FlowVisionApp:
         self.lbl_pipeline_prompt_range = tk.Label(step_form, text="프롬프트 자동화를 선택하면 파일과 범위가 표시됩니다.", font=self.font_small, bg="#13233A", fg=self.color_text_sec, anchor="w")
         self.lbl_pipeline_prompt_range.grid(row=2, column=2, columnspan=2, sticky="ew", pady=(0, 8))
 
-        tk.Label(step_form, text="시작 번호", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=3, column=0, sticky="w")
-        ent_step_start = tk.Entry(step_form, textvariable=self.pipeline_step_start_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
-        ent_step_start.grid(row=3, column=1, sticky="ew", pady=(0, 8), padx=(6, 14), ipady=3)
+        self.lbl_pipeline_number_mode = tk.Label(step_form, text="번호 방식", font=self.font_small, bg="#13233A", fg=self.color_text)
+        self.lbl_pipeline_number_mode.grid(row=3, column=0, sticky="w")
+        number_mode_wrap = tk.Frame(step_form, bg="#13233A")
+        number_mode_wrap.grid(row=3, column=1, columnspan=3, sticky="w", pady=(0, 8), padx=(6, 0))
+        self.radio_pipeline_number_range = ttk.Radiobutton(
+            number_mode_wrap,
+            text="연속 범위",
+            value=self._pipeline_number_mode_labels()["range"],
+            variable=self.pipeline_step_number_mode_var,
+            command=self.on_pipeline_step_number_mode_change,
+        )
+        self.radio_pipeline_number_range.pack(side="left")
+        self.radio_pipeline_number_manual = ttk.Radiobutton(
+            number_mode_wrap,
+            text="개별 번호",
+            value=self._pipeline_number_mode_labels()["manual"],
+            variable=self.pipeline_step_number_mode_var,
+            command=self.on_pipeline_step_number_mode_change,
+        )
+        self.radio_pipeline_number_manual.pack(side="left", padx=(10, 0))
 
-        tk.Label(step_form, text="끝 번호", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=3, column=2, sticky="w")
-        ent_step_end = tk.Entry(step_form, textvariable=self.pipeline_step_end_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
-        ent_step_end.grid(row=3, column=3, sticky="ew", pady=(0, 8), ipady=3)
+        self.lbl_pipeline_number_help = tk.Label(step_form, text="연속 범위: 001~120처럼 순서대로 실행", font=self.font_small, bg="#13233A", fg=self.color_info, anchor="w")
+        self.lbl_pipeline_number_help.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(0, 4))
+        self.lbl_pipeline_number_summary = tk.Label(step_form, text="현재 설정: 연속 범위 1~1", font=self.font_small, bg="#13233A", fg=self.color_text_sec, anchor="w")
+        self.lbl_pipeline_number_summary.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(0, 8))
 
-        tk.Label(step_form, text="개별 번호", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=4, column=0, sticky="w")
-        ent_step_manual = tk.Entry(step_form, textvariable=self.pipeline_step_manual_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small)
-        ent_step_manual.grid(row=4, column=1, sticky="ew", pady=(0, 8), padx=(6, 14), ipady=3)
+        self.lbl_pipeline_step_start = tk.Label(step_form, text="시작 번호", font=self.font_small, bg="#13233A", fg=self.color_text)
+        self.lbl_pipeline_step_start.grid(row=6, column=0, sticky="w")
+        self.entry_pipeline_step_start = tk.Entry(step_form, textvariable=self.pipeline_step_start_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
+        self.entry_pipeline_step_start.grid(row=6, column=1, sticky="ew", pady=(0, 8), padx=(6, 14), ipady=3)
 
-        tk.Label(step_form, text="기본값 모드", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=4, column=2, sticky="w")
+        self.lbl_pipeline_step_end = tk.Label(step_form, text="끝 번호", font=self.font_small, bg="#13233A", fg=self.color_text)
+        self.lbl_pipeline_step_end.grid(row=6, column=2, sticky="w")
+        self.entry_pipeline_step_end = tk.Entry(step_form, textvariable=self.pipeline_step_end_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
+        self.entry_pipeline_step_end.grid(row=6, column=3, sticky="ew", pady=(0, 8), ipady=3)
+
+        self.lbl_pipeline_step_manual = tk.Label(step_form, text="개별 번호", font=self.font_small, bg="#13233A", fg=self.color_text)
+        self.lbl_pipeline_step_manual.grid(row=7, column=0, sticky="w")
+        self.entry_pipeline_step_manual = tk.Entry(step_form, textvariable=self.pipeline_step_manual_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small)
+        self.entry_pipeline_step_manual.grid(row=7, column=1, sticky="ew", pady=(0, 8), padx=(6, 14), ipady=3)
+
+        tk.Label(step_form, text="기본값 모드", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=7, column=2, sticky="w")
         self.combo_pipeline_media_mode = ttk.Combobox(step_form, textvariable=self.pipeline_step_media_mode_var, state="readonly", values=tuple(self._pipeline_mode_labels().values()), font=self.font_small)
-        self.combo_pipeline_media_mode.grid(row=4, column=3, sticky="ew", pady=(0, 8))
+        self.combo_pipeline_media_mode.grid(row=7, column=3, sticky="ew", pady=(0, 8))
 
-        tk.Label(step_form, text="다운로드 모드", font=self.font_small, bg="#13233A", fg=self.color_text).grid(row=5, column=0, sticky="w")
+        self.lbl_pipeline_download_mode = tk.Label(step_form, text="다운로드 모드", font=self.font_small, bg="#13233A", fg=self.color_text)
+        self.lbl_pipeline_download_mode.grid(row=8, column=0, sticky="w")
         self.combo_pipeline_download_mode = ttk.Combobox(step_form, textvariable=self.pipeline_step_download_mode_var, state="readonly", values=tuple(self._pipeline_mode_labels().values()), font=self.font_small)
-        self.combo_pipeline_download_mode.grid(row=5, column=1, sticky="ew", pady=(0, 8), padx=(6, 14))
+        self.combo_pipeline_download_mode.grid(row=8, column=1, sticky="ew", pady=(0, 8), padx=(6, 14))
 
         self.lbl_pipeline_quality = tk.Label(step_form, text="품질", font=self.font_small, bg="#13233A", fg=self.color_text)
-        self.lbl_pipeline_quality.grid(row=5, column=2, sticky="w")
+        self.lbl_pipeline_quality.grid(row=8, column=2, sticky="w")
         self.combo_pipeline_quality = ttk.Combobox(step_form, textvariable=self.pipeline_step_quality_var, state="readonly", font=self.font_small)
-        self.combo_pipeline_quality.grid(row=5, column=3, sticky="ew", pady=(0, 8))
+        self.combo_pipeline_quality.grid(row=8, column=3, sticky="ew", pady=(0, 8))
 
         self.lbl_pipeline_output_dir = tk.Label(step_form, text="저장 폴더", font=self.font_small, bg="#13233A", fg=self.color_text)
-        self.lbl_pipeline_output_dir.grid(row=6, column=0, sticky="w")
+        self.lbl_pipeline_output_dir.grid(row=9, column=0, sticky="w")
         pipeline_output_wrap = tk.Frame(step_form, bg="#13233A")
-        pipeline_output_wrap.grid(row=6, column=1, columnspan=3, sticky="ew", pady=(0, 8))
+        pipeline_output_wrap.grid(row=9, column=1, columnspan=3, sticky="ew", pady=(0, 8))
         pipeline_output_wrap.grid_columnconfigure(0, weight=1)
         self.entry_pipeline_output_dir = tk.Entry(pipeline_output_wrap, textvariable=self.pipeline_step_output_dir_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small, state="readonly")
         self.entry_pipeline_output_dir.grid(row=0, column=0, sticky="ew", padx=(6, 6), ipady=3)
         self.btn_pipeline_output_dir = ttk.Button(pipeline_output_wrap, text="폴더선택", command=self.on_pick_pipeline_output_dir)
         self.btn_pipeline_output_dir.grid(row=0, column=1, sticky="e")
 
+        self._pipeline_download_only_widgets = [
+            self.lbl_pipeline_download_mode,
+            self.combo_pipeline_download_mode,
+            self.lbl_pipeline_quality,
+            self.combo_pipeline_quality,
+            self.lbl_pipeline_output_dir,
+            pipeline_output_wrap,
+        ]
+
         for widget in (
             ent_step_name,
             ent_step_interval,
-            ent_step_start,
-            ent_step_end,
-            ent_step_manual,
+            self.entry_pipeline_step_start,
+            self.entry_pipeline_step_end,
+            self.entry_pipeline_step_manual,
             self.combo_pipeline_step_type,
             self.combo_pipeline_project_profile,
             self.combo_pipeline_prompt_slot,
@@ -7283,7 +7432,6 @@ class FlowVisionApp:
             else:
                 widget.bind("<Return>", self._save_pipeline_step_fields)
 
-        self.combo_pipeline_step_type.bind("<<ComboboxSelected>>", self.on_pipeline_step_type_change)
         self.combo_pipeline_download_mode.bind("<<ComboboxSelected>>", self.on_pipeline_step_download_mode_change)
         self.combo_pipeline_prompt_slot.bind("<<ComboboxSelected>>", self.on_pipeline_step_prompt_slot_change)
 
@@ -7294,29 +7442,7 @@ class FlowVisionApp:
         self.lbl_pipeline_step_status.pack(side="left", padx=(10, 0))
         self._sync_pipeline_step_ui()
 
-        info_box = tk.Frame(right_card, bg="#13233A", highlightbackground="#28405F", highlightthickness=1)
-        info_box.pack(fill="x", padx=18, pady=(0, 14))
-        tk.Label(info_box, text="다음에 붙일 핵심 기능", font=self.font_body_bold, bg="#13233A", fg=self.color_info).pack(anchor="w", padx=14, pady=(12, 6))
-        for text in (
-            "프로젝트 목록 저장: URL + 프로젝트 이름 저장 / 추가 / 삭제 / 이름 변경",
-            "작업 단계 저장: 프롬프트, S반복, 다운로드를 1번/2번/3번으로 묶기",
-            "단계별 모드 전환: 이미지 기본값 / 동영상 기본값 자동 적용",
-            "이어달리기 실행: 시작 / 일시정지 / 수정 후 이어서 시작",
-        ):
-            tk.Label(info_box, text=f"• {text}", font=self.font_small, bg="#13233A", fg=self.color_text).pack(anchor="w", padx=14, pady=2)
-
-        preview_box = tk.Frame(right_card, bg=self.color_bg, highlightbackground="#24324B", highlightthickness=1)
-        preview_box.pack(fill="x", padx=18, pady=(0, 14))
-        tk.Label(preview_box, text="예상 실행 흐름", font=self.font_body_bold, bg=self.color_bg, fg=self.color_accent).pack(anchor="w", padx=14, pady=(12, 8))
-        preview_text = (
-            "1. 1번 작업: 프롬프트 자동화 (이미지)\n"
-            "2. 2번 작업: S반복 자동화 (동영상)\n"
-            "3. 3번 작업: 다운로드 자동화 (동영상)\n\n"
-            "이 흐름을 저장해두고, 이어달리기 시작 버튼으로 한 번에 돌리는 구조로 갈 예정입니다."
-        )
-        tk.Label(preview_box, text=preview_text, font=self.font_small, bg=self.color_bg, fg=self.color_text_sec, justify="left").pack(anchor="w", padx=14, pady=(0, 14))
-
-        bottom = tk.Frame(right_card, bg=self.color_card)
+        bottom = tk.Frame(detail_card, bg=self.color_card)
         bottom.pack(fill="x", padx=18, pady=(0, 16))
         ttk.Button(bottom, text="💾 이어달리기 저장", command=lambda: (self.on_save_project_profile_detail(), self._save_pipeline_step_fields())).pack(side="left")
         ttk.Button(bottom, text="🛠 작업창 적용", command=self.on_apply_pipeline_step_to_work).pack(side="left", padx=6)
