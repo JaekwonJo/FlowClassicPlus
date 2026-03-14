@@ -2940,8 +2940,8 @@ class FlowVisionApp:
         self.onetouch_window = tk.Toplevel(self.root)
         self.onetouch_window.title(f"{APP_NAME} - 원터치 실행")
         self.onetouch_window.configure(bg=self.color_bg)
-        self.onetouch_window.resizable(False, False)
-        self.onetouch_window.minsize(280, 220)
+        self.onetouch_window.resizable(True, True)
+        self.onetouch_window.minsize(360, 300)
         try:
             icon_path = self.base.parent / "icon.ico"
             if icon_path.exists():
@@ -2962,7 +2962,7 @@ class FlowVisionApp:
             font=self.font_small,
             bg=self.color_card,
             fg=self.color_text_sec,
-            wraplength=240,
+            wraplength=300,
             justify="left",
         ).pack(anchor="w", padx=16, pady=(0, 10))
 
@@ -2970,7 +2970,16 @@ class FlowVisionApp:
         self.combo_onetouch_preset.pack(fill="x", padx=16, pady=(0, 10))
         self.combo_onetouch_preset.bind("<<ComboboxSelected>>", self.on_pipeline_preset_select)
 
-        self.lbl_onetouch_status = tk.Label(top, text="원터치 대기 중", font=self.font_small, bg=self.color_card, fg=self.color_text_sec, justify="left", anchor="w")
+        self.lbl_onetouch_status = tk.Label(
+            top,
+            text="원터치 대기 중",
+            font=self.font_small,
+            bg=self.color_card,
+            fg=self.color_text_sec,
+            justify="left",
+            anchor="w",
+            wraplength=300,
+        )
         self.lbl_onetouch_status.pack(fill="x", padx=16, pady=(0, 12))
 
         btn_row = tk.Frame(top, bg=self.color_card)
@@ -2985,7 +2994,7 @@ class FlowVisionApp:
 
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        w, h = 320, 250
+        w, h = 420, 340
         x = max(sw - w - 40, 0)
         y = max(sh - h - 90, 0)
         self.onetouch_window.geometry(f"{w}x{h}+{x}+{y}")
