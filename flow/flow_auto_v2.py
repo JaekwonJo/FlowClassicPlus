@@ -3073,6 +3073,11 @@ class FlowVisionApp:
             self.lbl_onetouch_dialog_slot_help.config(
                 text="프롬프트 자동화가 들어 있는 프리셋입니다." if has_prompt else "이 프리셋에는 프롬프트 자동화 단계가 없습니다."
             )
+            if has_prompt and slot_names and prompt_slot_var.get() in slot_names:
+                slot_idx = slot_names.index(prompt_slot_var.get())
+                self.lbl_onetouch_dialog_slot_summary.config(text=self._pipeline_prompt_slot_summary(slot_idx), fg=self.color_info)
+            else:
+                self.lbl_onetouch_dialog_slot_summary.config(text="선택한 슬롯의 프롬프트 개수와 범위가 여기에 표시됩니다.", fg=self.color_text_sec)
             folder_state = "normal" if has_download else "disabled"
             self.entry_onetouch_dialog_output.config(state=folder_state)
             self.btn_onetouch_dialog_output.config(state=folder_state)
@@ -3093,12 +3098,15 @@ class FlowVisionApp:
         tk.Label(form, text="프롬프트 슬롯", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=1, column=0, sticky="w", padx=14, pady=6)
         self.combo_onetouch_dialog_slot = ttk.Combobox(form, textvariable=prompt_slot_var, state="readonly", font=self.font_small)
         self.combo_onetouch_dialog_slot.grid(row=1, column=1, sticky="ew", padx=(0, 14), pady=6)
+        self.combo_onetouch_dialog_slot.bind("<<ComboboxSelected>>", _refresh_fields)
         self.lbl_onetouch_dialog_slot_help = tk.Label(form, text="", font=self.font_small, bg=self.color_card, fg=self.color_text_sec)
         self.lbl_onetouch_dialog_slot_help.grid(row=2, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 6))
+        self.lbl_onetouch_dialog_slot_summary = tk.Label(form, text="선택한 슬롯의 프롬프트 개수와 범위가 여기에 표시됩니다.", font=self.font_small, bg=self.color_card, fg=self.color_text_sec)
+        self.lbl_onetouch_dialog_slot_summary.grid(row=3, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 6))
 
-        tk.Label(form, text="다운로드 폴더", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=14, pady=6)
+        tk.Label(form, text="다운로드 폴더", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=4, column=0, sticky="w", padx=14, pady=6)
         output_wrap = tk.Frame(form, bg=self.color_card)
-        output_wrap.grid(row=3, column=1, sticky="ew", padx=(0, 14), pady=6)
+        output_wrap.grid(row=4, column=1, sticky="ew", padx=(0, 14), pady=6)
         output_wrap.grid_columnconfigure(0, weight=1)
         self.entry_onetouch_dialog_output = tk.Entry(output_wrap, textvariable=output_dir_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small)
         self.entry_onetouch_dialog_output.grid(row=0, column=0, sticky="ew", ipady=3)
@@ -3109,28 +3117,28 @@ class FlowVisionApp:
         )
         self.btn_onetouch_dialog_output.grid(row=0, column=1, padx=(6, 0))
         self.lbl_onetouch_dialog_output_help = tk.Label(form, text="", font=self.font_small, bg=self.color_card, fg=self.color_text_sec)
-        self.lbl_onetouch_dialog_output_help.grid(row=4, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 6))
+        self.lbl_onetouch_dialog_output_help.grid(row=5, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 6))
 
-        tk.Label(form, text="번호 방식", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=5, column=0, sticky="w", padx=14, pady=6)
+        tk.Label(form, text="번호 방식", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=6, column=0, sticky="w", padx=14, pady=6)
         number_wrap = tk.Frame(form, bg=self.color_card)
-        number_wrap.grid(row=5, column=1, sticky="w", padx=(0, 14), pady=6)
+        number_wrap.grid(row=6, column=1, sticky="w", padx=(0, 14), pady=6)
         ttk.Radiobutton(number_wrap, text="연속 범위", value="range", variable=number_mode_var).pack(side="left")
         ttk.Radiobutton(number_wrap, text="개별 번호", value="manual", variable=number_mode_var).pack(side="left", padx=(10, 0))
 
         number_help = tk.Label(form, text="연속 범위: 001~120처럼 순서대로 실행 / 개별 번호: 001,005,009-012", font=self.font_small, bg=self.color_card, fg=self.color_info)
-        number_help.grid(row=6, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 6))
+        number_help.grid(row=7, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 6))
 
-        tk.Label(form, text="시작 번호", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=7, column=0, sticky="w", padx=14, pady=6)
+        tk.Label(form, text="시작 번호", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=8, column=0, sticky="w", padx=14, pady=6)
         self.entry_onetouch_dialog_start = tk.Entry(form, textvariable=start_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
-        self.entry_onetouch_dialog_start.grid(row=7, column=1, sticky="ew", padx=(0, 14), pady=6, ipady=3)
+        self.entry_onetouch_dialog_start.grid(row=8, column=1, sticky="ew", padx=(0, 14), pady=6, ipady=3)
 
-        tk.Label(form, text="끝 번호", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=8, column=0, sticky="w", padx=14, pady=6)
+        tk.Label(form, text="끝 번호", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=9, column=0, sticky="w", padx=14, pady=6)
         self.entry_onetouch_dialog_end = tk.Entry(form, textvariable=end_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
-        self.entry_onetouch_dialog_end.grid(row=8, column=1, sticky="ew", padx=(0, 14), pady=6, ipady=3)
+        self.entry_onetouch_dialog_end.grid(row=9, column=1, sticky="ew", padx=(0, 14), pady=6, ipady=3)
 
-        tk.Label(form, text="개별 번호", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=9, column=0, sticky="w", padx=14, pady=6)
+        tk.Label(form, text="개별 번호", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=10, column=0, sticky="w", padx=14, pady=6)
         self.entry_onetouch_dialog_manual = tk.Entry(form, textvariable=manual_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small)
-        self.entry_onetouch_dialog_manual.grid(row=9, column=1, sticky="ew", padx=(0, 14), pady=6, ipady=3)
+        self.entry_onetouch_dialog_manual.grid(row=10, column=1, sticky="ew", padx=(0, 14), pady=6, ipady=3)
 
         def _refresh_number_mode(*_args):
             is_range = number_mode_var.get() != "manual"
