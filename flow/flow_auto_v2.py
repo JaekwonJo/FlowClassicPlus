@@ -452,6 +452,9 @@ class FlowVisionApp:
         self.pipeline_active_output_dir = ""
         self.pipeline_runtime_steps_override = None
         self.pipeline_runtime_source_name = ""
+        self.pipeline_runtime_started_at = None
+        self.pipeline_runtime_results = []
+        self.pipeline_runtime_report_path = None
         self.prompt_image_baseline_ready = bool(self.cfg.get("prompt_image_baseline_ready", False))
         self.asset_image_baseline_ready = bool(self.cfg.get("asset_image_baseline_ready", False))
         current_media_state = str(self.cfg.get("current_media_state", "") or "").strip().lower()
@@ -3243,6 +3246,9 @@ class FlowVisionApp:
         self.pipeline_runtime_active = True
         self.pipeline_runtime_steps_override = runtime_steps
         self.pipeline_runtime_source_name = str(source_name or "").strip()
+        self.pipeline_runtime_started_at = datetime.now()
+        self.pipeline_runtime_results = []
+        self.pipeline_runtime_report_path = None
         self.pipeline_run_order = list(range(len(runtime_steps)))
         self.pipeline_run_position = -1
         if hasattr(self, "btn_pipeline_start"):
@@ -3543,6 +3549,9 @@ class FlowVisionApp:
         self.pipeline_active_output_dir = ""
         self.pipeline_runtime_steps_override = None
         self.pipeline_runtime_source_name = ""
+        self.pipeline_runtime_started_at = None
+        self.pipeline_runtime_results = []
+        self.pipeline_runtime_report_path = None
         if hasattr(self, "btn_pipeline_start"):
             self.btn_pipeline_start.config(state="normal")
         if hasattr(self, "lbl_pipeline_runtime_status"):
@@ -3633,12 +3642,13 @@ class FlowVisionApp:
         self._save_pipeline_step_fields()
         self.pipeline_runtime_steps_override = None
         self.pipeline_runtime_source_name = ""
+        self.pipeline_runtime_started_at = datetime.now()
+        self.pipeline_runtime_results = []
+        self.pipeline_runtime_report_path = None
         steps = self._get_pipeline_steps_source()
         if not steps:
             messagebox.showwarning("안내", "이어달리기 작업이 없습니다.", parent=self.pipeline_window)
             return
-        self.pipeline_runtime_steps_override = None
-        self.pipeline_runtime_source_name = ""
         self.pipeline_runtime_active = True
         self.pipeline_run_order = list(range(len(steps)))
         self.pipeline_run_position = -1
@@ -6259,12 +6269,9 @@ class FlowVisionApp:
         except Exception:
             pass
         payload = self._build_completion_payload(run_mode)
-        try:
-            self._save_completion_summary(payload)
-        except Exception as e:
-            self.log(f"⚠️ 완료 요약 저장 실패: {e}")
 
         if self.pipeline_runtime_active:
+            self._append_pipeline_runtime_result(payload)
             has_next = (self.pipeline_run_position + 1) < len(self.pipeline_run_order)
 
             if has_next:
@@ -6276,14 +6283,29 @@ class FlowVisionApp:
                 return
 
             def _done_pipeline_ui():
+                final_payload = self._build_pipeline_completion_payload()
+                try:
+                    self._save_pipeline_runtime_report(final_payload)
+                    final_payload["report_path"] = str(self.pipeline_runtime_report_path) if self.pipeline_runtime_report_path else ""
+                except Exception as e:
+                    self.log(f"⚠️ 이어달리기 리포트 저장 실패: {e}")
+                try:
+                    self._save_completion_summary(final_payload)
+                except Exception as e:
+                    self.log(f"⚠️ 완료 요약 저장 실패: {e}")
                 self.on_stop(pipeline_transition=True)
                 self._clear_pipeline_runtime(cancelled=False)
                 self.play_sound("finish")
                 self.update_status_label("🎉 이어달리기 전체 완료!", self.color_success)
-                messagebox.showinfo("이어달리기 완료", self._format_completion_popup_text(payload))
+                messagebox.showinfo("이어달리기 완료", self._format_completion_popup_text(final_payload))
 
             self.root.after(0, _done_pipeline_ui)
             return
+
+        try:
+            self._save_completion_summary(payload)
+        except Exception as e:
+            self.log(f"⚠️ 완료 요약 저장 실패: {e}")
 
         def _done_ui():
             self.on_stop()
@@ -6344,6 +6366,63 @@ class FlowVisionApp:
             "retry_errors": retry_errors,
         }
 
+    def _append_pipeline_runtime_result(self, payload):
+        if not self.pipeline_runtime_active:
+            return
+        step_name = f"{self.pipeline_run_position + 1}번 작업"
+        steps = self._get_pipeline_steps_source()
+        if 0 <= self.pipeline_run_position < len(steps):
+            step_name = str(steps[self.pipeline_run_position].get("name", "") or step_name)
+        item = dict(payload)
+        item["step_index"] = self.pipeline_run_position + 1
+        item["step_name"] = step_name
+        item["step_total_count"] = len(self.pipeline_run_order)
+        self.pipeline_runtime_results.append(item)
+
+    def _build_pipeline_completion_payload(self):
+        results = list(self.pipeline_runtime_results or [])
+        started_at = self.pipeline_runtime_started_at or getattr(self, "session_start_time", datetime.now())
+        ended_at = datetime.now()
+        total_items = sum(int(item.get("total", 0) or 0) for item in results)
+        total_success = sum(int(item.get("success", 0) or 0) for item in results)
+        total_failed = sum(int(item.get("failed", 0) or 0) for item in results)
+        return {
+            "run_mode": "pipeline",
+            "title": "이어달리기",
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "total": total_items,
+            "success": total_success,
+            "failed": total_failed,
+            "step_count": len(results),
+            "pipeline_source_name": self.pipeline_runtime_source_name,
+            "entries": results,
+            "action_log_path": "",
+            "report_path": str(self.pipeline_runtime_report_path) if self.pipeline_runtime_report_path else "",
+            "selection_summary": "",
+            "selection_input": "",
+            "failed_details": [],
+            "retry_errors": [],
+        }
+
+    def _save_pipeline_runtime_report(self, payload):
+        stamp_base = self.pipeline_runtime_started_at or datetime.now()
+        stamp = stamp_base.strftime("%Y%m%d_%H%M%S") if hasattr(stamp_base, "strftime") else datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.pipeline_runtime_report_path = self.logs_dir / f"pipeline_report_{stamp}.json"
+        data = {
+            "created_at": datetime.now().isoformat(),
+            "started_at": payload.get("started_at").isoformat() if hasattr(payload.get("started_at"), "isoformat") else str(payload.get("started_at", "")),
+            "ended_at": payload.get("ended_at").isoformat() if hasattr(payload.get("ended_at"), "isoformat") else str(payload.get("ended_at", "")),
+            "pipeline_name": payload.get("pipeline_source_name", ""),
+            "step_count": payload.get("step_count", 0),
+            "total_processed": payload.get("total", 0),
+            "success": payload.get("success", 0),
+            "failed": payload.get("failed", 0),
+            "entries": payload.get("entries", []),
+        }
+        self.pipeline_runtime_report_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.log(f"🧾 이어달리기 리포트 저장: {self.pipeline_runtime_report_path.name}")
+
     def _format_completion_popup_text(self, payload):
         started_at = payload.get("started_at")
         ended_at = payload.get("ended_at")
@@ -6354,6 +6433,43 @@ class FlowVisionApp:
         mm, ss = divmod(duration_sec, 60)
         hh, mm = divmod(mm, 60)
         duration_text = f"{hh:02d}:{mm:02d}:{ss:02d}"
+        if payload.get("run_mode") == "pipeline":
+            lines = [
+                f"작업 종류: {payload.get('title', '이어달리기')}",
+                f"프리셋/실행 이름: {payload.get('pipeline_source_name', '-') or '-'}",
+                f"시작: {started_at.strftime('%Y-%m-%d %H:%M:%S') if hasattr(started_at, 'strftime') else '-'}",
+                f"종료: {ended_at.strftime('%Y-%m-%d %H:%M:%S') if hasattr(ended_at, 'strftime') else '-'}",
+                f"총 소요 시간: {duration_text}",
+                f"총 단계 수: {payload.get('step_count', 0)}",
+                f"전체 작업 수: {payload.get('total', 0)}",
+                f"전체 성공: {payload.get('success', 0)}",
+                f"전체 실패: {payload.get('failed', 0)}",
+            ]
+            entries = payload.get("entries", []) or []
+            if entries:
+                lines.append("")
+                lines.append("[단계별 요약]")
+                for item in entries:
+                    step_name = item.get("step_name", f"{item.get('step_index', '?')}번 작업")
+                    title = item.get("title", item.get("run_mode", "작업"))
+                    lines.append(
+                        f"- {item.get('step_index', '?')}. {step_name} | {title} | "
+                        f"총 {item.get('total', 0)} / 성공 {item.get('success', 0)} / 실패 {item.get('failed', 0)}"
+                    )
+                    if item.get("selection_summary"):
+                        lines.append(f"  실행 대상: {item.get('selection_summary')}")
+                    if item.get("prompt_file"):
+                        lines.append(f"  프롬프트 파일: {item.get('prompt_file')}")
+                    if item.get("output_dir"):
+                        lines.append(f"  저장 폴더: {item.get('output_dir')}")
+                    if item.get("report_path"):
+                        lines.append(f"  리포트: {item.get('report_path')}")
+            if payload.get("report_path"):
+                lines.append("")
+                lines.append(f"이어달리기 리포트: {payload.get('report_path')}")
+            if getattr(self, "completion_summary_path", None):
+                lines.append(f"완료 요약: {self.completion_summary_path}")
+            return "\n".join(lines)
         lines = [
             f"작업 종류: {payload.get('title', '자동화')}",
             f"시작: {started_at.strftime('%Y-%m-%d %H:%M:%S') if hasattr(started_at, 'strftime') else '-'}",
@@ -6402,7 +6518,10 @@ class FlowVisionApp:
         return "\n".join(lines)
 
     def _save_completion_summary(self, payload):
-        stamp_base = getattr(self, "session_start_time", datetime.now())
+        if payload.get("run_mode") == "pipeline":
+            stamp_base = self.pipeline_runtime_started_at or getattr(self, "session_start_time", datetime.now())
+        else:
+            stamp_base = getattr(self, "session_start_time", datetime.now())
         stamp = stamp_base.strftime("%Y%m%d_%H%M%S") if hasattr(stamp_base, "strftime") else datetime.now().strftime("%Y%m%d_%H%M%S")
         self.completion_summary_path = self.logs_dir / f"completion_summary_{stamp}.txt"
         text = self._format_completion_popup_text(payload)
