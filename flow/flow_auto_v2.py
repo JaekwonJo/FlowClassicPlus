@@ -1321,6 +1321,58 @@ class FlowVisionApp:
         profile_path.mkdir(parents=True, exist_ok=True)
         return profile_path
 
+    def _browser_profile_dir_name(self):
+        return (self.cfg.get("browser_profile_dir") or "flow_human_profile_pw").strip() or "flow_human_profile_pw"
+
+    def _suggest_new_browser_profile_dir(self):
+        current = self._browser_profile_dir_name()
+        m = re.match(r"^(.*?)(?:_v(\d+))?$", current)
+        if m:
+            base_name = (m.group(1) or "flow_human_profile_pw").strip() or "flow_human_profile_pw"
+            current_no = int(m.group(2)) if m.group(2) else 1
+        else:
+            base_name = "flow_human_profile_pw"
+            current_no = 1
+        candidate_no = max(2, current_no + 1)
+        while True:
+            candidate = f"{base_name}_v{candidate_no}"
+            if not (self.base / candidate).exists():
+                return candidate
+            candidate_no += 1
+
+    def _refresh_browser_profile_ui(self):
+        if hasattr(self, "lbl_browser_profile_state"):
+            current = self._browser_profile_dir_name()
+            self.lbl_browser_profile_state.config(text=f"현재 프로필: {current}")
+
+    def on_create_new_browser_profile(self):
+        if getattr(self, "running", False) or getattr(self, "relay_running", False):
+            messagebox.showwarning("안내", "자동화 실행 중에는 새 브라우저 프로필을 만들 수 없습니다.\n먼저 중지 후 시도해주세요.")
+            return
+        try:
+            current = self._browser_profile_dir_name()
+            new_name = self._suggest_new_browser_profile_dir()
+            new_path = self.base / new_name
+            new_path.mkdir(parents=True, exist_ok=True)
+            self.cfg["browser_profile_dir"] = new_name
+            self.save_config()
+            self._refresh_browser_profile_ui()
+            self._shutdown_browser()
+            self.log(f"🆕 새 브라우저 프로필 준비 완료: {current} -> {new_name}")
+            messagebox.showinfo(
+                "새 브라우저 프로필 만들기",
+                "새 브라우저 프로필을 만들었습니다.\n\n"
+                f"- 이전 프로필: {current}\n"
+                f"- 새 프로필: {new_name}\n\n"
+                "이제 순서대로 해주세요.\n"
+                "1. '봇 작업창 열기' 누르기\n"
+                "2. 구글 로그인 1번 하기\n"
+                "3. 팝업이 뜨면 '이 프로필로 계속' 또는 '이 프로필에서 진행' 쪽 선택하기\n"
+                "4. 프로그램을 끄고 다시 켜서 로그인 유지 확인하기",
+            )
+        except Exception as e:
+            messagebox.showerror("새 브라우저 프로필 만들기 실패", f"프로필 생성 중 오류가 났습니다.\n{e}")
+
     def _pick_primary_browser_page(self):
         if not self.browser_context:
             return None
@@ -7032,6 +7084,18 @@ class FlowVisionApp:
         self.combo_browser_channel.pack(side="left")
         self.combo_browser_channel.bind("<<ComboboxSelected>>", self.on_option_toggle)
 
+        browser_profile_f = tk.Frame(left_card, bg=self.color_bg)
+        browser_profile_f.pack(fill="x", pady=(0, 8))
+        ttk.Button(browser_profile_f, text="🆕 새 브라우저 프로필 만들기", command=self.on_create_new_browser_profile).pack(side="left")
+        self.lbl_browser_profile_state = tk.Label(
+            browser_profile_f,
+            text=f"현재 프로필: {self._browser_profile_dir_name()}",
+            bg=self.color_bg,
+            fg=self.color_info,
+            font=self.font_small,
+        )
+        self.lbl_browser_profile_state.pack(side="left", padx=(10, 0))
+
         new_project_f = tk.Frame(left_card, bg=self.color_bg)
         self.auto_new_project_var = tk.BooleanVar(value=self.cfg.get("auto_open_new_project", True))
         tk.Checkbutton(
@@ -9012,6 +9076,7 @@ class FlowVisionApp:
         self.cfg["new_project_selector"] = self.new_project_selector_var.get().strip() if hasattr(self, "new_project_selector_var") else self.cfg.get("new_project_selector", "")
         self.cfg["browser_headless"] = self.browser_headless_var.get() if hasattr(self, "browser_headless_var") else self.cfg.get("browser_headless", False)
         self.cfg["browser_channel"] = self.browser_channel_var.get().strip() if hasattr(self, "browser_channel_var") else self.cfg.get("browser_channel", "chrome")
+        self._refresh_browser_profile_ui()
         self.cfg["browser_window_scale_percent"] = self._clamp_percent(self.browser_window_scale_var.get() if hasattr(self, "browser_window_scale_var") else self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=50, maximum=150)
         self.cfg["browser_zoom_percent"] = self._clamp_percent(self.browser_zoom_var.get() if hasattr(self, "browser_zoom_var") else self.cfg.get("browser_zoom_percent", 100), default=100, minimum=50, maximum=150)
         if hasattr(self, "lbl_browser_window_scale_state"):
