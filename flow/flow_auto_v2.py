@@ -95,6 +95,7 @@ DEFAULT_CONFIG = {
     "active_pipeline_step": 0,
     "pipeline_presets": [],
     "active_pipeline_preset": 0,
+    "pipeline_auto_retry_failed_once": True,
     "relay_mode": False,
     "relay_count": 1,
     "relay_start_slot": None,
@@ -455,6 +456,7 @@ class FlowVisionApp:
         self.pipeline_runtime_started_at = None
         self.pipeline_runtime_results = []
         self.pipeline_runtime_report_path = None
+        self.pipeline_runtime_retry_round = 0
         self.prompt_image_baseline_ready = bool(self.cfg.get("prompt_image_baseline_ready", False))
         self.asset_image_baseline_ready = bool(self.cfg.get("asset_image_baseline_ready", False))
         current_media_state = str(self.cfg.get("current_media_state", "") or "").strip().lower()
@@ -2924,6 +2926,13 @@ class FlowVisionApp:
         self._sync_pipeline_preset_ui()
         self.log(f"🗑️ 이어달리기 프리셋 삭제: {name}")
 
+    def on_pipeline_auto_retry_toggle(self):
+        enabled = bool(self.pipeline_auto_retry_var.get()) if hasattr(self, "pipeline_auto_retry_var") else bool(self.cfg.get("pipeline_auto_retry_failed_once", True))
+        self.cfg["pipeline_auto_retry_failed_once"] = enabled
+        self.save_config()
+        state_text = "켜짐" if enabled else "꺼짐"
+        self.log(f"♻️ 이어달리기 실패 자동 재시도 설정: {state_text}")
+
     def _pipeline_preset_has_type(self, preset, step_type):
         step_type = str(step_type or "").strip().lower()
         for step in (preset.get("steps", []) or []):
@@ -3249,6 +3258,7 @@ class FlowVisionApp:
         self.pipeline_runtime_started_at = datetime.now()
         self.pipeline_runtime_results = []
         self.pipeline_runtime_report_path = None
+        self.pipeline_runtime_retry_round = 0
         self.pipeline_run_order = list(range(len(runtime_steps)))
         self.pipeline_run_position = -1
         if hasattr(self, "btn_pipeline_start"):
@@ -3385,6 +3395,46 @@ class FlowVisionApp:
             if step_type == "download":
                 step["output_dir"] = str(output_dir or "").strip()
         return runtime_steps
+
+    def _pipeline_unique_tags(self, raw_tags):
+        seen = set()
+        out = []
+        for raw in raw_tags or []:
+            tag = str(raw or "").strip()
+            if not tag or tag in seen:
+                continue
+            seen.add(tag)
+            out.append(tag)
+        return out
+
+    def _build_pipeline_retry_steps(self):
+        if not bool(self.cfg.get("pipeline_auto_retry_failed_once", True)):
+            return []
+        if int(getattr(self, "pipeline_runtime_retry_round", 0) or 0) >= 1:
+            return []
+        results = list(self.pipeline_runtime_results or [])
+        source_steps = self._get_pipeline_steps_source()
+        if not results or not source_steps:
+            return []
+        retry_steps = []
+        for idx, item in enumerate(results):
+            step_type = str(item.get("run_mode", "") or "").strip().lower()
+            if step_type not in {"asset", "download"}:
+                continue
+            failed_tags = self._pipeline_unique_tags(item.get("failed_tags", []) or [])
+            if not failed_tags:
+                continue
+            if not (0 <= idx < len(source_steps)):
+                continue
+            cloned = self._clone_pipeline_steps([source_steps[idx]])[0]
+            cloned["number_mode"] = "manual"
+            cloned["manual_selection"] = ",".join(failed_tags)
+            cloned["start"] = 1
+            cloned["end"] = 1
+            base_name = str(cloned.get("name", "") or f"{idx+1}번 작업").strip()
+            cloned["name"] = f"{base_name} (자동 재시도 1회)"
+            retry_steps.append(cloned)
+        return retry_steps
 
     def _focus_work_target(self, target):
         try:
@@ -3552,6 +3602,7 @@ class FlowVisionApp:
         self.pipeline_runtime_started_at = None
         self.pipeline_runtime_results = []
         self.pipeline_runtime_report_path = None
+        self.pipeline_runtime_retry_round = 0
         if hasattr(self, "btn_pipeline_start"):
             self.btn_pipeline_start.config(state="normal")
         if hasattr(self, "lbl_pipeline_runtime_status"):
@@ -6282,6 +6333,32 @@ class FlowVisionApp:
                 self.root.after(0, _advance_ui)
                 return
 
+            retry_steps = self._build_pipeline_retry_steps()
+            if retry_steps:
+                def _retry_pipeline_ui():
+                    self.on_stop(pipeline_transition=True)
+                    self.pipeline_runtime_retry_round = int(getattr(self, "pipeline_runtime_retry_round", 0) or 0) + 1
+                    self.pipeline_runtime_steps_override = retry_steps
+                    self.pipeline_run_order = list(range(len(retry_steps)))
+                    self.pipeline_run_position = -1
+                    self.update_status_label("♻️ 실패 번호 자동 재시도 준비 중...", self.color_info)
+                    if hasattr(self, "lbl_pipeline_runtime_status"):
+                        self.lbl_pipeline_runtime_status.config(
+                            text=f"실패 자동 재시도 {self.pipeline_runtime_retry_round}회차 | 총 {len(retry_steps)}개 작업"
+                        )
+                    if hasattr(self, "lbl_onetouch_status"):
+                        self.lbl_onetouch_status.config(
+                            text=f"원터치 재시도 실행 중 | 실패 작업 {len(retry_steps)}개"
+                        )
+                    self.log(
+                        f"♻️ 이어달리기 실패 번호 자동 재시도 시작 | "
+                        f"{self.pipeline_runtime_retry_round}회차 | 작업 {len(retry_steps)}개"
+                    )
+                    self.root.after(700, lambda: self._run_pipeline_step_at(0))
+
+                self.root.after(0, _retry_pipeline_ui)
+                return
+
             def _done_pipeline_ui():
                 final_payload = self._build_pipeline_completion_payload()
                 try:
@@ -8219,6 +8296,13 @@ class FlowVisionApp:
         ttk.Button(bottom, text="🛠 작업창 적용", command=self.on_apply_pipeline_step_to_work).pack(side="left", padx=6)
         self.btn_pipeline_start = ttk.Button(bottom, text="▶ 이어달리기 시작", command=self.on_start_pipeline_run)
         self.btn_pipeline_start.pack(side="left")
+        self.pipeline_auto_retry_var = tk.BooleanVar(value=bool(self.cfg.get("pipeline_auto_retry_failed_once", True)))
+        ttk.Checkbutton(
+            bottom,
+            text="실패 번호 자동 재시도 1회",
+            variable=self.pipeline_auto_retry_var,
+            command=self.on_pipeline_auto_retry_toggle,
+        ).pack(side="left", padx=(10, 0))
         self.lbl_pipeline_runtime_status = tk.Label(bottom, text="이어달리기 대기 중", font=self.font_small, bg=self.color_card, fg=self.color_text_sec)
         self.lbl_pipeline_runtime_status.pack(side="left", padx=(10, 0))
         self._refresh_display_mode_ui()
