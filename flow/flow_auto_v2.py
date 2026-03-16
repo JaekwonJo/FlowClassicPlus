@@ -6386,6 +6386,13 @@ class FlowVisionApp:
         total_items = sum(int(item.get("total", 0) or 0) for item in results)
         total_success = sum(int(item.get("success", 0) or 0) for item in results)
         total_failed = sum(int(item.get("failed", 0) or 0) for item in results)
+        failed_tags = []
+        failed_details = []
+        retry_errors = []
+        for item in results:
+            failed_tags.extend(list(item.get("failed_tags", []) or []))
+            failed_details.extend(list(item.get("failed_details", []) or []))
+            retry_errors.extend(list(item.get("retry_errors", []) or []))
         return {
             "run_mode": "pipeline",
             "title": "이어달리기",
@@ -6401,8 +6408,9 @@ class FlowVisionApp:
             "report_path": str(self.pipeline_runtime_report_path) if self.pipeline_runtime_report_path else "",
             "selection_summary": "",
             "selection_input": "",
-            "failed_details": [],
-            "retry_errors": [],
+            "failed_tags": failed_tags,
+            "failed_details": failed_details,
+            "retry_errors": retry_errors,
         }
 
     def _save_pipeline_runtime_report(self, payload):
@@ -6420,7 +6428,10 @@ class FlowVisionApp:
             "failed": payload.get("failed", 0),
             "entries": payload.get("entries", []),
         }
-        self.pipeline_runtime_report_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.pipeline_runtime_report_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
         self.log(f"🧾 이어달리기 리포트 저장: {self.pipeline_runtime_report_path.name}")
 
     def _format_completion_popup_text(self, payload):
@@ -6464,6 +6475,18 @@ class FlowVisionApp:
                         lines.append(f"  저장 폴더: {item.get('output_dir')}")
                     if item.get("report_path"):
                         lines.append(f"  리포트: {item.get('report_path')}")
+                    step_failed_tags = item.get("failed_tags", []) or []
+                    if step_failed_tags:
+                        preview = ", ".join(step_failed_tags[:12])
+                        if len(step_failed_tags) > 12:
+                            preview += f" 외 {len(step_failed_tags) - 12}개"
+                        lines.append(f"  실패 항목: {preview}")
+                    step_failed_details = item.get("failed_details", []) or []
+                    if step_failed_details:
+                        for detail in step_failed_details[:6]:
+                            lines.append(f"    - {detail}")
+                        if len(step_failed_details) > 6:
+                            lines.append(f"    - 외 {len(step_failed_details) - 6}개는 리포트 참고")
             if payload.get("report_path"):
                 lines.append("")
                 lines.append(f"이어달리기 리포트: {payload.get('report_path')}")
