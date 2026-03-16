@@ -147,6 +147,11 @@ DEFAULT_CONFIG = {
     "download_video_quality": "1080P",
     "download_image_quality": "4K",
     "download_wait_seconds": 20,
+    "download_start_timeout_mode": "auto",
+    "download_start_timeout_manual_seconds": 60,
+    "download_start_timeout_video_720p": 10,
+    "download_start_timeout_video_1080p": 60,
+    "download_start_timeout_video_4k": 180,
     "download_search_input_selector": "",
     "download_video_filter_selector": "",
     "download_image_filter_selector": "",
@@ -4238,17 +4243,64 @@ class FlowVisionApp:
         slow = max(1.0, min(2.5, slow))
         self.actor.random_action_delay(label, min_s * slow, max_s * slow)
 
-    def _download_expect_timeout_sec(self, mode, quality, is_test=False):
+    def _download_start_timeout_mode(self):
+        mode = str(self.cfg.get("download_start_timeout_mode", "auto") or "auto").strip().lower()
+        return "manual" if mode == "manual" else "auto"
+
+    def _download_auto_start_timeout_sec(self, mode, quality):
         mode = "image" if mode == "image" else "video"
         quality = str(quality or "").strip().upper()
         if mode == "video":
-            if quality in ("1080P", "4K"):
-                return 300 if is_test else 240
-            return 75 if is_test else 60
-        # image
+            if quality == "720P":
+                return max(5, int(self.cfg.get("download_start_timeout_video_720p", 10) or 10))
+            if quality == "4K":
+                return max(10, int(self.cfg.get("download_start_timeout_video_4k", 180) or 180))
+            return max(5, int(self.cfg.get("download_start_timeout_video_1080p", 60) or 60))
         if quality == "4K":
-            return 180 if is_test else 120
-        return 90 if is_test else 70
+            return 180
+        if quality == "2K":
+            return 60
+        return 30
+
+    def _download_start_timeout_sec(self, mode, quality):
+        if self._download_start_timeout_mode() == "manual":
+            try:
+                return max(5, min(600, int(self.cfg.get("download_start_timeout_manual_seconds", 60) or 60)))
+            except Exception:
+                return 60
+        return self._download_auto_start_timeout_sec(mode, quality)
+
+    def _download_expect_timeout_sec(self, mode, quality, is_test=False):
+        timeout_sec = self._download_start_timeout_sec(mode, quality)
+        if is_test:
+            return max(timeout_sec, min(600, int(timeout_sec * 1.5)))
+        return timeout_sec
+
+    def _refresh_download_timeout_ui(self):
+        mode = self._download_start_timeout_mode()
+        auto_enabled = mode == "auto"
+        if hasattr(self, "entry_download_start_timeout_manual"):
+            self.entry_download_start_timeout_manual.config(state="disabled" if auto_enabled else "normal")
+        for widget_name in (
+            "entry_download_start_timeout_video_720p",
+            "entry_download_start_timeout_video_1080p",
+            "entry_download_start_timeout_video_4k",
+        ):
+            widget = getattr(self, widget_name, None)
+            if widget is not None:
+                widget.config(state="normal" if auto_enabled else "disabled")
+        try:
+            current_mode = self.download_mode_var.get().strip().lower() if hasattr(self, "download_mode_var") else self._download_mode()
+        except Exception:
+            current_mode = self._download_mode()
+        current_quality = self._download_quality(current_mode)
+        applied = self._download_start_timeout_sec(current_mode, current_quality)
+        if hasattr(self, "lbl_download_start_timeout_state"):
+            source = "수동" if mode == "manual" else "자동"
+            self.lbl_download_start_timeout_state.config(
+                text=f"현재 적용: {current_mode}/{current_quality} = {applied}초 ({source})"
+            )
+
 
     def _profile_download_default_dir(self):
         try:
@@ -7454,6 +7506,108 @@ class FlowVisionApp:
             font=self.font_small,
         ).pack(side="left")
 
+        timeout_mode_f = tk.Frame(dl_f, bg=self.color_bg)
+        timeout_mode_f.pack(fill="x", pady=(0, 6))
+        tk.Label(timeout_mode_f, text="다운로드 시작 대기", bg=self.color_bg, font=self.font_small).pack(side="left")
+        self.download_start_timeout_mode_var = tk.StringVar(value=self._download_start_timeout_mode())
+        ttk.Radiobutton(
+            timeout_mode_f,
+            text="품질별 자동",
+            value="auto",
+            variable=self.download_start_timeout_mode_var,
+            command=self.on_option_toggle,
+        ).pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(
+            timeout_mode_f,
+            text="직접 입력",
+            value="manual",
+            variable=self.download_start_timeout_mode_var,
+            command=self.on_option_toggle,
+        ).pack(side="left", padx=(10, 0))
+
+        timeout_auto_f = tk.Frame(dl_f, bg=self.color_bg)
+        timeout_auto_f.pack(fill="x", pady=(0, 6))
+        tk.Label(timeout_auto_f, text="720P", bg=self.color_bg, font=self.font_small).pack(side="left")
+        self.download_start_timeout_video_720p_var = tk.StringVar(value=str(self.cfg.get("download_start_timeout_video_720p", 10)))
+        self.entry_download_start_timeout_video_720p = tk.Entry(
+            timeout_auto_f,
+            textvariable=self.download_start_timeout_video_720p_var,
+            width=5,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=("Consolas", 10),
+        )
+        self.entry_download_start_timeout_video_720p.pack(side="left", padx=(6, 10), ipady=2)
+        self.entry_download_start_timeout_video_720p.bind("<FocusOut>", self.on_option_toggle)
+        self.entry_download_start_timeout_video_720p.bind("<Return>", self.on_option_toggle)
+
+        tk.Label(timeout_auto_f, text="1080P", bg=self.color_bg, font=self.font_small).pack(side="left")
+        self.download_start_timeout_video_1080p_var = tk.StringVar(value=str(self.cfg.get("download_start_timeout_video_1080p", 60)))
+        self.entry_download_start_timeout_video_1080p = tk.Entry(
+            timeout_auto_f,
+            textvariable=self.download_start_timeout_video_1080p_var,
+            width=5,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=("Consolas", 10),
+        )
+        self.entry_download_start_timeout_video_1080p.pack(side="left", padx=(6, 10), ipady=2)
+        self.entry_download_start_timeout_video_1080p.bind("<FocusOut>", self.on_option_toggle)
+        self.entry_download_start_timeout_video_1080p.bind("<Return>", self.on_option_toggle)
+
+        tk.Label(timeout_auto_f, text="4K", bg=self.color_bg, font=self.font_small).pack(side="left")
+        self.download_start_timeout_video_4k_var = tk.StringVar(value=str(self.cfg.get("download_start_timeout_video_4k", 180)))
+        self.entry_download_start_timeout_video_4k = tk.Entry(
+            timeout_auto_f,
+            textvariable=self.download_start_timeout_video_4k_var,
+            width=5,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=("Consolas", 10),
+        )
+        self.entry_download_start_timeout_video_4k.pack(side="left", padx=(6, 0), ipady=2)
+        self.entry_download_start_timeout_video_4k.bind("<FocusOut>", self.on_option_toggle)
+        self.entry_download_start_timeout_video_4k.bind("<Return>", self.on_option_toggle)
+
+        timeout_manual_f = tk.Frame(dl_f, bg=self.color_bg)
+        timeout_manual_f.pack(fill="x", pady=(0, 4))
+        tk.Label(timeout_manual_f, text="직접 입력(초)", bg=self.color_bg, font=self.font_small).pack(side="left")
+        self.download_start_timeout_manual_var = tk.StringVar(value=str(self.cfg.get("download_start_timeout_manual_seconds", 60)))
+        self.entry_download_start_timeout_manual = tk.Entry(
+            timeout_manual_f,
+            textvariable=self.download_start_timeout_manual_var,
+            width=6,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=("Consolas", 10),
+        )
+        self.entry_download_start_timeout_manual.pack(side="left", padx=(6, 0), ipady=2)
+        self.entry_download_start_timeout_manual.bind("<FocusOut>", self.on_option_toggle)
+        self.entry_download_start_timeout_manual.bind("<Return>", self.on_option_toggle)
+
+        self.lbl_download_start_timeout_state = tk.Label(
+            dl_f,
+            text="현재 적용: video/1080P = 60초 (자동)",
+            bg=self.color_bg,
+            fg=self.color_info,
+            font=self.font_small,
+            anchor="w",
+        )
+        self.lbl_download_start_timeout_state.pack(fill="x", pady=(0, 4))
+        tk.Label(
+            dl_f,
+            text="자동값은 영상 기준 720P 10초 / 1080P 60초 / 4K 180초를 사용합니다. 이미지는 1K 30초 / 2K 60초 / 4K 180초입니다.",
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            font=("Malgun Gothic", 9),
+            anchor="w",
+            justify="left",
+        ).pack(fill="x", pady=(0, 6))
+
         out_f = tk.Frame(dl_f, bg=self.color_bg)
         out_f.pack(fill="x", pady=(0, 6))
         tk.Label(out_f, text="저장 폴더", bg=self.color_bg, font=self.font_small).pack(side="left")
@@ -7498,6 +7652,7 @@ class FlowVisionApp:
         d2.pack(fill="x", pady=(6, 0))
         ttk.Button(d2, text="🔍 영상 다운로드 자동찾기", command=self.on_auto_detect_video_download_selectors).pack(side="left")
         ttk.Button(d2, text="🧪 영상 다운로드 테스트", command=self.on_test_video_download_selectors).pack(side="left", padx=6)
+        self._refresh_download_timeout_ui()
 
         tk.Label(left_card, text="3. 작업 간격 (초)", font=("Malgun Gothic", 11, "bold"), fg=self.color_text).pack(anchor="w", pady=(20, 5))
         self.entry_interval = tk.Entry(left_card, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 16, "bold"), justify="center", relief="solid", borderwidth=1)
@@ -8790,6 +8945,29 @@ class FlowVisionApp:
             self.cfg["download_wait_seconds"] = max(3, min(120, int(raw_download_wait or 20)))
         except Exception:
             self.cfg["download_wait_seconds"] = int(self.cfg.get("download_wait_seconds", 20) or 20)
+        self.cfg["download_start_timeout_mode"] = str(self.download_start_timeout_mode_var.get() or "auto").strip().lower() if hasattr(self, "download_start_timeout_mode_var") else self._download_start_timeout_mode()
+        if self.cfg["download_start_timeout_mode"] not in ("auto", "manual"):
+            self.cfg["download_start_timeout_mode"] = "auto"
+        try:
+            raw_timeout_manual = self.download_start_timeout_manual_var.get().strip() if hasattr(self, "download_start_timeout_manual_var") else str(self.cfg.get("download_start_timeout_manual_seconds", 60))
+            self.cfg["download_start_timeout_manual_seconds"] = max(5, min(600, int(raw_timeout_manual or 60)))
+        except Exception:
+            self.cfg["download_start_timeout_manual_seconds"] = int(self.cfg.get("download_start_timeout_manual_seconds", 60) or 60)
+        try:
+            raw_720 = self.download_start_timeout_video_720p_var.get().strip() if hasattr(self, "download_start_timeout_video_720p_var") else str(self.cfg.get("download_start_timeout_video_720p", 10))
+            self.cfg["download_start_timeout_video_720p"] = max(5, min(600, int(raw_720 or 10)))
+        except Exception:
+            self.cfg["download_start_timeout_video_720p"] = int(self.cfg.get("download_start_timeout_video_720p", 10) or 10)
+        try:
+            raw_1080 = self.download_start_timeout_video_1080p_var.get().strip() if hasattr(self, "download_start_timeout_video_1080p_var") else str(self.cfg.get("download_start_timeout_video_1080p", 60))
+            self.cfg["download_start_timeout_video_1080p"] = max(5, min(600, int(raw_1080 or 60)))
+        except Exception:
+            self.cfg["download_start_timeout_video_1080p"] = int(self.cfg.get("download_start_timeout_video_1080p", 60) or 60)
+        try:
+            raw_4k = self.download_start_timeout_video_4k_var.get().strip() if hasattr(self, "download_start_timeout_video_4k_var") else str(self.cfg.get("download_start_timeout_video_4k", 180))
+            self.cfg["download_start_timeout_video_4k"] = max(5, min(600, int(raw_4k or 180)))
+        except Exception:
+            self.cfg["download_start_timeout_video_4k"] = int(self.cfg.get("download_start_timeout_video_4k", 180) or 180)
         self.cfg["download_output_dir"] = self.download_output_dir_var.get().strip() if hasattr(self, "download_output_dir_var") else self.cfg.get("download_output_dir", "")
         self.cfg["download_search_input_selector"] = self.download_search_input_selector_var.get().strip() if hasattr(self, "download_search_input_selector_var") else self.cfg.get("download_search_input_selector", "")
         self.cfg["download_video_filter_selector"] = self.download_video_filter_selector_var.get().strip() if hasattr(self, "download_video_filter_selector_var") else self.cfg.get("download_video_filter_selector", "")
@@ -8856,6 +9034,7 @@ class FlowVisionApp:
         self._refresh_prompt_preset_selector_label()
         self._sync_relay_selection_label()
         self._refresh_manual_selection_labels()
+        self._refresh_download_timeout_ui()
         self._refresh_prompt_reference_ui()
         if hasattr(self, 'actor'):
             self.actor.language_mode = self.cfg["language_mode"]
