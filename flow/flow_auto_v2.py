@@ -67,7 +67,7 @@ ES_CONTINUOUS = 0x80000000
 ES_SYSTEM_REQUIRED = 0x00000001
 ES_DISPLAY_REQUIRED = 0x00000002
 
-APP_VERSION = "2026-03-03 Ver.01"
+APP_VERSION = "2026-03-18 Ver.01"
 APP_NAME = f"Flow Classic Plus - {APP_VERSION}"
 CONFIG_FILE = "flow_config.json"
 DEFAULT_CONFIG = {
@@ -415,6 +415,7 @@ class FlowVisionApp:
         self.is_processing = False 
         self.prompts = []
         self.prompt_source_prompts = []
+        self.prompt_source_entries = []
         self.prompt_run_numbers = None
         self.index = 0
         self.t_next = None
@@ -449,6 +450,8 @@ class FlowVisionApp:
         self.retry_error_log = []
         self.current_selection_summary = ""
         self.current_selection_input = ""
+        self.current_expected_mode = None
+        self.current_expected_items = []
         self.home_window = None
         self.pipeline_window = None
         self.onetouch_window = None
@@ -2053,8 +2056,96 @@ class FlowVisionApp:
             return f"{prefix}{str(int(m.group(1))).zfill(self._asset_pad_width())}"
         return raw
 
+    def _prompt_source_prefix(self):
+        return (self.cfg.get("asset_loop_prefix") or "S").strip().upper() or "S"
+
+    def _parse_prompt_source_entries(self, raw_text):
+        sep = self.cfg.get("prompts_separator", "|||")
+        prefix = self._prompt_source_prefix()
+        chunks = [part.strip() for part in str(raw_text or "").split(sep) if part.strip()]
+        entries = []
+        for idx, chunk in enumerate(chunks, start=1):
+            source_no = idx
+            source_tag = ""
+            prompt_text = chunk.strip()
+
+            inline_match = re.match(
+                rf"^\s*({re.escape(prefix)}\s*0*[1-9][0-9]*)\s*::\s*(.*)\s*$",
+                chunk,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if inline_match:
+                source_tag = self._normalize_reference_asset_tag(inline_match.group(1))
+                prompt_text = str(inline_match.group(2) or "").strip()
+            else:
+                lines = chunk.splitlines()
+                if lines:
+                    first_line = str(lines[0] or "").strip()
+                    first_match = re.match(
+                        rf"^\s*({re.escape(prefix)}\s*0*[1-9][0-9]*)\s*$",
+                        first_line,
+                        re.IGNORECASE,
+                    )
+                    if first_match:
+                        source_tag = self._normalize_reference_asset_tag(first_match.group(1))
+                        prompt_text = "\n".join(lines[1:]).strip()
+
+            if source_tag:
+                num_match = re.match(r"^[A-Z]+\s*0*([1-9][0-9]*)$", source_tag, re.IGNORECASE)
+                if num_match:
+                    source_no = int(num_match.group(1))
+
+            if not prompt_text:
+                continue
+
+            entries.append({
+                "source_no": source_no,
+                "source_tag": source_tag,
+                "prompt": prompt_text,
+                "raw": chunk,
+            })
+        return entries
+
+    def _available_prompt_source_numbers(self):
+        numbers = []
+        seen = set()
+        for entry in getattr(self, "prompt_source_entries", []) or []:
+            try:
+                value = int(entry.get("source_no", 0))
+            except Exception:
+                continue
+            if value < 1 or value in seen:
+                continue
+            seen.add(value)
+            numbers.append(value)
+        return numbers
+
+    def _resolve_prompt_number_plan(self):
+        raw = str(self.cfg.get("prompt_manual_selection", "") or "").strip()
+        prefix = self._prompt_source_prefix()
+        available = set(self._available_prompt_source_numbers())
+        info = self._parse_manual_number_spec(raw, upper_bound=None, allowed_prefixes=[prefix, "S"])
+        valid_numbers = [n for n in info.get("numbers", []) if n in available]
+        out_of_range = [n for n in info.get("numbers", []) if n not in available]
+        if not raw:
+            return {
+                "raw": raw,
+                "numbers": self._available_prompt_source_numbers(),
+                "invalid_tokens": [],
+                "out_of_range": [],
+                "truncated": False,
+            }
+        return {
+            "raw": raw,
+            "numbers": valid_numbers,
+            "invalid_tokens": list(info.get("invalid_tokens", []) or []),
+            "out_of_range": out_of_range,
+            "truncated": bool(info.get("truncated")),
+        }
+
     def _prompt_reference_scene_upper_bound(self):
-        return max(1, len(getattr(self, "prompt_source_prompts", []) or []))
+        numbers = self._available_prompt_source_numbers()
+        return max(numbers) if numbers else 1
 
     def _prompt_reference_matches_for_scene(self, scene_no):
         matches = []
@@ -2328,6 +2419,10 @@ class FlowVisionApp:
             return "프롬프트 파일 연결이 없습니다."
         if not prompts:
             return f"{file_name} | 프롬프트 없음"
+        entries = self._parse_prompt_source_entries(self.cfg.get("prompts_separator", "|||").join(prompts))
+        numbers = [entry.get("source_no") for entry in entries if entry.get("source_no")]
+        if numbers:
+            return f"{file_name} | 총 {len(entries)}개 | {min(numbers)}~{max(numbers)}"
         return f"{file_name} | 총 {len(prompts)}개 | 1~{len(prompts)}"
 
     def _asset_prompt_slot_data(self):
@@ -2818,7 +2913,7 @@ class FlowVisionApp:
         step["number_mode"] = number_mode
         step["start"] = start
         step["end"] = end
-        step["manual_selection"] = str(self.pipeline_step_manual_var.get() or "").strip()
+        step["manual_selection"] = str(self.pipeline_step_manual_var.get() or "").strip() if number_mode == "manual" else ""
         step["interval_seconds"] = interval_seconds
         step["media_mode"] = media_mode
         step["download_mode"] = download_mode
@@ -3485,7 +3580,28 @@ class FlowVisionApp:
                 continue
             cloned = self._clone_pipeline_steps([source_steps[idx]])[0]
             cloned["number_mode"] = "manual"
-            cloned["manual_selection"] = ",".join(failed_tags)
+            prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
+            failed_numbers = []
+            seen_numbers = set()
+            for tag in failed_tags:
+                text = str(tag or "").strip()
+                if not text:
+                    continue
+                m = re.match(rf"^\s*{re.escape(prefix)}\s*0*([0-9]+)\s*$", text, re.IGNORECASE)
+                if not m:
+                    m = re.match(r"^\s*0*([0-9]+)\s*$", text)
+                if not m:
+                    continue
+                value = int(m.group(1))
+                if value < 1 or value in seen_numbers:
+                    continue
+                seen_numbers.add(value)
+                failed_numbers.append(value)
+            cloned["manual_selection"] = (
+                self._compress_numbers_to_spec(failed_numbers, pad_width=self._asset_pad_width())
+                if failed_numbers
+                else ",".join(failed_tags)
+            )
             cloned["start"] = 1
             cloned["end"] = 1
             base_name = str(cloned.get("name", "") or f"{idx+1}번 작업").strip()
@@ -3515,7 +3631,7 @@ class FlowVisionApp:
         except Exception:
             pass
 
-    def _apply_pipeline_step_to_work_config(self, step_index=None, open_root=True):
+    def _apply_pipeline_step_to_work_config(self, step_index=None, open_root=True, reset_progress=False):
         self.on_save_project_profile_detail()
         self._save_pipeline_step_fields()
         steps = self._get_pipeline_steps_source()
@@ -3529,6 +3645,8 @@ class FlowVisionApp:
         profile_idx = self._clamp_project_profile_index(step.get("project_profile", 0))
         profile = profiles[profile_idx] if profiles else self._default_project_profile()
         target = str(step.get("type", "prompt") or "prompt").strip().lower()
+        number_mode = str(step.get("number_mode", "range") or "range").strip().lower()
+        manual_text = str(step.get("manual_selection", "") or "").strip() if number_mode == "manual" else ""
         if open_root:
             try:
                 self.root.deiconify()
@@ -3578,7 +3696,6 @@ class FlowVisionApp:
             self.cfg["asset_loop_enabled"] = True
             if hasattr(self, "asset_loop_var"):
                 self.asset_loop_var.set(True)
-            manual_text = str(step.get("manual_selection", "") or "").strip()
             self.cfg["asset_manual_selection"] = manual_text
             if hasattr(self, "asset_manual_selection_var"):
                 self.asset_manual_selection_var.set(manual_text)
@@ -3595,7 +3712,6 @@ class FlowVisionApp:
             self.cfg["asset_loop_enabled"] = False
             if hasattr(self, "asset_loop_var"):
                 self.asset_loop_var.set(False)
-            manual_text = str(step.get("manual_selection", "") or "").strip()
             self.cfg["asset_manual_selection"] = manual_text
             if hasattr(self, "asset_manual_selection_var"):
                 self.asset_manual_selection_var.set(manual_text)
@@ -3621,6 +3737,9 @@ class FlowVisionApp:
                 self.download_output_dir_var.set(self.cfg["download_output_dir"])
             target_key = "download"
             self.log(f"📁 이어달리기 다운로드 저장 폴더 적용: {self.cfg['download_output_dir'] or str(self._resolve_download_output_dir())}")
+        if reset_progress:
+            self.index = 0
+            self.download_index = 0
         self.on_option_toggle()
         self.save_config()
         if target_key != "download":
@@ -3677,7 +3796,7 @@ class FlowVisionApp:
             return
         self.pipeline_run_position = position
         step_index = self.pipeline_run_order[position]
-        step = self._apply_pipeline_step_to_work_config(step_index=step_index, open_root=True)
+        step = self._apply_pipeline_step_to_work_config(step_index=step_index, open_root=True, reset_progress=True)
         if step is None:
             self._clear_pipeline_runtime(cancelled=True)
             return
@@ -3738,6 +3857,103 @@ class FlowVisionApp:
             return
         self._clear_pipeline_runtime(cancelled=True)
         messagebox.showwarning("이어달리기 중단", f"'{step_name}' 작업이 시작되지 않았습니다.\n설정값이나 기본값 확인 문구를 먼저 확인해주세요.", parent=self.pipeline_window)
+
+    def _normalize_expected_runtime_item(self, value, mode):
+        mode = str(mode or "").strip().lower()
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if mode in {"asset", "download"}:
+            prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
+            pad_width = self._asset_pad_width()
+            match = re.match(
+                rf"^\s*(?:{re.escape(prefix)}|S)?\s*0*([0-9]+)\s*$",
+                text,
+                re.IGNORECASE,
+            )
+            if match:
+                return f"{prefix}{str(int(match.group(1))).zfill(pad_width)}"
+            return text.upper()
+        match = re.match(r"^\s*0*([0-9]+)\s*$", text)
+        if match:
+            return str(int(match.group(1)))
+        return text
+
+    def _set_current_expected_items(self, mode, items):
+        normalized = []
+        seen = set()
+        for raw in items or []:
+            item = self._normalize_expected_runtime_item(raw, mode)
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            normalized.append(item)
+        self.current_expected_mode = str(mode or "").strip().lower() or None
+        self.current_expected_items = normalized
+
+    def _apply_expected_shortfall_to_payload(self, payload, entries, mode):
+        mode = str(mode or "").strip().lower()
+        expected = list(self.current_expected_items or []) if self.current_expected_mode == mode else []
+        if mode == "download":
+            success_count = sum(1 for entry in (entries or []) if str(entry.get("status", "")).strip().lower() == "success")
+            explicit_failed_count = sum(1 for entry in (entries or []) if str(entry.get("status", "")).strip().lower() != "success")
+        else:
+            success_count = sum(1 for entry in (entries or []) if str(entry.get("status", "")).strip().lower() != "failed")
+            explicit_failed_count = sum(1 for entry in (entries or []) if str(entry.get("status", "")).strip().lower() == "failed")
+        payload["success"] = int(payload.get("success", success_count) or 0)
+        payload["failed"] = int(payload.get("failed", explicit_failed_count) or 0)
+        payload["expected_total"] = len(expected)
+        if not expected:
+            payload["missing_count"] = 0
+            payload["missing_items"] = []
+            return payload
+
+        executed = []
+        for entry in entries or []:
+            raw = ""
+            if mode == "download":
+                raw = entry.get("tag", "")
+            elif mode == "asset":
+                raw = entry.get("tag", "") or entry.get("source_no", "")
+            else:
+                raw = entry.get("source_no", "") or entry.get("tag", "")
+            item = self._normalize_expected_runtime_item(raw, mode)
+            if item:
+                executed.append(item)
+        executed_set = set(executed)
+        missing_items = [item for item in expected if item not in executed_set]
+
+        failed_tags = []
+        seen_failed = set()
+        for raw in payload.get("failed_tags", []) or []:
+            item = self._normalize_expected_runtime_item(raw, mode)
+            if item and item not in seen_failed:
+                seen_failed.add(item)
+                failed_tags.append(item)
+        for item in missing_items:
+            if item not in seen_failed:
+                seen_failed.add(item)
+                failed_tags.append(item)
+
+        failed_details = list(payload.get("failed_details", []) or [])
+        for item in missing_items:
+            detail = f"{item} | 실행되지 않음"
+            if detail not in failed_details:
+                failed_details.append(detail)
+
+        total_expected = len(expected)
+        payload["total"] = max(total_expected, int(payload.get("total", 0) or 0))
+        payload["failed"] = max(int(payload.get("failed", 0) or 0), max(0, total_expected - payload["success"]))
+        payload["failed_tags"] = failed_tags
+        payload["failed_details"] = failed_details
+        payload["missing_count"] = len(missing_items)
+        payload["missing_items"] = missing_items
+        payload["failed_tags_compact"] = self._compact_failed_tags_text(
+            failed_tags,
+            prefix=(self.cfg.get("asset_loop_prefix") or "S").strip() if mode in {"asset", "download"} else "",
+            pad_width=self._asset_pad_width() if mode in {"asset", "download"} else 3,
+        )
+        return payload
 
     def on_start_pipeline_run(self):
         if self.pipeline_runtime_active:
@@ -3882,7 +4098,24 @@ class FlowVisionApp:
             num = 1
         return str(num).zfill(self._asset_pad_width())
 
-    def _parse_manual_number_spec(self, raw_text, upper_bound=None, max_items=500):
+    def _normalize_manual_number_token(self, token, allowed_prefixes=None):
+        text = str(token or "").strip()
+        if not text:
+            return ""
+        prefixes = []
+        for raw_prefix in allowed_prefixes or []:
+            prefix = str(raw_prefix or "").strip()
+            if prefix and prefix.lower() not in prefixes:
+                prefixes.append(prefix.lower())
+        lowered = text.lower()
+        for prefix in prefixes:
+            if lowered.startswith(prefix):
+                rest = text[len(prefix):].strip()
+                if rest:
+                    return rest
+        return text
+
+    def _parse_manual_number_spec(self, raw_text, upper_bound=None, max_items=500, allowed_prefixes=None):
         raw = str(raw_text or "").strip()
         if not raw:
             return {
@@ -3902,19 +4135,24 @@ class FlowVisionApp:
         for token in [x.strip() for x in raw.split(",") if x.strip()]:
             if "-" in token:
                 parts = [p.strip() for p in token.split("-", 1)]
-                if len(parts) != 2 or (not parts[0].isdigit()) or (not parts[1].isdigit()):
+                normalized_parts = [
+                    self._normalize_manual_number_token(part, allowed_prefixes=allowed_prefixes)
+                    for part in parts
+                ]
+                if len(parts) != 2 or (not normalized_parts[0].isdigit()) or (not normalized_parts[1].isdigit()):
                     invalid_tokens.append(token)
                     continue
-                start_num = int(parts[0])
-                end_num = int(parts[1])
+                start_num = int(normalized_parts[0])
+                end_num = int(normalized_parts[1])
                 if start_num > end_num:
                     start_num, end_num = end_num, start_num
                 values = range(start_num, end_num + 1)
             else:
-                if not token.isdigit():
+                normalized_token = self._normalize_manual_number_token(token, allowed_prefixes=allowed_prefixes)
+                if not normalized_token.isdigit():
                     invalid_tokens.append(token)
                     continue
-                values = [int(token)]
+                values = [int(normalized_token)]
 
             for value in values:
                 if value < 1:
@@ -3990,6 +4228,32 @@ class FlowVisionApp:
         else:
             parts.append(f"{_fmt(start)}-{_fmt(prev)}")
         return ",".join(parts)
+
+    def _compact_failed_tags_text(self, raw_tags, prefix="", pad_width=0):
+        prefix = str(prefix or "").strip()
+        numbers = []
+        seen = set()
+        allowed_prefixes = [prefix] if prefix else []
+        for raw in raw_tags or []:
+            token = self._normalize_manual_number_token(raw, allowed_prefixes=allowed_prefixes)
+            if not str(token or "").strip().isdigit():
+                continue
+            value = int(str(token).strip())
+            if value < 1 or value in seen:
+                continue
+            seen.add(value)
+            numbers.append(value)
+        spec = self._compress_numbers_to_spec(numbers, pad_width=pad_width)
+        if not spec or not prefix:
+            return spec
+        tagged_parts = []
+        for part in spec.split(","):
+            if "-" in part:
+                start_text, end_text = [x.strip() for x in part.split("-", 1)]
+                tagged_parts.append(f"{prefix}{start_text}-{prefix}{end_text}")
+            else:
+                tagged_parts.append(f"{prefix}{part}")
+        return ",".join(tagged_parts)
 
     def _latest_log_files(self, pattern):
         try:
@@ -4089,33 +4353,37 @@ class FlowVisionApp:
         return [], ""
 
     def _build_prompt_run_numbers(self):
-        source = list(getattr(self, "prompt_source_prompts", []) or [])
-        upper_bound = len(source)
-        raw = str(self.cfg.get("prompt_manual_selection", "") or "").strip()
-        info = self._parse_manual_number_spec(raw, upper_bound=upper_bound)
-        if not raw:
-            return list(range(1, upper_bound + 1)), info
-        return info.get("numbers", []), info
+        info = self._resolve_prompt_number_plan()
+        return list(info.get("numbers", []) or []), info
 
     def _refresh_prompt_run_sequence(self, update_preview=False):
-        source = self._load_prompt_source_prompts(update_preview=update_preview)
+        self._load_prompt_source_prompts(update_preview=update_preview)
+        source = list(getattr(self, "prompt_source_entries", []) or [])
         numbers = list(self.prompt_run_numbers or [])
         if not numbers:
-            self.prompts = list(source)
+            self.prompt_run_numbers = [int(entry.get("source_no")) for entry in source if entry.get("source_no")]
+            self.prompts = [str(entry.get("prompt", "") or "") for entry in source]
             return
+        number_map = {}
+        for entry in source:
+            try:
+                number_map.setdefault(int(entry.get("source_no")), entry)
+            except Exception:
+                continue
         filtered = []
         valid_numbers = []
         for num in numbers:
-            idx = num - 1
-            if 0 <= idx < len(source):
-                filtered.append(source[idx])
+            entry = number_map.get(num)
+            if entry is not None:
+                filtered.append(str(entry.get("prompt", "") or ""))
                 valid_numbers.append(num)
         self.prompt_run_numbers = valid_numbers
         self.prompts = filtered
 
     def _resolve_asset_number_plan(self):
         raw = str(self.cfg.get("asset_manual_selection", "") or "").strip()
-        info = self._parse_manual_number_spec(raw, upper_bound=None)
+        asset_prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
+        info = self._parse_manual_number_spec(raw, upper_bound=None, allowed_prefixes=[asset_prefix, "S"])
         if raw and info.get("numbers"):
             return info
 
@@ -4140,14 +4408,17 @@ class FlowVisionApp:
         }
 
     def _refresh_manual_selection_labels(self):
-        prompt_info = self._parse_manual_number_spec(
-            str(self.cfg.get("prompt_manual_selection", "") or "").strip(),
-            upper_bound=len(getattr(self, "prompt_source_prompts", []) or []),
-        )
+        prompt_info = self._resolve_prompt_number_plan()
         if hasattr(self, "lbl_prompt_manual_status"):
             if prompt_info.get("invalid_tokens"):
                 self.lbl_prompt_manual_status.config(
                     text=f"형식 확인: {', '.join(prompt_info['invalid_tokens'][:3])}",
+                    fg=self.color_error,
+                )
+            elif prompt_info.get("out_of_range"):
+                preview = ", ".join(str(x).zfill(3) for x in prompt_info.get("out_of_range", [])[:3])
+                self.lbl_prompt_manual_status.config(
+                    text=f"없는 번호: {preview}",
                     fg=self.color_error,
                 )
             elif prompt_info.get("raw"):
@@ -4186,8 +4457,8 @@ class FlowVisionApp:
         raw = path.read_text(encoding="utf-8")
         if update_preview and hasattr(self, "log_window"):
             self.log_window.set_preview(raw)
-        sep = self.cfg.get("prompts_separator", "|||")
-        self.prompt_source_prompts = [p.strip() for p in raw.split(sep) if p.strip()]
+        self.prompt_source_entries = self._parse_prompt_source_entries(raw)
+        self.prompt_source_prompts = [str(entry.get("prompt", "") or "") for entry in self.prompt_source_entries]
         self._refresh_manual_selection_labels()
         return list(self.prompt_source_prompts)
 
@@ -4483,6 +4754,13 @@ class FlowVisionApp:
                 "[role='button']:has-text('Video')",
                 "button[aria-label*='video' i]",
             ])
+        # 최근 Flow 다운로드 화면은 좌측 사이드바가 아이콘-only 버튼일 때가 있어
+        # 텍스트 selector가 모두 비어도 위치/메타 점수로 필터 버튼을 추정할 수 있게 한다.
+        cands.extend([
+            "button",
+            "[role='button']",
+            "div[role='button']",
+        ])
         seen = set()
         uniq = []
         for x in cands:
@@ -4507,10 +4785,12 @@ class FlowVisionApp:
             best = None
             best_sel = None
             best_score = float("-inf")
+            target_y = 165.0 if mode == "image" else 225.0
             for sel in self._download_filter_candidates(mode):
                 try:
                     loc = self.page.locator(sel)
-                    total = min(loc.count(), 20)
+                    upper = 80 if sel in ("button", "[role='button']", "div[role='button']") else 20
+                    total = min(loc.count(), upper)
                 except Exception:
                     continue
                 for i in range(total):
@@ -4528,16 +4808,29 @@ class FlowVisionApp:
                         continue
                     if box["y"] < 60 or box["y"] > (viewport_h * 0.55):
                         continue
-                    score = 1000.0 - (box["x"] * 1.8) - (abs((box["y"] + box["height"] / 2.0) - 170.0) * 0.5)
+                    if box["width"] < 18 or box["height"] < 18:
+                        continue
+                    if box["width"] > 96 or box["height"] > 96:
+                        continue
+                    cy = box["y"] + box["height"] / 2.0
+                    score = 1000.0 - (box["x"] * 1.8) - (abs(cy - target_y) * 2.2)
                     meta = self._locator_meta_text(cand)
                     if mode == "video":
                         if ("videocam" in meta) or ("view videos" in meta) or ("video" in meta) or ("영상" in meta):
                             score += 300.0
+                        if any(x in meta for x in ("image", "이미지", "photo", "사진")):
+                            score -= 520.0
                         if "동영상 x" in meta:
                             score -= 1200.0
                     else:
                         if ("image" in meta) or ("view images" in meta) or ("이미지" in meta):
                             score += 300.0
+                        if any(x in meta for x in ("video", "영상", "동영상", "videocam")):
+                            score -= 520.0
+                    if any(x in meta for x in ("upload", "업로드", "download", "다운로드", "search", "검색", "back", "뒤로", "menu", "메뉴")):
+                        score -= 650.0
+                    if abs(box["width"] - box["height"]) <= 12:
+                        score += 35.0
                     if score > best_score:
                         best_score = score
                         best = cand
@@ -4890,6 +5183,67 @@ class FlowVisionApp:
         except Exception:
             return None
 
+    def _find_primary_media_tile_box(self):
+        if not self.page:
+            return None
+        try:
+            return self.page.evaluate(
+                """() => {
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        if (!r || r.width < 160 || r.height < 90) return false;
+                        const st = window.getComputedStyle(el);
+                        if (!st) return false;
+                        return st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0';
+                    };
+                    const candidates = Array.from(document.querySelectorAll("video, img, canvas"));
+                    let best = null;
+                    let bestScore = -1e12;
+                    for (const el of candidates) {
+                        if (!isVisible(el)) continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.top < 70) continue;
+                        const area = r.width * r.height;
+                        const score = area - (r.top * 140) - (Math.abs(r.left - 120) * 8);
+                        if (score > bestScore) {
+                            bestScore = score;
+                            best = {x:r.left, y:r.top, width:r.width, height:r.height};
+                        }
+                    }
+                    return best;
+                }"""
+            )
+        except Exception:
+            return self._find_first_media_tile_box()
+
+    def _count_visible_media_tiles(self):
+        if not self.page:
+            return 0
+        try:
+            return int(self.page.evaluate(
+                """() => {
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        if (!r || r.width < 160 || r.height < 90) return false;
+                        const st = window.getComputedStyle(el);
+                        if (!st) return false;
+                        return st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0';
+                    };
+                    let count = 0;
+                    for (const el of Array.from(document.querySelectorAll("video, img, canvas"))) {
+                        if (!isVisible(el)) continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.top < 70) continue;
+                        count += 1;
+                    }
+                    return count;
+                }"""
+            ) or 0)
+        except Exception:
+            return 0
+
     def _resolve_more_button_near_box(self, box):
         if (not self.page) or (not box):
             return None, None
@@ -4927,10 +5281,67 @@ class FlowVisionApp:
                 meta = ""
             if any(x in meta for x in ("더보기", "more", "menu", "...", "⋮", "︙")):
                 score -= 220.0
+            if any(x in meta for x in ("play", "pause", "재생", "scene", "장면", "favorite", "즐겨찾기", "download", "다운로드", "reuse", "재사용", "신고", "copy", "복사", "delete", "삭제")):
+                score += 180.0
             if score < best_score:
                 best_score = score
                 best = cand
-        return (best, "") if best is not None else (None, None)
+        if best is None:
+            return None, None
+        return best, (self._locator_selector_hint(best) or "media-tile-top-right-button")
+
+    def _download_page_contains_tag(self, tag):
+        if (not self.page) or (not tag):
+            return False
+        patterns = self._download_tag_patterns(tag)
+        if not patterns:
+            return False
+        try:
+            matched = self.page.evaluate(
+                """(patterns) => {
+                    const normalize = (value) => String(value || "").replace(/\\s+/g, "").toUpperCase();
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        if (!r || r.width < 2 || r.height < 2) return false;
+                        const st = window.getComputedStyle(el);
+                        if (!st) return false;
+                        return st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0';
+                    };
+                    const isInputLike = (el) => {
+                        if (!el) return false;
+                        const tag = String(el.tagName || '').toLowerCase();
+                        if (tag === 'input' || tag === 'textarea') return true;
+                        if (el.isContentEditable) return true;
+                        const role = String(el.getAttribute('role') || '').toLowerCase();
+                        return role === 'textbox' || role === 'searchbox';
+                    };
+                    const nodes = Array.from(document.querySelectorAll("h1,h2,h3,[role='heading'],button,span,div,p,a,li"));
+                    for (const el of nodes) {
+                        if (!isVisible(el)) continue;
+                        if (isInputLike(el)) continue;
+                        if (el.querySelector("input, textarea, [role='textbox'], [role='searchbox'], [contenteditable='true']")) continue;
+                        const parts = [
+                            el.innerText || "",
+                            el.getAttribute('aria-label') || "",
+                            el.getAttribute('title') || "",
+                        ];
+                        const raw = parts.join(" ").trim();
+                        if (!raw || raw.length > 80) continue;
+                        const normalized = normalize(raw);
+                        if (!normalized) continue;
+                        if (patterns.some((pattern) => normalized.includes(String(pattern || '').toUpperCase()))) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }"""
+                ,
+                patterns,
+            )
+        except Exception:
+            return False
+        return bool(matched)
 
     def _asset_start_button_candidates(self):
         cands = []
@@ -6079,13 +6490,134 @@ class FlowVisionApp:
                 except Exception:
                     pass
 
+    def _normalize_download_tag(self, tag):
+        normalized = self._normalize_reference_asset_tag(tag)
+        if normalized:
+            return normalized
+        return str(tag or "").strip().upper()
+
+    def _normalize_download_search_text(self, text):
+        raw = str(text or "").strip()
+        return re.sub(r"\s+", "", raw).upper()
+
+    def _download_tag_patterns(self, tag):
+        normalized = self._normalize_download_tag(tag)
+        compact = self._normalize_download_search_text(normalized)
+        patterns = [compact] if compact else []
+        match = re.match(r"^([A-Z]+)(0*)([1-9][0-9]*)$", compact)
+        if match:
+            prefix = match.group(1)
+            number = str(int(match.group(3)))
+            # 숫자 단독(예: 2, 002)은 x2, 2부, 1080P 같은 화면 숫자와 너무 쉽게 충돌하므로
+            # 다운로드 태그 판정에서는 prefix가 붙은 형태만 허용한다.
+            patterns.append(f"{prefix}{number}")
+        return list(dict.fromkeys([x for x in patterns if x]))
+
+    def _download_card_matches_tag(self, card_loc, tag):
+        if card_loc is None:
+            return False, ""
+        meta = self._normalize_download_search_text(self._locator_meta_text(card_loc))
+        if not meta:
+            return False, ""
+        for pattern in self._download_tag_patterns(tag):
+            if pattern and pattern in meta:
+                return True, meta
+        return False, meta
+
+    def _resolve_download_card_for_tag(self, mode, tag, timeout_sec=6):
+        if not self.page:
+            return None, None, ""
+        end_ts = time.time() + max(1, timeout_sec)
+        best_fallback = None
+        best_fallback_sel = None
+        best_fallback_meta = ""
+        while time.time() < end_ts:
+            card_loc, card_sel = self._resolve_best_locator(
+                self._download_card_candidates(mode),
+                timeout_ms=1100,
+                prefer_enabled=False,
+            )
+            if card_loc is not None:
+                matched, meta = self._download_card_matches_tag(card_loc, tag)
+                if matched:
+                    return card_loc, card_sel, meta
+                if best_fallback is None:
+                    best_fallback = card_loc
+                    best_fallback_sel = card_sel
+                    best_fallback_meta = meta
+            time.sleep(0.35)
+        return best_fallback, best_fallback_sel, best_fallback_meta
+
+    def _fill_download_search_input(self, search_loc, tag):
+        if search_loc is None:
+            return False, "search locator 없음", ""
+
+        expected = self._normalize_download_search_text(tag)
+        if not expected:
+            return False, "empty-tag", ""
+
+        try:
+            search_loc.click(timeout=1500)
+        except Exception:
+            try:
+                search_loc.focus(timeout=1200)
+            except Exception:
+                pass
+
+        try:
+            search_loc.press("Control+A", timeout=1000)
+            search_loc.press("Backspace", timeout=1000)
+        except Exception:
+            try:
+                self.page.keyboard.press("Control+A")
+                self.page.keyboard.press("Backspace")
+            except Exception:
+                pass
+        try:
+            search_loc.fill(tag)
+        except Exception:
+            try:
+                search_loc.type(tag, delay=random.randint(20, 60))
+            except Exception:
+                pass
+
+        time.sleep(0.12)
+        typed_text = self._normalize_download_search_text(self._read_input_text(search_loc))
+        if typed_text == expected:
+            self.log(f"✅ 다운로드 검색 입력 완료: {tag}")
+            return True, "", ""
+
+        try:
+            search_loc.click(timeout=1200)
+        except Exception:
+            pass
+        try:
+            self.page.keyboard.press("Control+A")
+            self.page.keyboard.press("Backspace")
+            self.page.keyboard.insert_text(tag)
+        except Exception:
+            pass
+        time.sleep(0.12)
+        typed_text = self._normalize_download_search_text(self._read_input_text(search_loc))
+        if typed_text == expected:
+            self.log(f"✅ 다운로드 검색 입력 완료(포커스 폴백): {tag}")
+            return True, "", ""
+
+        ok_dom, reason_dom, sel_dom = self._direct_fill_download_search_via_dom(tag)
+        if ok_dom:
+            self.log(f"✅ 다운로드 검색 입력 완료(DOM 폴백): {tag}")
+            return True, "", sel_dom or "dom-search-fallback"
+
+        reason = f"검색어 입력 실패: typed='{typed_text or '-'}' / dom={reason_dom}"
+        return False, reason, ""
+
     def _click_download_filter(self, mode, used):
         filter_loc, filter_sel = self._resolve_download_filter_button(mode, timeout_sec=5)
         if filter_loc is None:
             # 필터 버튼을 못 찾아도 현재 화면이 이미 해당 필터일 수 있어 실패로 보지 않는다.
             self.log(f"ℹ️ {'이미지' if mode == 'image' else '영상'} 필터 버튼 미탐지(현재 화면 유지)")
             return False
-        used["filter"] = filter_sel or ""
+        used["filter"] = filter_sel or (self._locator_selector_hint(filter_loc) or "download-filter-fallback")
         self._download_action_delay("필터 클릭 전 안정화", 0.2, 0.7)
         self._click_with_actor_fallback(filter_loc, f"{'이미지' if mode == 'image' else '영상'} 필터")
         self._download_action_delay("필터 적용 대기", 0.2, 0.9)
@@ -6139,7 +6671,7 @@ class FlowVisionApp:
                 best = cand
         if best is not None:
             key = "download_image_more_selector" if mode == "image" else "download_video_more_selector"
-            return best, self.cfg.get(key, "")
+            return best, (self.cfg.get(key, "") or self._locator_selector_hint(best) or "download-card-more")
         return None, None
 
     def _apply_vertical_quality_path_if_needed(self, mode, quality, quality_loc):
@@ -6172,6 +6704,7 @@ class FlowVisionApp:
         if not self.page:
             raise RuntimeError("브라우저 페이지가 없습니다.")
         mode = "image" if mode == "image" else "video"
+        tag = self._normalize_download_tag(tag)
         quality = self._download_quality(mode) if not quality else str(quality).strip().upper()
         wait_sec = max(3, min(120, int(wait_sec)))
         used = {"search_input": "", "filter": "", "card": "", "more": "", "menu": "", "quality": ""}
@@ -6185,85 +6718,119 @@ class FlowVisionApp:
                 raise RuntimeError(f"검색 입력칸을 찾지 못했습니다. (dom={reason_dom})")
             used["search_input"] = sel_dom or "dom-search-fallback"
             self.log(f"✅ 다운로드 검색 입력 완료(DOM 폴백): {tag}")
-            self.page.keyboard.press("Enter")
             self._download_action_delay("검색 결과 반영 대기", 0.4, 1.2)
         else:
             used["search_input"] = search_sel or ""
-            try:
-                search_loc.click(timeout=1500)
-            except Exception:
-                pass
-            try:
-                self.page.keyboard.press("Control+A")
-                self.page.keyboard.press("Backspace")
-            except Exception:
-                pass
-            try:
-                search_loc.fill(tag)
-            except Exception:
-                try:
-                    search_loc.type(tag, delay=random.randint(20, 60))
-                except Exception:
-                    ok_dom, reason_dom, sel_dom = self._direct_fill_download_search_via_dom(tag)
-                    if not ok_dom:
-                        raise RuntimeError(f"검색어 입력 실패: {reason_dom}")
-                    used["search_input"] = sel_dom or used["search_input"] or "dom-search-fallback"
-                    self.log(f"✅ 다운로드 검색 입력 완료(DOM 폴백): {tag}")
-            self.page.keyboard.press("Enter")
+            ok_fill, fill_reason, sel_dom = self._fill_download_search_input(search_loc, tag)
+            if not ok_fill:
+                raise RuntimeError(fill_reason or "검색어 입력 실패")
+            if sel_dom:
+                used["search_input"] = sel_dom or used["search_input"] or "dom-search-fallback"
             self._download_action_delay("검색 결과 반영 대기", 0.4, 1.2)
 
         deadline = time.time() + wait_sec
+        search_started_ts = time.time()
+        result_lookup_deadline = min(deadline, search_started_ts + 12.0)
+        search_enter_sent = False
+        tag_confirmed = False
         card_loc = None
         card_sel = None
+        card_meta = ""
         more_loc = None
         more_sel = None
         while time.time() < deadline:
-            card_loc, card_sel = self._resolve_best_locator(
-                self._download_card_candidates(mode),
-                timeout_ms=1100,
-                prefer_enabled=False,
-            )
+            tile_count = self._count_visible_media_tiles()
+            card_loc, card_sel, card_meta = self._resolve_download_card_for_tag(mode, tag, timeout_sec=1.4)
+            page_has_tag = False
             if card_loc is not None:
-                used["card"] = card_sel or ""
-                try:
-                    self.actor.move_to_locator(card_loc, label=f"결과 카드({tag})")
-                except Exception:
+                used["card"] = card_sel or (self._locator_selector_hint(card_loc) or "download-card")
+                matched, _ = self._download_card_matches_tag(card_loc, tag)
+                if not matched:
+                    page_has_tag = self._download_page_contains_tag(tag)
+                    if not page_has_tag:
+                        self.log(
+                            f"ℹ️ 다운로드 결과 카드 태그 불일치 - 계속 탐색 | 요청: {tag} | "
+                            f"후보 meta: {(card_meta or '')[:120]}"
+                        )
+                        card_loc = None
+                        card_sel = None
+                        card_meta = ""
+                        time.sleep(0.35)
+                        continue
+                    self.log(f"ℹ️ 카드 태그는 불일치했지만, 페이지 상단/본문에서 {tag} 표시를 확인해 타일 기준으로 계속 진행합니다.")
+                    tag_confirmed = True
+                    card_loc = None
+                    card_sel = None
+                    card_meta = ""
+                else:
+                    page_has_tag = True
+                    tag_confirmed = True
                     try:
-                        card_loc.hover(timeout=1000)
+                        self.actor.move_to_locator(card_loc, label=f"결과 카드({tag})")
                     except Exception:
-                        pass
-                more_loc, more_sel = self._resolve_best_locator(
-                    self._download_more_candidates(mode),
-                    near_locator=card_loc,
-                    timeout_ms=1000,
-                    prefer_enabled=False,
-                )
-                if more_loc is None:
-                    more_loc, more_sel = self._resolve_more_button_from_card(card_loc, mode)
-                if more_loc is None:
-                    try:
-                        box = card_loc.bounding_box()
-                    except Exception:
-                        box = None
-                    more_loc, more_sel = self._resolve_more_button_near_box(box)
+                        try:
+                            card_loc.hover(timeout=1000)
+                        except Exception:
+                            pass
+                    more_loc, more_sel = self._resolve_best_locator(
+                        self._download_more_candidates(mode),
+                        near_locator=card_loc,
+                        timeout_ms=1000,
+                        prefer_enabled=False,
+                    )
+                    if more_loc is None:
+                        more_loc, more_sel = self._resolve_more_button_from_card(card_loc, mode)
+                    if more_loc is None:
+                        try:
+                            box = card_loc.bounding_box()
+                        except Exception:
+                            box = None
+                        more_loc, more_sel = self._resolve_more_button_near_box(box)
             if more_loc is None:
-                tile_box = self._find_first_media_tile_box()
-                if tile_box:
+                tile_box = self._find_primary_media_tile_box()
+                single_result_like = tile_count > 0 and tile_count <= 2
+                if tile_box and (page_has_tag or self._download_page_contains_tag(tag) or single_result_like):
                     try:
                         self.page.mouse.move(
                             float(tile_box["x"]) + float(tile_box["width"]) * 0.5,
-                            float(tile_box["y"]) + float(tile_box["height"]) * 0.45,
+                            float(tile_box["y"]) + min(float(tile_box["height"]) * 0.28, 140.0),
                             steps=8,
                         )
                     except Exception:
                         pass
                     more_loc, more_sel = self._resolve_more_button_near_box(tile_box)
+                    if more_loc is not None and not used.get("card"):
+                        used["card"] = "media-tile-fallback"
+                    if more_loc is not None and single_result_like:
+                        self.log(f"ℹ️ 검색 결과 단일 타일({tile_count}개)로 판단해 대표 타일 기준 더보기를 시도합니다.")
+                        tag_confirmed = True
             if more_loc is not None:
-                used["more"] = more_sel or ""
+                used["more"] = more_sel or (self._locator_selector_hint(more_loc) or "download-more-fallback")
                 break
+            if (
+                (not search_enter_sent)
+                and (time.time() + 1.0 < deadline)
+                and (time.time() - search_started_ts) >= 2.5
+                and tile_count <= 0
+            ):
+                try:
+                    if search_loc is not None:
+                        search_loc.press("Enter", timeout=1000)
+                    else:
+                        self.page.keyboard.press("Enter")
+                    search_enter_sent = True
+                    self.log(f"ℹ️ 검색 결과 재확인을 위해 Enter 1회 재시도: {tag}")
+                    self._download_action_delay("검색 결과 재반영 대기", 0.3, 0.9)
+                    continue
+                except Exception:
+                    search_enter_sent = True
+            if (not tag_confirmed) and time.time() >= result_lookup_deadline:
+                raise RuntimeError(f"검색 결과에 {tag} 항목이 없습니다.")
             time.sleep(0.5)
 
         if more_loc is None:
+            if not tag_confirmed and not self._download_page_contains_tag(tag):
+                raise RuntimeError(f"검색 결과에 {tag} 항목이 없습니다.")
             raise RuntimeError(f"더보기 버튼을 찾지 못했습니다. (대기 {wait_sec}초)")
 
         self._download_action_delay("더보기 클릭 전 안정화", 0.25, 0.9)
@@ -6280,6 +6847,12 @@ class FlowVisionApp:
         if menu_loc is None:
             # 더보기 메뉴가 짧게 닫힌 경우 1회 재시도
             try:
+                tile_box = self._find_primary_media_tile_box()
+                if tile_box:
+                    more_retry, more_retry_sel = self._resolve_more_button_near_box(tile_box)
+                    if more_retry is not None:
+                        more_loc = more_retry
+                        used["more"] = more_retry_sel or used.get("more") or "download-more-retry"
                 self._click_with_actor_fallback(more_loc, "더보기 버튼(재시도)")
                 self.actor.random_action_delay("다운로드 메뉴 재표시 대기", 0.2, 0.7)
             except Exception:
@@ -6504,7 +7077,8 @@ class FlowVisionApp:
             entries = list(getattr(self, "download_session_log", []) or [])
             failed = [x for x in entries if x.get("status") != "success"]
             success = len(entries) - len(failed)
-            return {
+            failed_tags = [x.get("tag", "") for x in failed if x.get("tag")]
+            payload = {
                 "run_mode": "download",
                 "title": "다운로드 자동화",
                 "started_at": started_at,
@@ -6512,7 +7086,12 @@ class FlowVisionApp:
                 "total": len(entries),
                 "success": success,
                 "failed": len(failed),
-                "failed_tags": [x.get("tag", "") for x in failed if x.get("tag")],
+                "failed_tags": failed_tags,
+                "failed_tags_compact": self._compact_failed_tags_text(
+                    failed_tags,
+                    prefix=(self.cfg.get("asset_loop_prefix") or "S").strip() or "S",
+                    pad_width=self._asset_pad_width(),
+                ),
                 "prompt_file": "",
                 "output_dir": str(self._resolve_download_output_dir()),
                 "action_log_path": str(self.action_log_path) if self.action_log_path else "",
@@ -6522,10 +7101,12 @@ class FlowVisionApp:
                 "failed_details": [f"{x.get('tag', '')} | {(x.get('error') or '').strip()}" for x in failed],
                 "retry_errors": retry_errors,
             }
+            return self._apply_expected_shortfall_to_payload(payload, entries, "download")
         entries = list(getattr(self, "session_log", []) or [])
         failed_entries = [x for x in entries if x.get("status") == "failed"]
         success_entries = [x for x in entries if x.get("status") != "failed"]
-        return {
+        failed_tags = [x.get("tag", "") or str(x.get("source_no", "")) for x in failed_entries if x.get("tag") or x.get("source_no")]
+        payload = {
             "run_mode": mode,
             "title": "S자동화" if mode == "asset" else "프롬프트 자동화",
             "started_at": started_at,
@@ -6533,7 +7114,12 @@ class FlowVisionApp:
             "total": len(entries),
             "success": len(success_entries),
             "failed": len(failed_entries),
-            "failed_tags": [x.get("tag", "") or str(x.get("source_no", "")) for x in failed_entries if x.get("tag") or x.get("source_no")],
+            "failed_tags": failed_tags,
+            "failed_tags_compact": self._compact_failed_tags_text(
+                failed_tags,
+                prefix=(self.cfg.get("asset_loop_prefix") or "S").strip() if mode == "asset" else "",
+                pad_width=self._asset_pad_width() if mode == "asset" else 3,
+            ),
             "prompt_file": str(self.cfg.get("prompts_file", "") or ""),
             "output_dir": "",
             "action_log_path": str(self.action_log_path) if self.action_log_path else "",
@@ -6546,6 +7132,7 @@ class FlowVisionApp:
             ],
             "retry_errors": retry_errors,
         }
+        return self._apply_expected_shortfall_to_payload(payload, entries, mode)
 
     def _append_pipeline_runtime_result(self, payload):
         if not self.pipeline_runtime_active:
@@ -6590,6 +7177,11 @@ class FlowVisionApp:
             "selection_summary": "",
             "selection_input": "",
             "failed_tags": failed_tags,
+            "failed_tags_compact": self._compact_failed_tags_text(
+                failed_tags,
+                prefix=(self.cfg.get("asset_loop_prefix") or "S").strip() or "S",
+                pad_width=self._asset_pad_width(),
+            ),
             "failed_details": failed_details,
             "retry_errors": retry_errors,
         }
@@ -6662,6 +7254,8 @@ class FlowVisionApp:
                         if len(step_failed_tags) > 12:
                             preview += f" 외 {len(step_failed_tags) - 12}개"
                         lines.append(f"  실패 항목: {preview}")
+                    if item.get("failed_tags_compact"):
+                        lines.append(f"  실패 번호 복붙: {item.get('failed_tags_compact')}")
                     step_failed_details = item.get("failed_details", []) or []
                     if step_failed_details:
                         for detail in step_failed_details[:6]:
@@ -6697,6 +7291,8 @@ class FlowVisionApp:
             if len(failed_tags) > 8:
                 preview += f" 외 {len(failed_tags) - 8}개"
             lines.append(f"실패 항목: {preview}")
+        if payload.get("failed_tags_compact"):
+            lines.append(f"실패 번호 복붙: {payload.get('failed_tags_compact')}")
         failed_details = payload.get("failed_details", []) or []
         if failed_details:
             lines.append("")
@@ -7343,7 +7939,7 @@ class FlowVisionApp:
         self.entry_asset_manual_selection.bind("<FocusOut>", self.on_option_toggle)
         self.entry_asset_manual_selection.bind("<Return>", self.on_option_toggle)
         self.entry_asset_manual_selection.bind("<KeyRelease>", self.on_option_toggle)
-        ToolTip(self.entry_asset_manual_selection, "예: 005,018,048,057,071-079,110")
+        ToolTip(self.entry_asset_manual_selection, "예: 005,018,048,057,071-079,110 또는 S005,S018,S071-S079")
         ttk.Button(asset_manual_f, text="최근 실패 자동채움", command=self.on_fill_asset_manual_from_failures).pack(side="left", padx=(6, 0))
         self.lbl_asset_manual_status = tk.Label(asset_f, text="", bg=self.color_bg, fg=self.color_text_sec, font=self.font_small)
         self.lbl_asset_manual_status.pack(anchor="w", pady=(0, 6))
@@ -11760,6 +12356,9 @@ class FlowVisionApp:
             return
         run_mode = self.current_run_mode or ("asset" if self.cfg.get("asset_loop_enabled") else "prompt")
         is_download_mode = (run_mode == "download")
+        # 시작 직전 UI 최신값을 cfg에 먼저 반영해야
+        # 다운로드 개별 번호/시작끝 범위가 바로 실행 대상에 들어간다.
+        self.on_option_toggle()
         if not is_download_mode:
             self.on_reload() # 시작 시 프롬프트 최신화
         try:
@@ -11809,14 +12408,17 @@ class FlowVisionApp:
                 messagebox.showwarning("주의", "다운로드 대상 S번호가 비어 있습니다.\n시작/끝 번호를 확인해주세요.")
                 return
             self.current_selection_input = str(self.cfg.get("asset_manual_selection", "") or "").strip()
-            if self.current_selection_input:
-                self.current_selection_summary = self._format_manual_selection_preview(
+            if not self.current_selection_input and asset_plan.get("numbers"):
+                self.current_selection_input = self._compress_numbers_to_spec(
                     asset_plan.get("numbers", []),
-                    prefix=(self.cfg.get("asset_loop_prefix") or "S").strip() or "S",
                     pad_width=self._asset_pad_width(),
                 )
-            else:
-                self.current_selection_summary = "시작~끝 범위 전체 실행"
+            self.current_selection_summary = self._format_manual_selection_preview(
+                asset_plan.get("numbers", []),
+                prefix=(self.cfg.get("asset_loop_prefix") or "S").strip() or "S",
+                pad_width=self._asset_pad_width(),
+            )
+            self._set_current_expected_items("download", self.download_items)
             self._update_progress_ui()
             self.cfg["scheduled_start_enabled"] = False
             self.cfg["scheduled_start_at"] = ""
@@ -11839,14 +12441,17 @@ class FlowVisionApp:
                 missing_asset_prompts = list(getattr(self, "asset_prompt_missing_numbers", []) or [])
                 self.prompts = [item["prompt"] for item in self.asset_loop_items]
                 self.current_selection_input = str(self.cfg.get("asset_manual_selection", "") or "").strip()
-                if self.current_selection_input:
-                    self.current_selection_summary = self._format_manual_selection_preview(
+                if not self.current_selection_input and asset_plan.get("numbers"):
+                    self.current_selection_input = self._compress_numbers_to_spec(
                         asset_plan.get("numbers", []),
-                        prefix=(self.cfg.get("asset_loop_prefix") or "S").strip() or "S",
                         pad_width=self._asset_pad_width(),
                     )
-                else:
-                    self.current_selection_summary = "시작~끝 범위 전체 실행"
+                self.current_selection_summary = self._format_manual_selection_preview(
+                    asset_plan.get("numbers", []),
+                    prefix=(self.cfg.get("asset_loop_prefix") or "S").strip() or "S",
+                    pad_width=self._asset_pad_width(),
+                )
+                self._set_current_expected_items("asset", [item.get("tag", "") for item in self.asset_loop_items])
                 if self.cfg.get("asset_use_prompt_slot") and missing_asset_prompts:
                     preview = ", ".join(f"S{str(n).zfill(self._asset_pad_width())}" for n in missing_asset_prompts[:5])
                     if len(missing_asset_prompts) > 5:
@@ -11864,6 +12469,7 @@ class FlowVisionApp:
                 self._refresh_prompt_run_sequence(update_preview=False)
                 self.current_selection_input = str(self.cfg.get("prompt_manual_selection", "") or "").strip()
                 self.current_selection_summary = self._format_manual_selection_preview(prompt_numbers, prefix="", pad_width=3) if self.current_selection_input else "전체 프롬프트 실행"
+                self._set_current_expected_items("prompt", prompt_numbers)
             
             if not self.prompts and not self.cfg.get("relay_mode"):
                 if self.cfg.get("asset_loop_enabled"):
@@ -11915,7 +12521,6 @@ class FlowVisionApp:
         self.btn_stop.config(state="normal")
         self.update_status_label("🚀 시작 중...", self.color_success)
         self.play_sound("start")
-        self.on_option_toggle()
         if is_download_mode:
             mode_label = "영상" if self._download_mode() == "video" else "이미지"
             self.log(f"🚀 다운로드 자동화 시작 | 모드={mode_label} | 대상={len(self.download_items)}개 | 실패판단대기={self.cfg.get('download_wait_seconds', 20)}초 | 선택={self.current_selection_summary}")
@@ -12047,6 +12652,8 @@ class FlowVisionApp:
         self.download_report_path = None
         self.current_selection_summary = ""
         self.current_selection_input = ""
+        self.current_expected_mode = None
+        self.current_expected_items = []
         try:
             self.combo_input_mode.config(state="readonly")
         except Exception:
@@ -12688,12 +13295,16 @@ class FlowVisionApp:
         
     def on_jump_to(self, event=None):
         if not self.prompts: return
-        total = len(self.prompts)
+        numbers = list(self.prompt_run_numbers or [])
+        if not numbers:
+            numbers = list(range(1, len(self.prompts) + 1))
+        min_no = min(numbers)
+        max_no = max(numbers)
         try:
-            target = simpledialog.askinteger("이동", f"이동할 번호를 입력하세요 (1 ~ {total}):", parent=self.root)
+            target = simpledialog.askinteger("이동", f"이동할 번호를 입력하세요 ({min_no} ~ {max_no}):", parent=self.root)
             if target is not None:
-                idx = target - 1
-                if 0 <= idx < total:
+                if target in numbers:
+                    idx = numbers.index(target)
                     self.index = idx
                     self._update_progress_ui()
                     self.log(f"🚀 {target}번으로 점프!")
@@ -12706,17 +13317,21 @@ class FlowVisionApp:
         try:
             val = self.ent_jump.get().strip()
             if not val: return
-            target = int(val)
-            total = len(self.prompts)
-            idx = target - 1
-            if 0 <= idx < total:
+            prefix = self._prompt_source_prefix()
+            normalized = self._normalize_manual_number_token(val, allowed_prefixes=[prefix, "S"])
+            target = int(normalized)
+            numbers = list(self.prompt_run_numbers or [])
+            if not numbers:
+                numbers = list(range(1, len(self.prompts) + 1))
+            if target in numbers:
+                idx = numbers.index(target)
                 self.index = idx
                 self._update_progress_ui()
                 self.log(f"🚀 {target}번으로 직접 이동!")
                 self.ent_jump.delete(0, 'end')
                 self.root.focus() # 포커스 해제
             else:
-                messagebox.showwarning("범위 초과", f"1부터 {total} 사이의 숫자를 입력하세요.")
+                messagebox.showwarning("범위 초과", "존재하지 않는 번호입니다.")
         except ValueError:
             messagebox.showerror("오류", "숫자만 입력 가능합니다.")
 
@@ -12839,6 +13454,8 @@ class FlowVisionApp:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.session_report_path = self.logs_dir / f"session_report_{stamp}.json"
         try:
+            failed_entries = [x for x in self.session_log if x.get("status") == "failed"]
+            failed_tags = [x.get("tag", "") or str(x.get("source_no", "")) for x in failed_entries if x.get("tag") or x.get("source_no")]
             payload = {
                 "created_at": datetime.now().isoformat(),
                 "started_at": getattr(self, "session_start_time", datetime.now()).isoformat() if hasattr(getattr(self, "session_start_time", None), "isoformat") else str(getattr(self, "session_start_time", "")),
@@ -12847,8 +13464,19 @@ class FlowVisionApp:
                 "selection_summary": self.current_selection_summary,
                 "selection_input": self.current_selection_input,
                 "retry_errors": list(getattr(self, "retry_error_log", []) or []),
+                "failed_tags_compact": self._compact_failed_tags_text(
+                    failed_tags,
+                    prefix=(self.cfg.get("asset_loop_prefix") or "S").strip() if self.cfg.get("asset_loop_enabled") else "",
+                    pad_width=self._asset_pad_width() if self.cfg.get("asset_loop_enabled") else 3,
+                ),
                 "entries": self.session_log,
             }
+            payload = self._apply_expected_shortfall_to_payload(
+                payload,
+                self.session_log,
+                "asset" if self.cfg.get("asset_loop_enabled") else "prompt",
+            )
+            payload["total_processed"] = payload.get("total", len(self.session_log))
             self.session_report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             self.log(f"🧾 세션 리포트 저장: {self.session_report_path.name}")
         except Exception as e:
@@ -12862,6 +13490,7 @@ class FlowVisionApp:
             self.download_report_path = self.logs_dir / f"download_report_{stamp}.json"
         try:
             failed = [x for x in self.download_session_log if x.get("status") != "success"]
+            failed_tags = [x.get("tag", "") for x in failed if x.get("tag")]
             payload = {
                 "created_at": datetime.now().isoformat(),
                 "started_at": getattr(self, "session_start_time", datetime.now()).isoformat() if hasattr(getattr(self, "session_start_time", None), "isoformat") else str(getattr(self, "session_start_time", "")),
@@ -12876,13 +13505,19 @@ class FlowVisionApp:
                 "total": len(self.download_session_log),
                 "success": len(self.download_session_log) - len(failed),
                 "failed": len(failed),
-                "failed_tags": [x.get("tag", "") for x in failed],
+                "failed_tags": failed_tags,
+                "failed_tags_compact": self._compact_failed_tags_text(
+                    failed_tags,
+                    prefix=(self.cfg.get("asset_loop_prefix") or "S").strip() or "S",
+                    pad_width=self._asset_pad_width(),
+                ),
                 "entries": self.download_session_log,
                 "summary_lines": [
                     f"{x.get('tag', '')} | {'성공' if x.get('status') == 'success' else '실패'} | {x.get('mode', '')}/{x.get('quality', '')} | {(x.get('file_name') or x.get('error') or '').strip()}"
                     for x in self.download_session_log
                 ],
             }
+            payload = self._apply_expected_shortfall_to_payload(payload, self.download_session_log, "download")
             self.download_report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             self.log(f"🧾 다운로드 리포트 저장: {self.download_report_path.name}")
         except Exception as e:
