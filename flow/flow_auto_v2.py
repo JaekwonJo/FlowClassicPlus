@@ -6172,6 +6172,7 @@ class FlowVisionApp:
             except Exception:
                 pass
 
+        time.sleep(0.12)
         typed_text = self._normalize_download_search_text(self._read_input_text(search_loc))
         if typed_text == expected:
             self.log(f"✅ 다운로드 검색 입력 완료: {tag}")
@@ -6188,6 +6189,7 @@ class FlowVisionApp:
             self.page.keyboard.insert_text(tag)
         except Exception:
             pass
+        time.sleep(0.12)
         typed_text = self._normalize_download_search_text(self._read_input_text(search_loc))
         if typed_text == expected:
             self.log(f"✅ 다운로드 검색 입력 완료(포커스 폴백): {tag}")
@@ -6309,7 +6311,6 @@ class FlowVisionApp:
                 raise RuntimeError(f"검색 입력칸을 찾지 못했습니다. (dom={reason_dom})")
             used["search_input"] = sel_dom or "dom-search-fallback"
             self.log(f"✅ 다운로드 검색 입력 완료(DOM 폴백): {tag}")
-            self.page.keyboard.press("Enter")
             self._download_action_delay("검색 결과 반영 대기", 0.4, 1.2)
         else:
             used["search_input"] = search_sel or ""
@@ -6318,10 +6319,10 @@ class FlowVisionApp:
                 raise RuntimeError(fill_reason or "검색어 입력 실패")
             if sel_dom:
                 used["search_input"] = sel_dom or used["search_input"] or "dom-search-fallback"
-            self.page.keyboard.press("Enter")
             self._download_action_delay("검색 결과 반영 대기", 0.4, 1.2)
 
         deadline = time.time() + wait_sec
+        search_enter_sent = False
         card_loc = None
         card_sel = None
         card_meta = ""
@@ -6378,6 +6379,18 @@ class FlowVisionApp:
             if more_loc is not None:
                 used["more"] = more_sel or ""
                 break
+            if (not search_enter_sent) and (time.time() + 1.0 < deadline):
+                try:
+                    if search_loc is not None:
+                        search_loc.press("Enter", timeout=1000)
+                    else:
+                        self.page.keyboard.press("Enter")
+                    search_enter_sent = True
+                    self.log(f"ℹ️ 검색 결과 재확인을 위해 Enter 1회 재시도: {tag}")
+                    self._download_action_delay("검색 결과 재반영 대기", 0.3, 0.9)
+                    continue
+                except Exception:
+                    search_enter_sent = True
             time.sleep(0.5)
 
         if more_loc is None:
