@@ -12091,6 +12091,7 @@ class FlowVisionApp:
                 messagebox.showwarning("입력 오류", "태그를 입력해주세요.")
                 self.update_status_label(f"⚠️ {mode_txt} 다운로드 테스트 취소", self.color_error)
                 return
+            tag = self._normalize_download_tag(tag)
 
             quality = self._download_quality(mode)
             result = self._run_single_download_flow(mode=mode, tag=tag, quality=quality, dry_run=False, wait_sec=60, is_test=True)
