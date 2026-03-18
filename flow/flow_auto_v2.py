@@ -6079,6 +6079,61 @@ class FlowVisionApp:
                 except Exception:
                     pass
 
+    def _normalize_download_tag(self, tag):
+        normalized = self._normalize_reference_asset_tag(tag)
+        if normalized:
+            return normalized
+        return str(tag or "").strip().upper()
+
+    def _download_tag_patterns(self, tag):
+        normalized = self._normalize_download_tag(tag)
+        compact = self._normalize_download_search_text(normalized)
+        patterns = [compact] if compact else []
+        m = re.match(r"^([A-Z]+)(0*)([1-9][0-9]*)$", compact)
+        if m:
+            prefix = m.group(1)
+            number = str(int(m.group(3)))
+            patterns.append(f"{prefix}{number}")
+            patterns.append(number)
+            patterns.append(m.group(3).zfill(self._asset_pad_width()))
+        return list(dict.fromkeys([x for x in patterns if x]))
+
+    def _download_card_matches_tag(self, card_loc, tag):
+        if card_loc is None:
+            return False, ""
+        meta = self._normalize_download_search_text(self._locator_meta_text(card_loc))
+        if not meta:
+            return False, ""
+        patterns = self._download_tag_patterns(tag)
+        for pattern in patterns:
+            if pattern and pattern in meta:
+                return True, meta
+        return False, meta
+
+    def _resolve_download_card_for_tag(self, mode, tag, timeout_sec=6):
+        if not self.page:
+            return None, None, ""
+        end_ts = time.time() + max(1, timeout_sec)
+        best_fallback = None
+        best_fallback_sel = None
+        best_fallback_meta = ""
+        while time.time() < end_ts:
+            card_loc, card_sel = self._resolve_best_locator(
+                self._download_card_candidates(mode),
+                timeout_ms=1100,
+                prefer_enabled=False,
+            )
+            if card_loc is not None:
+                matched, meta = self._download_card_matches_tag(card_loc, tag)
+                if matched:
+                    return card_loc, card_sel, meta
+                if best_fallback is None:
+                    best_fallback = card_loc
+                    best_fallback_sel = card_sel
+                    best_fallback_meta = meta
+            time.sleep(0.35)
+        return best_fallback, best_fallback_sel, best_fallback_meta
+
     def _normalize_download_search_text(self, text):
         raw = str(text or "").strip()
         return re.sub(r"\s+", "", raw).upper()
@@ -6240,6 +6295,7 @@ class FlowVisionApp:
         if not self.page:
             raise RuntimeError("브라우저 페이지가 없습니다.")
         mode = "image" if mode == "image" else "video"
+        tag = self._normalize_download_tag(tag)
         quality = self._download_quality(mode) if not quality else str(quality).strip().upper()
         wait_sec = max(3, min(120, int(wait_sec)))
         used = {"search_input": "", "filter": "", "card": "", "more": "", "menu": "", "quality": ""}
@@ -6268,16 +6324,24 @@ class FlowVisionApp:
         deadline = time.time() + wait_sec
         card_loc = None
         card_sel = None
+        card_meta = ""
         more_loc = None
         more_sel = None
         while time.time() < deadline:
-            card_loc, card_sel = self._resolve_best_locator(
-                self._download_card_candidates(mode),
-                timeout_ms=1100,
-                prefer_enabled=False,
-            )
+            card_loc, card_sel, card_meta = self._resolve_download_card_for_tag(mode, tag, timeout_sec=1.4)
             if card_loc is not None:
                 used["card"] = card_sel or ""
+                matched, _ = self._download_card_matches_tag(card_loc, tag)
+                if not matched:
+                    self.log(
+                        f"ℹ️ 다운로드 결과 카드 태그 불일치 - 계속 탐색 | 요청: {tag} | "
+                        f"후보 meta: {(card_meta or '')[:120]}"
+                    )
+                    card_loc = None
+                    card_sel = None
+                    card_meta = ""
+                    time.sleep(0.35)
+                    continue
                 try:
                     self.actor.move_to_locator(card_loc, label=f"결과 카드({tag})")
                 except Exception:
@@ -11548,6 +11612,7 @@ class FlowVisionApp:
                 messagebox.showwarning("입력 오류", "태그를 입력해주세요.")
                 self.update_status_label(f"⚠️ {mode_txt} 다운로드 테스트 취소", self.color_error)
                 return
+            tag = self._normalize_download_tag(tag)
 
             quality = self._download_quality(mode)
             result = self._run_single_download_flow(mode=mode, tag=tag, quality=quality, dry_run=False, wait_sec=60, is_test=True)
