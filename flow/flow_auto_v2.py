@@ -6816,6 +6816,144 @@ class FlowVisionApp:
         except Exception:
             return
 
+    def _find_download_upscale_toast_close_points(self):
+        if not self.page:
+            return []
+        try:
+            points = self.page.evaluate(
+                """() => {
+                    const roots = [];
+                    const queue = [document];
+                    while (queue.length) {
+                        const root = queue.shift();
+                        roots.push(root);
+                        const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
+                        for (const node of nodes) {
+                            if (node && node.shadowRoot) queue.push(node.shadowRoot);
+                        }
+                    }
+
+                    const norm = (value) => String(value || "").replace(/\\s+/g, "").toLowerCase();
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const rect = el.getBoundingClientRect();
+                        if (!rect || rect.width < 6 || rect.height < 6) return false;
+                        const style = window.getComputedStyle(el);
+                        return style && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+                    };
+                    const toastHits = [
+                        "업스케일링이완료되었습니다",
+                        "업스케일링이완료",
+                        "upscalingiscomplete",
+                        "upscalecomplete",
+                    ];
+                    const closeHits = ["닫기", "close", "dismiss"];
+                    const dedupe = new Set();
+                    const result = [];
+
+                    const collectMeta = (el) => norm(
+                        (el.innerText || el.textContent || "") + " " +
+                        (el.getAttribute("aria-label") || "") + " " +
+                        (el.getAttribute("title") || "")
+                    );
+
+                    for (const root of roots) {
+                        const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
+                        for (const node of nodes) {
+                            if (!isVisible(node)) continue;
+                            const nodeMeta = collectMeta(node);
+                            if (!toastHits.some((hit) => nodeMeta.includes(hit))) continue;
+
+                            let toast = node;
+                            let depth = 0;
+                            while (toast.parentElement && depth < 6) {
+                                const parent = toast.parentElement;
+                                if (!isVisible(parent)) break;
+                                const rect = parent.getBoundingClientRect();
+                                if (rect.width >= 260 && rect.height >= 60) {
+                                    toast = parent;
+                                }
+                                depth += 1;
+                            }
+
+                            const toastRect = toast.getBoundingClientRect();
+                            if (!toastRect || toastRect.width < 220 || toastRect.height < 60) continue;
+                            if (toastRect.left < window.innerWidth * 0.55) continue;
+                            if (toastRect.top > window.innerHeight * 0.55) continue;
+
+                            const toastKey = [
+                                Math.round(toastRect.left),
+                                Math.round(toastRect.top),
+                                Math.round(toastRect.width),
+                                Math.round(toastRect.height),
+                            ].join(":");
+                            if (dedupe.has(toastKey)) continue;
+                            dedupe.add(toastKey);
+
+                            let closeEl = null;
+                            const closeNodes = toast.querySelectorAll
+                                ? toast.querySelectorAll("button, a, [role='button'], div, span")
+                                : [];
+                            for (const cand of closeNodes) {
+                                if (!isVisible(cand)) continue;
+                                const candMeta = collectMeta(cand);
+                                if (!closeHits.some((hit) => candMeta.includes(hit))) continue;
+                                const rect = cand.getBoundingClientRect();
+                                if (!rect || rect.width < 12 || rect.height < 12) continue;
+                                if (rect.left < toastRect.left + toastRect.width * 0.45) continue;
+                                closeEl = cand;
+                                break;
+                            }
+                            if (!closeEl) continue;
+                            const closeRect = closeEl.getBoundingClientRect();
+                            result.push({
+                                x: closeRect.left + closeRect.width * 0.5,
+                                y: closeRect.top + closeRect.height * 0.5,
+                                top: toastRect.top,
+                                label: (closeEl.innerText || closeEl.textContent || closeEl.getAttribute("aria-label") || "닫기").trim(),
+                            });
+                        }
+                    }
+
+                    result.sort((a, b) => a.top - b.top);
+                    return result;
+                }"""
+            )
+        except Exception:
+            return []
+        return points if isinstance(points, list) else []
+
+    def _dismiss_download_upscale_toasts(self, max_rounds=6):
+        if not self.page:
+            return 0
+        closed = 0
+        for _ in range(max(1, int(max_rounds))):
+            points = self._find_download_upscale_toast_close_points()
+            if not points:
+                break
+            target = points[0]
+            try:
+                x = float(target.get("x"))
+                y = float(target.get("y"))
+            except Exception:
+                break
+            label = str(target.get("label", "닫기") or "닫기").strip() or "닫기"
+            if not self._move_mouse_precise(x, y, label=f"업스케일 토스트 {label}", steps=12):
+                try:
+                    self.page.mouse.move(x, y, steps=12)
+                except Exception:
+                    break
+            try:
+                self.page.mouse.click(x, y, delay=random.randint(30, 80))
+                closed += 1
+                self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 정밀 클릭 -> 업스케일 토스트 {label}")
+            except Exception:
+                break
+            time.sleep(0.22)
+        if closed:
+            self.log(f"🧹 업스케일 완료 토스트 정리: {closed}개 닫음")
+        return closed
+
     def _run_single_download_flow(self, mode, tag, quality, dry_run=False, wait_sec=60, is_test=False):
         if not self.page:
             raise RuntimeError("브라우저 페이지가 없습니다.")
@@ -6826,6 +6964,8 @@ class FlowVisionApp:
         used = {"search_input": "", "filter": "", "card": "", "more": "", "menu": "", "quality": ""}
 
         self._click_download_filter(mode, used)
+        if self._dismiss_download_upscale_toasts():
+            self._download_action_delay("업스케일 토스트 정리 대기", 0.12, 0.45)
 
         search_loc, search_sel = self._resolve_download_search_input(timeout_sec=8)
         if search_loc is None:
@@ -6954,6 +7094,8 @@ class FlowVisionApp:
                 raise RuntimeError(f"검색 결과에 {tag} 항목이 없습니다.")
             raise RuntimeError(f"더보기 버튼을 찾지 못했습니다. (대기 {wait_sec}초)")
 
+        if self._dismiss_download_upscale_toasts():
+            self._download_action_delay("업스케일 토스트 정리 대기", 0.12, 0.45)
         self._download_action_delay("더보기 클릭 전 안정화", 0.25, 0.9)
         if tile_box:
             tile_hover = self._box_inner_point(tile_box, x_ratio=0.72, y_ratio=0.26, inset=14.0)
@@ -6974,6 +7116,8 @@ class FlowVisionApp:
         if menu_loc is None:
             # 더보기 메뉴가 짧게 닫힌 경우 1회 재시도
             try:
+                if self._dismiss_download_upscale_toasts():
+                    self._download_action_delay("업스케일 토스트 재정리 대기", 0.12, 0.45)
                 tile_box = tile_box or self._find_primary_media_tile_box()
                 if tile_box:
                     tile_hover = self._box_inner_point(tile_box, x_ratio=0.72, y_ratio=0.26, inset=14.0)
@@ -7044,6 +7188,8 @@ class FlowVisionApp:
             try:
                 if attempt > 0:
                     self.log(f"♻️ 품질 클릭 재시도 {attempt+1}/2")
+                    if self._dismiss_download_upscale_toasts():
+                        self._download_action_delay("업스케일 토스트 재정리 대기", 0.12, 0.45)
                     if tile_box:
                         tile_hover = self._box_inner_point(tile_box, x_ratio=0.72, y_ratio=0.26, inset=14.0)
                         if tile_hover is not None:
