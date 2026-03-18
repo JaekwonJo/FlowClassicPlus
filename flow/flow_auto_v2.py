@@ -5578,6 +5578,99 @@ class FlowVisionApp:
         except Exception:
             return False
 
+    def _box_inner_point(self, box, x_ratio=0.5, y_ratio=0.5, inset=8.0):
+        if not box:
+            return None
+        try:
+            x = float(box["x"])
+            y = float(box["y"])
+            w = float(box["width"])
+            h = float(box["height"])
+        except Exception:
+            return None
+        if w <= 0 or h <= 0:
+            return None
+        pad_x = min(max(inset, 4.0), max(4.0, w / 2.5))
+        pad_y = min(max(inset, 4.0), max(4.0, h / 2.5))
+        px = x + min(max(w * float(x_ratio), pad_x), max(pad_x, w - pad_x))
+        py = y + min(max(h * float(y_ratio), pad_y), max(pad_y, h - pad_y))
+        return (px, py)
+
+    def _move_mouse_precise(self, x, y, label="", steps=14):
+        if not self.page:
+            return False
+        try:
+            self.page.mouse.move(float(x), float(y), steps=max(4, int(steps)))
+            if label:
+                self._action_log(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] 마우스 이동(정밀) -> {label} ({float(x):.1f}, {float(y):.1f})"
+                )
+            return True
+        except Exception:
+            return False
+
+    def _hover_locator_precise(self, locator, label, x_ratio=0.4, y_ratio=0.5, steps=16):
+        if locator is None:
+            return False, None
+        try:
+            box = locator.bounding_box()
+        except Exception:
+            box = None
+        point = self._box_inner_point(box, x_ratio=x_ratio, y_ratio=y_ratio, inset=8.0)
+        if point is None:
+            return False, box
+        ok = self._move_mouse_precise(point[0], point[1], label=label, steps=steps)
+        return ok, box
+
+    def _click_locator_precise(self, locator, label, x_ratio=0.5, y_ratio=0.5, steps=14):
+        if locator is None or not self.page:
+            return False
+        try:
+            box = locator.bounding_box()
+        except Exception:
+            box = None
+        point = self._box_inner_point(box, x_ratio=x_ratio, y_ratio=y_ratio, inset=8.0)
+        if point is None:
+            return False
+        if not self._move_mouse_precise(point[0], point[1], label=label, steps=steps):
+            return False
+        try:
+            self.page.mouse.click(point[0], point[1], delay=random.randint(40, 90))
+            self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 정밀 클릭 -> {label}")
+            return True
+        except Exception:
+            return False
+
+    def _hover_quality_path(self, menu_loc, quality_loc, quality_label="품질"):
+        if (menu_loc is None) or (quality_loc is None) or (not self.page):
+            return False
+        try:
+            menu_box = menu_loc.bounding_box()
+            quality_box = quality_loc.bounding_box()
+        except Exception:
+            return False
+        if (not menu_box) or (not quality_box):
+            return False
+
+        menu_pt = self._box_inner_point(menu_box, x_ratio=0.36, y_ratio=0.5, inset=8.0)
+        menu_edge = self._box_inner_point(menu_box, x_ratio=0.92, y_ratio=0.5, inset=8.0)
+        quality_enter = self._box_inner_point(quality_box, x_ratio=0.14, y_ratio=0.5, inset=8.0)
+        quality_pt = self._box_inner_point(quality_box, x_ratio=0.45, y_ratio=0.5, inset=8.0)
+        if not all((menu_pt, menu_edge, quality_enter, quality_pt)):
+            return False
+
+        route = [
+            (menu_pt[0], menu_pt[1], "다운로드 메뉴 hover"),
+            (menu_edge[0], menu_edge[1], "다운로드 메뉴 우측 유지"),
+            (quality_enter[0], quality_enter[1], f"{quality_label} 메뉴 진입"),
+            (quality_pt[0], quality_pt[1], f"{quality_label} hover"),
+        ]
+        for idx, (x, y, label) in enumerate(route):
+            if not self._move_mouse_precise(x, y, label=label, steps=12 if idx == 0 else 16):
+                return False
+            time.sleep(0.08 if idx < len(route) - 1 else 0.05)
+        return True
+
     def _resolve_text_locator_any_frame(self, texts, timeout_ms=1200):
         if not self.page:
             return None, None
@@ -6761,6 +6854,7 @@ class FlowVisionApp:
         card_meta = ""
         more_loc = None
         more_sel = None
+        tile_box = None
         while time.time() < deadline:
             tile_count = self._count_visible_media_tiles()
             card_loc, card_sel, card_meta = self._resolve_download_card_for_tag(mode, tag, timeout_sec=1.4)
@@ -6795,6 +6889,10 @@ class FlowVisionApp:
                             card_loc.hover(timeout=1000)
                         except Exception:
                             pass
+                    try:
+                        tile_box = card_loc.bounding_box()
+                    except Exception:
+                        tile_box = None
                     more_loc, more_sel = self._resolve_best_locator(
                         self._download_more_candidates(mode),
                         near_locator=card_loc,
@@ -6857,8 +6955,14 @@ class FlowVisionApp:
             raise RuntimeError(f"더보기 버튼을 찾지 못했습니다. (대기 {wait_sec}초)")
 
         self._download_action_delay("더보기 클릭 전 안정화", 0.25, 0.9)
-        if not self._click_with_actor_fallback(more_loc, "더보기 버튼"):
-            raise RuntimeError("더보기 버튼 클릭 실패")
+        if tile_box:
+            tile_hover = self._box_inner_point(tile_box, x_ratio=0.72, y_ratio=0.26, inset=14.0)
+            if tile_hover is not None:
+                self._move_mouse_precise(tile_hover[0], tile_hover[1], label="결과 타일 hover 유지", steps=14)
+                time.sleep(0.08)
+        if not self._click_locator_precise(more_loc, "더보기 버튼", x_ratio=0.5, y_ratio=0.5, steps=10):
+            if not self._click_with_actor_fallback(more_loc, "더보기 버튼"):
+                raise RuntimeError("더보기 버튼 클릭 실패")
 
         menu_loc, menu_sel = self._wait_best_locator(
             self._download_menu_candidates(mode),
@@ -6870,13 +6974,18 @@ class FlowVisionApp:
         if menu_loc is None:
             # 더보기 메뉴가 짧게 닫힌 경우 1회 재시도
             try:
-                tile_box = self._find_primary_media_tile_box()
+                tile_box = tile_box or self._find_primary_media_tile_box()
                 if tile_box:
+                    tile_hover = self._box_inner_point(tile_box, x_ratio=0.72, y_ratio=0.26, inset=14.0)
+                    if tile_hover is not None:
+                        self._move_mouse_precise(tile_hover[0], tile_hover[1], label="결과 타일 hover 재유지", steps=14)
+                        time.sleep(0.08)
                     more_retry, more_retry_sel = self._resolve_more_button_near_box(tile_box)
                     if more_retry is not None:
                         more_loc = more_retry
                         used["more"] = more_retry_sel or used.get("more") or "download-more-retry"
-                self._click_with_actor_fallback(more_loc, "더보기 버튼(재시도)")
+                if not self._click_locator_precise(more_loc, "더보기 버튼(재시도)", x_ratio=0.5, y_ratio=0.5, steps=10):
+                    self._click_with_actor_fallback(more_loc, "더보기 버튼(재시도)")
                 self.actor.random_action_delay("다운로드 메뉴 재표시 대기", 0.2, 0.7)
             except Exception:
                 pass
@@ -6891,13 +7000,15 @@ class FlowVisionApp:
             raise RuntimeError("다운로드 메뉴를 찾지 못했습니다.")
         used["menu"] = menu_sel or ""
 
-        try:
-            self.actor.move_to_locator(menu_loc, label="다운로드 메뉴")
-        except Exception:
+        hovered_menu = self._hover_locator_precise(menu_loc, "다운로드 메뉴", x_ratio=0.34, y_ratio=0.5, steps=14)[0]
+        if not hovered_menu:
             try:
                 menu_loc.hover(timeout=1200)
             except Exception:
-                pass
+                try:
+                    self.actor.move_to_locator(menu_loc, label="다운로드 메뉴")
+                except Exception:
+                    pass
         self._download_action_delay("품질 목록 표시 대기", 0.15, 0.6)
 
         quality_loc, quality_sel = self._wait_best_locator(
@@ -6933,8 +7044,14 @@ class FlowVisionApp:
             try:
                 if attempt > 0:
                     self.log(f"♻️ 품질 클릭 재시도 {attempt+1}/2")
-                    if not self._click_with_actor_fallback(more_loc, "더보기 버튼(품질 재시도)"):
-                        raise RuntimeError("더보기 버튼 재열기 실패")
+                    if tile_box:
+                        tile_hover = self._box_inner_point(tile_box, x_ratio=0.72, y_ratio=0.26, inset=14.0)
+                        if tile_hover is not None:
+                            self._move_mouse_precise(tile_hover[0], tile_hover[1], label="결과 타일 hover(품질 재시도)", steps=14)
+                            time.sleep(0.08)
+                    if not self._click_locator_precise(more_loc, "더보기 버튼(품질 재시도)", x_ratio=0.5, y_ratio=0.5, steps=10):
+                        if not self._click_with_actor_fallback(more_loc, "더보기 버튼(품질 재시도)"):
+                            raise RuntimeError("더보기 버튼 재열기 실패")
                     menu_loc_retry, _ = self._wait_best_locator(
                         self._download_menu_candidates(mode),
                         timeout_sec=4,
@@ -6944,13 +7061,12 @@ class FlowVisionApp:
                         menu_loc_retry, _ = self._resolve_text_locator_any_frame(["다운로드", "Download"], timeout_ms=1000)
                     if menu_loc_retry is None:
                         raise RuntimeError("다운로드 메뉴 재탐색 실패")
-                    try:
-                        self.actor.move_to_locator(menu_loc_retry, label="다운로드 메뉴(재시도)")
-                    except Exception:
+                    if not self._hover_locator_precise(menu_loc_retry, "다운로드 메뉴(재시도)", x_ratio=0.34, y_ratio=0.5, steps=14)[0]:
                         try:
                             menu_loc_retry.hover(timeout=900)
                         except Exception:
                             pass
+                    menu_loc = menu_loc_retry
                     self._download_action_delay("품질 목록 재표시 대기", 0.12, 0.45)
                     quality_loc, quality_sel = self._wait_best_locator(
                         self._download_quality_candidates(mode, quality),
@@ -6965,8 +7081,10 @@ class FlowVisionApp:
 
                 self._download_action_delay("품질 클릭 전 안정화", 0.2, 0.8)
                 self._apply_vertical_quality_path_if_needed(mode, quality, quality_loc)
+                self._hover_quality_path(menu_loc, quality_loc, quality_label=quality)
                 with self.page.expect_download(timeout=int(dl_timeout_sec * 1000)) as dl_info:
-                    quality_loc.click(timeout=2500, force=True)
+                    if not self._click_locator_precise(quality_loc, f"{quality} 품질", x_ratio=0.40, y_ratio=0.5, steps=10):
+                        quality_loc.click(timeout=2500, force=True)
                 dl = dl_info.value
                 break
             except Exception as e:
