@@ -6079,6 +6079,74 @@ class FlowVisionApp:
                 except Exception:
                     pass
 
+    def _normalize_download_search_text(self, text):
+        raw = str(text or "").strip()
+        return re.sub(r"\s+", "", raw).upper()
+
+    def _fill_download_search_input(self, search_loc, tag):
+        if search_loc is None:
+            return False, "search locator 없음", ""
+
+        expected = self._normalize_download_search_text(tag)
+        if not expected:
+            return False, "empty-tag", ""
+
+        try:
+            search_loc.click(timeout=1500)
+        except Exception:
+            try:
+                search_loc.focus(timeout=1200)
+            except Exception:
+                pass
+
+        # 1차: locator 자체에 직접 입력하고 실제 값이 남았는지 확인
+        try:
+            search_loc.press("Control+A", timeout=1000)
+            search_loc.press("Backspace", timeout=1000)
+        except Exception:
+            try:
+                self.page.keyboard.press("Control+A")
+                self.page.keyboard.press("Backspace")
+            except Exception:
+                pass
+        try:
+            search_loc.fill(tag)
+        except Exception:
+            try:
+                search_loc.type(tag, delay=random.randint(20, 60))
+            except Exception:
+                pass
+
+        typed_text = self._normalize_download_search_text(self._read_input_text(search_loc))
+        if typed_text == expected:
+            self.log(f"✅ 다운로드 검색 입력 완료: {tag}")
+            return True, "", ""
+
+        # 2차: 포커스가 이미 검색창에 가 있는 경우 키보드로 한 번 더 강제 입력
+        try:
+            search_loc.click(timeout=1200)
+        except Exception:
+            pass
+        try:
+            self.page.keyboard.press("Control+A")
+            self.page.keyboard.press("Backspace")
+            self.page.keyboard.insert_text(tag)
+        except Exception:
+            pass
+        typed_text = self._normalize_download_search_text(self._read_input_text(search_loc))
+        if typed_text == expected:
+            self.log(f"✅ 다운로드 검색 입력 완료(포커스 폴백): {tag}")
+            return True, "", ""
+
+        # 3차: locator가 틀렸거나 contenteditable 처리가 꼬인 경우 DOM 기준으로 다시 선택/입력
+        ok_dom, reason_dom, sel_dom = self._direct_fill_download_search_via_dom(tag)
+        if ok_dom:
+            self.log(f"✅ 다운로드 검색 입력 완료(DOM 폴백): {tag}")
+            return True, "", sel_dom or "dom-search-fallback"
+
+        reason = f"검색어 입력 실패: typed='{typed_text or '-'}' / dom={reason_dom}"
+        return False, reason, ""
+
     def _click_download_filter(self, mode, used):
         filter_loc, filter_sel = self._resolve_download_filter_button(mode, timeout_sec=5)
         if filter_loc is None:
@@ -6189,26 +6257,11 @@ class FlowVisionApp:
             self._download_action_delay("검색 결과 반영 대기", 0.4, 1.2)
         else:
             used["search_input"] = search_sel or ""
-            try:
-                search_loc.click(timeout=1500)
-            except Exception:
-                pass
-            try:
-                self.page.keyboard.press("Control+A")
-                self.page.keyboard.press("Backspace")
-            except Exception:
-                pass
-            try:
-                search_loc.fill(tag)
-            except Exception:
-                try:
-                    search_loc.type(tag, delay=random.randint(20, 60))
-                except Exception:
-                    ok_dom, reason_dom, sel_dom = self._direct_fill_download_search_via_dom(tag)
-                    if not ok_dom:
-                        raise RuntimeError(f"검색어 입력 실패: {reason_dom}")
-                    used["search_input"] = sel_dom or used["search_input"] or "dom-search-fallback"
-                    self.log(f"✅ 다운로드 검색 입력 완료(DOM 폴백): {tag}")
+            ok_fill, fill_reason, sel_dom = self._fill_download_search_input(search_loc, tag)
+            if not ok_fill:
+                raise RuntimeError(fill_reason or "검색어 입력 실패")
+            if sel_dom:
+                used["search_input"] = sel_dom or used["search_input"] or "dom-search-fallback"
             self.page.keyboard.press("Enter")
             self._download_action_delay("검색 결과 반영 대기", 0.4, 1.2)
 
