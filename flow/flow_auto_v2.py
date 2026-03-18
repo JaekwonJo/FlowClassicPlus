@@ -6524,6 +6524,28 @@ class FlowVisionApp:
                 return True, meta
         return False, meta
 
+    def _reject_download_card_candidate(self, locator, selector=None):
+        meta = self._normalize_download_search_text(self._locator_meta_text(locator))
+        if not meta:
+            return False
+        noisy_tokens = (
+            "CHECK_CIRCLE",
+            "업스케일링이완료",
+            "업스케일링",
+            "완료되었습니다",
+            "닫기",
+            "CLOSE",
+            "SNACKBAR",
+            "TOAST",
+            "ALERT",
+            "NOTICE",
+            "알림",
+            "완료",
+        )
+        if any(token in meta for token in noisy_tokens):
+            return True
+        return False
+
     def _resolve_download_card_for_tag(self, mode, tag, timeout_sec=6):
         if not self.page:
             return None, None, ""
@@ -6536,6 +6558,7 @@ class FlowVisionApp:
                 self._download_card_candidates(mode),
                 timeout_ms=1100,
                 prefer_enabled=False,
+                reject_fn=self._reject_download_card_candidate,
             )
             if card_loc is not None:
                 matched, meta = self._download_card_matches_tag(card_loc, tag)
@@ -6755,10 +6778,10 @@ class FlowVisionApp:
                         card_loc = None
                         card_sel = None
                         card_meta = ""
-                        time.sleep(0.35)
-                        continue
-                    self.log(f"ℹ️ 카드 태그는 불일치했지만, 페이지 상단/본문에서 {tag} 표시를 확인해 타일 기준으로 계속 진행합니다.")
-                    tag_confirmed = True
+                        time.sleep(0.20)
+                    if page_has_tag:
+                        self.log(f"ℹ️ 카드 태그는 불일치했지만, 페이지 상단/본문에서 {tag} 표시를 확인해 타일 기준으로 계속 진행합니다.")
+                        tag_confirmed = True
                     card_loc = None
                     card_sel = None
                     card_meta = ""
