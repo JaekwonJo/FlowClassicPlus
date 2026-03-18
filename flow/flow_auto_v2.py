@@ -11760,6 +11760,9 @@ class FlowVisionApp:
             return
         run_mode = self.current_run_mode or ("asset" if self.cfg.get("asset_loop_enabled") else "prompt")
         is_download_mode = (run_mode == "download")
+        # 시작 직전에 Entry/Combobox 최신값을 먼저 cfg에 반영해
+        # 다운로드 개별 번호, 시작/끝 범위 같은 입력이 즉시 실행 대상에 반영되게 한다.
+        self.on_option_toggle()
         if not is_download_mode:
             self.on_reload() # 시작 시 프롬프트 최신화
         try:
@@ -11915,7 +11918,6 @@ class FlowVisionApp:
         self.btn_stop.config(state="normal")
         self.update_status_label("🚀 시작 중...", self.color_success)
         self.play_sound("start")
-        self.on_option_toggle()
         if is_download_mode:
             mode_label = "영상" if self._download_mode() == "video" else "이미지"
             self.log(f"🚀 다운로드 자동화 시작 | 모드={mode_label} | 대상={len(self.download_items)}개 | 실패판단대기={self.cfg.get('download_wait_seconds', 20)}초 | 선택={self.current_selection_summary}")
