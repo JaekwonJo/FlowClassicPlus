@@ -6954,6 +6954,141 @@ class FlowVisionApp:
             self.log(f"🧹 업스케일 완료 토스트 정리: {closed}개 닫음")
         return closed
 
+    def _detect_download_upscale_toast_state(self):
+        if not self.page:
+            return ""
+        try:
+            state = self.page.evaluate(
+                """() => {
+                    const roots = [];
+                    const queue = [document];
+                    while (queue.length) {
+                        const root = queue.shift();
+                        roots.push(root);
+                        const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
+                        for (const node of nodes) {
+                            if (node && node.shadowRoot) queue.push(node.shadowRoot);
+                        }
+                    }
+
+                    const norm = (value) => String(value || "").replace(/\\s+/g, "").toLowerCase();
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const rect = el.getBoundingClientRect();
+                        if (!rect || rect.width < 32 || rect.height < 16) return false;
+                        const style = window.getComputedStyle(el);
+                        return style && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+                    };
+                    const completeHits = [
+                        "업스케일링이완료되었습니다",
+                        "업스케일링완료되었습니다",
+                        "업스케일링이완료",
+                        "upscalingiscomplete",
+                        "upscalecomplete",
+                    ];
+                    const progressHits = [
+                        "동영상을업스케일링하는중입니다",
+                        "업스케일링하는중입니다",
+                        "업스케일링중입니다",
+                        "몇분정도걸릴수있습니다",
+                        "업스케일링작업을시작하지않는것이좋습니다",
+                        "upscaling",
+                    ];
+                    const candidates = [];
+
+                    const collectMeta = (el) => norm(
+                        (el.innerText || el.textContent || "") + " " +
+                        (el.getAttribute("aria-label") || "") + " " +
+                        (el.getAttribute("title") || "")
+                    );
+
+                    for (const root of roots) {
+                        const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
+                        for (const node of nodes) {
+                            if (!isVisible(node)) continue;
+                            const meta = collectMeta(node);
+                            if (!meta) continue;
+                            if (!completeHits.some((hit) => meta.includes(hit)) && !progressHits.some((hit) => meta.includes(hit))) {
+                                continue;
+                            }
+                            const rect = node.getBoundingClientRect();
+                            if (!rect || rect.width < 180 || rect.height < 40) continue;
+                            if (rect.left < window.innerWidth * 0.50) continue;
+                            if (rect.top > window.innerHeight * 0.60) continue;
+                            candidates.push(meta);
+                        }
+                    }
+
+                    for (const meta of candidates) {
+                        if (completeHits.some((hit) => meta.includes(hit))) return "complete";
+                    }
+                    for (const meta of candidates) {
+                        if (progressHits.some((hit) => meta.includes(hit))) return "progress";
+                    }
+                    return "";
+                }"""
+            )
+        except Exception:
+            return ""
+        return str(state or "").strip().lower()
+
+    def _download_completion_grace_sec(self, mode, quality):
+        mode = "image" if mode == "image" else "video"
+        quality = str(quality or "").strip().upper()
+        if mode == "video":
+            if quality == "4K":
+                return 20.0
+            if quality == "1080P":
+                return 12.0
+            return 8.0
+        if quality == "4K":
+            return 12.0
+        return 8.0
+
+    def _wait_for_download_or_upscale_completion(self, click_fn, *, mode, quality, timeout_sec):
+        if not self.page:
+            raise RuntimeError("브라우저 페이지가 없습니다.")
+
+        downloads = []
+
+        def _on_download(download):
+            downloads.append(download)
+
+        deadline = time.time() + max(1.0, float(timeout_sec))
+        completion_seen = False
+        progress_seen = False
+        self.page.on("download", _on_download)
+        try:
+            click_fn()
+            while time.time() < deadline:
+                if downloads:
+                    return downloads[0]
+
+                toast_state = self._detect_download_upscale_toast_state()
+                if toast_state == "progress" and not progress_seen:
+                    progress_seen = True
+                    self.log("⏳ 업스케일링 진행 감지")
+                elif toast_state == "complete" and not completion_seen:
+                    completion_seen = True
+                    grace_sec = self._download_completion_grace_sec(mode, quality)
+                    shortened = min(deadline, time.time() + grace_sec)
+                    if shortened < deadline:
+                        deadline = shortened
+                    self.log(f"✅ 업스케일링 완료 감지: 추가 {int(round(grace_sec))}초만 다운로드 이벤트를 대기합니다.")
+
+                time.sleep(0.25)
+
+            if downloads:
+                return downloads[0]
+            if completion_seen:
+                raise RuntimeError("업스케일링 완료는 감지했지만 다운로드 이벤트가 이어지지 않았습니다.")
+            raise RuntimeError("다운로드 이벤트를 시작하지 못했습니다.")
+        finally:
+            try:
+                self.page.remove_listener("download", _on_download)
+            except Exception:
+                pass
+
     def _run_single_download_flow(self, mode, tag, quality, dry_run=False, wait_sec=60, is_test=False):
         if not self.page:
             raise RuntimeError("브라우저 페이지가 없습니다.")
@@ -7228,10 +7363,16 @@ class FlowVisionApp:
                 self._download_action_delay("품질 클릭 전 안정화", 0.2, 0.8)
                 self._apply_vertical_quality_path_if_needed(mode, quality, quality_loc)
                 self._hover_quality_path(menu_loc, quality_loc, quality_label=quality)
-                with self.page.expect_download(timeout=int(dl_timeout_sec * 1000)) as dl_info:
-                    if not self._click_locator_precise(quality_loc, f"{quality} 품질", x_ratio=0.40, y_ratio=0.5, steps=10):
-                        quality_loc.click(timeout=2500, force=True)
-                dl = dl_info.value
+                dl = self._wait_for_download_or_upscale_completion(
+                    lambda: (
+                        None
+                        if self._click_locator_precise(quality_loc, f"{quality} 품질", x_ratio=0.40, y_ratio=0.5, steps=10)
+                        else quality_loc.click(timeout=2500, force=True)
+                    ),
+                    mode=mode,
+                    quality=quality,
+                    timeout_sec=dl_timeout_sec,
+                )
                 break
             except Exception as e:
                 last_err = e
