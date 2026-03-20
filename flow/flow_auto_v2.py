@@ -7122,6 +7122,7 @@ class FlowVisionApp:
         deadline = time.time() + wait_sec
         search_started_ts = time.time()
         result_lookup_deadline = min(deadline, search_started_ts + 12.0)
+        empty_result_deadline = min(deadline, search_started_ts + 6.0)
         search_enter_sent = False
         tag_confirmed = False
         card_loc = None
@@ -7220,6 +7221,14 @@ class FlowVisionApp:
                     continue
                 except Exception:
                     search_enter_sent = True
+            if (
+                (not tag_confirmed)
+                and tile_count <= 0
+                and time.time() >= empty_result_deadline
+                and (search_enter_sent or (time.time() - search_started_ts) >= 4.0)
+                and (not self._download_page_contains_tag(tag))
+            ):
+                raise RuntimeError(f"검색 결과에 {tag} 항목이 없습니다.")
             if (not tag_confirmed) and time.time() >= result_lookup_deadline:
                 raise RuntimeError(f"검색 결과에 {tag} 항목이 없습니다.")
             time.sleep(0.5)
@@ -7363,16 +7372,22 @@ class FlowVisionApp:
                 self._download_action_delay("품질 클릭 전 안정화", 0.2, 0.8)
                 self._apply_vertical_quality_path_if_needed(mode, quality, quality_loc)
                 self._hover_quality_path(menu_loc, quality_loc, quality_label=quality)
-                dl = self._wait_for_download_or_upscale_completion(
-                    lambda: (
-                        None
-                        if self._click_locator_precise(quality_loc, f"{quality} 품질", x_ratio=0.40, y_ratio=0.5, steps=10)
-                        else quality_loc.click(timeout=2500, force=True)
-                    ),
-                    mode=mode,
-                    quality=quality,
-                    timeout_sec=dl_timeout_sec,
-                )
+                if mode == "video" and str(quality).upper() == "720P":
+                    with self.page.expect_download(timeout=int(dl_timeout_sec * 1000)) as dl_info:
+                        if not self._click_locator_precise(quality_loc, f"{quality} 품질", x_ratio=0.40, y_ratio=0.5, steps=10):
+                            quality_loc.click(timeout=2500, force=True)
+                    dl = dl_info.value
+                else:
+                    dl = self._wait_for_download_or_upscale_completion(
+                        lambda: (
+                            None
+                            if self._click_locator_precise(quality_loc, f"{quality} 품질", x_ratio=0.40, y_ratio=0.5, steps=10)
+                            else quality_loc.click(timeout=2500, force=True)
+                        ),
+                        mode=mode,
+                        quality=quality,
+                        timeout_sec=dl_timeout_sec,
+                    )
                 break
             except Exception as e:
                 last_err = e
