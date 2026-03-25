@@ -6532,6 +6532,18 @@ class FlowVisionApp:
             self.log("⚠️ 레퍼런스 정렬 버튼을 찾지 못해 기본 정렬로 계속합니다.")
             return search_input
         try:
+            sort_meta = self._locator_meta_text(sort_button)
+        except Exception:
+            sort_meta = ""
+        if "오래된 순" in sort_meta:
+            if search_input is not None:
+                try:
+                    search_input.click(timeout=600)
+                except Exception:
+                    pass
+            self.log("↕️ 레퍼런스 정렬 상태 확인: 이미 오래된 순")
+            return search_input
+        try:
             sort_button.click(timeout=1200)
         except Exception:
             if not self._click_with_actor_fallback(sort_button, "레퍼런스 정렬 버튼"):
