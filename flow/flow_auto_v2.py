@@ -6061,6 +6061,96 @@ class FlowVisionApp:
                 )
         return None, None
 
+    def _direct_fill_prompt_reference_search_via_dom(self, asset_tag):
+        if (not self.page) or (not asset_tag):
+            return False, "page/tag 없음"
+        try:
+            result = self.page.evaluate(
+                """(payload) => {
+                    const tag = String(payload.tag || "").trim();
+                    if (!tag) return {ok:false, reason:"empty-tag"};
+
+                    const searchKeys = ["asset", "search", "에셋", "검색", "recent", "최근"];
+                    const negativeKeys = ["무엇을 만들고 싶으신가요", "prompt", "프롬프트", "message", "메시지", "project", "title", "이름"];
+
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        if (!r || r.width < 10 || r.height < 10) return false;
+                        const st = window.getComputedStyle(el);
+                        return st && st.display !== "none" && st.visibility !== "hidden" && st.opacity !== "0";
+                    };
+
+                    const metaText = (el) => {
+                        const a = (k) => (el.getAttribute(k) || "");
+                        return [
+                            el.tagName || "",
+                            el.id || "",
+                            el.className || "",
+                            a("name"),
+                            a("placeholder"),
+                            a("aria-label"),
+                            a("title"),
+                            (el.innerText || ""),
+                        ].join(" ").toLowerCase();
+                    };
+
+                    let best = null;
+                    let bestScore = -1e9;
+                    const nodes = document.querySelectorAll("input, textarea, [role='searchbox'], [role='textbox'], [contenteditable='true']");
+                    for (const el of nodes) {
+                        if (!isVisible(el)) continue;
+                        const meta = metaText(el);
+                        const r = el.getBoundingClientRect();
+                        if (r.width < 180 || r.width > 980) continue;
+                        if (r.height < 18 || r.height > 32) continue;
+                        if (r.top < 8 || r.top > 140) continue;
+                        if (r.left < 120 || r.left > 760) continue;
+
+                        let score = 0;
+                        if (searchKeys.some(k => meta.includes(k))) score += 600;
+                        if (negativeKeys.some(k => meta.includes(k))) score -= 1800;
+                        if ((el.tagName || "").toLowerCase() === "input") score += 120;
+                        if ((el.getAttribute("type") || "").toLowerCase() === "search") score += 220;
+                        score -= Math.abs((r.left + r.width / 2) - 420) * 0.22;
+
+                        if (score > bestScore) {
+                            best = el;
+                            bestScore = score;
+                        }
+                    }
+
+                    if (!best || bestScore < 120) {
+                        return {ok:false, reason:"overlay-search-input-not-found"};
+                    }
+
+                    best.focus();
+                    try {
+                        if ("value" in best) {
+                            best.value = "";
+                            best.dispatchEvent(new Event("input", {bubbles:true}));
+                            best.value = tag;
+                            best.dispatchEvent(new Event("input", {bubbles:true}));
+                            best.dispatchEvent(new Event("change", {bubbles:true}));
+                        } else {
+                            best.textContent = "";
+                            best.dispatchEvent(new InputEvent("input", {bubbles:true, data:""}));
+                            best.textContent = tag;
+                            best.dispatchEvent(new InputEvent("input", {bubbles:true, data:tag}));
+                        }
+                        return {ok:true, reason:"dom-filled"};
+                    } catch (e) {
+                        return {ok:false, reason:String(e)};
+                    }
+                }""",
+                {"tag": asset_tag},
+            )
+            ok = bool(result and result.get("ok"))
+            reason = (result or {}).get("reason", "")
+            return ok, reason
+        except Exception as e:
+            return False, str(e)
+
     def _open_prompt_reference_search_via_keyboard(self, input_locator, timeout_sec=2.2):
         if (not self.page) or input_locator is None:
             raise RuntimeError("프롬프트 입력창이 없어 @ 레퍼런스 호출을 할 수 없습니다.")
@@ -6290,30 +6380,61 @@ class FlowVisionApp:
         if not self.page:
             return None, None
         used_selector = None
-        if search_input is not None:
+        expected = self._normalize_reference_asset_tag(asset_tag)
+
+        def _try_fill(loc):
+            nonlocal used_selector
+            if loc is None:
+                return None
             try:
-                search_input.click(timeout=1200)
+                box = loc.bounding_box()
             except Exception:
-                pass
+                box = None
+            if (box is not None) and (not self._is_prompt_reference_overlay_input_box(box)):
+                return None
+            try:
+                loc.click(timeout=350)
+            except Exception:
+                try:
+                    loc.focus(timeout=300)
+                except Exception:
+                    return None
             try:
                 self.page.keyboard.press("Control+A")
                 self.page.keyboard.press("Backspace")
             except Exception:
                 pass
             try:
-                search_input.fill(asset_tag)
-                used_selector = self._locator_selector_hint(search_input)
+                loc.fill(asset_tag, timeout=500)
+                used_selector = self._locator_selector_hint(loc)
             except Exception:
                 try:
-                    search_input.type(asset_tag, delay=random.randint(25, 70))
-                    used_selector = self._locator_selector_hint(search_input)
+                    loc.type(asset_tag, delay=random.randint(25, 70), timeout=500)
+                    used_selector = self._locator_selector_hint(loc)
                 except Exception:
-                    search_input = None
+                    return None
+            time.sleep(0.06)
+            typed = self._normalize_reference_asset_tag(self._read_input_text(loc))
+            if typed == expected:
+                return loc
+            return None
+
+        if search_input is not None:
+            search_input = _try_fill(search_input)
         if search_input is None:
-            ok_dom, reason_dom = self._direct_fill_asset_search_via_dom(asset_tag)
+            retry_input, retry_sel = self._resolve_prompt_reference_search_overlay_input(timeout_sec=0.9)
+            filled_retry = _try_fill(retry_input)
+            if filled_retry is not None:
+                search_input = filled_retry
+                used_selector = retry_sel or used_selector
+        if search_input is None:
+            ok_dom, reason_dom = self._direct_fill_prompt_reference_search_via_dom(asset_tag)
             if not ok_dom:
                 raise RuntimeError(f"레퍼런스 검색창을 찾지 못했습니다. ({reason_dom})")
             used_selector = used_selector or "DOM 직접입력"
+            self.log(f"🔎 레퍼런스 검색 입력: {asset_tag} ({used_selector or '직접입력'})")
+            self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 검색 입력: {asset_tag} ({used_selector or '직접입력'})")
+            return None, used_selector
         self.log(f"🔎 레퍼런스 검색 입력: {asset_tag} ({used_selector or '직접입력'})")
         self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 레퍼런스 검색 입력: {asset_tag} ({used_selector or '직접입력'})")
         return search_input, used_selector
