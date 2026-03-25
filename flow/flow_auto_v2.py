@@ -5947,6 +5947,26 @@ class FlowVisionApp:
         ])
         return list(dict.fromkeys([x for x in cands if x]))
 
+    def _is_prompt_reference_overlay_input_box(self, box):
+        if not box:
+            return False
+        try:
+            width = float(box.get("width") or 0.0)
+            height = float(box.get("height") or 0.0)
+            x = float(box.get("x") or 0.0)
+            y = float(box.get("y") or 0.0)
+        except Exception:
+            return False
+        if width < 180.0 or width > 980.0:
+            return False
+        if height < 18.0 or height > 32.0:
+            return False
+        if y < 8.0 or y > 140.0:
+            return False
+        if x < 120.0 or x > 760.0:
+            return False
+        return True
+
     def _resolve_prompt_reference_search_overlay_input(self, timeout_sec=2.0):
         if not self.page:
             return None, None
@@ -5981,6 +6001,10 @@ class FlowVisionApp:
                     x = float(box["x"] or 0.0)
                     y = float(box["y"] or 0.0)
                     cx = x + width / 2.0
+                    meta_has_search = any(k in meta for k in ("검색", "search", "asset", "에셋", "recent", "최근"))
+                    overlay_shape = self._is_prompt_reference_overlay_input_box(box)
+                    if (not overlay_shape) and (not meta_has_search):
+                        continue
                     score = 0.0
                     if width < 120 or height < 20:
                         score -= 800.0
@@ -5997,8 +6021,12 @@ class FlowVisionApp:
                     elif width > 1200.0:
                         score -= 400.0
                     score -= abs(cx - 420.0) * 0.22
-                    if any(k in meta for k in ("검색", "search", "asset", "에셋", "recent", "최근")):
+                    if meta_has_search:
                         score += 520.0
+                    if overlay_shape:
+                        score += 260.0
+                    elif height > 30.0:
+                        score -= 900.0
                     if any(k in meta for k in ("무엇을 만들", "prompt", "프롬프트", "message", "메시지")):
                         score -= 1800.0
                     if any(k in meta for k in ("nano banana", "veo", "video", "동영상", "이미지", "x1", "x2", "x3", "x4")):
@@ -6402,6 +6430,18 @@ class FlowVisionApp:
                 return search_input
         self.log(f"↕️ 레퍼런스 정렬 선택: 오래된 순 ({oldest_sel or '자동 탐색'})")
         self.actor.random_action_delay("레퍼런스 정렬 반영 대기", 0.10, 0.22)
+        if search_input is not None:
+            try:
+                existing_box = search_input.bounding_box()
+            except Exception:
+                existing_box = None
+            if self._is_prompt_reference_overlay_input_box(existing_box):
+                try:
+                    search_input.click(timeout=1200)
+                except Exception:
+                    pass
+                self.log("🔎 레퍼런스 검색창 재확인: 기존 검색창 유지")
+                return search_input
         refreshed_input, refreshed_sel = self._resolve_prompt_reference_search_overlay_input(timeout_sec=1.2)
         if refreshed_input is not None:
             try:
