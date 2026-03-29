@@ -2499,7 +2499,7 @@ class FlowVisionApp:
         if data.get("mode") == "tagged":
             tagged_count = len(data.get("tagged_prompts", {}) or {})
             has_common = bool(data.get("common_prompt"))
-            common_text = " + 공통 fallback" if has_common else ""
+            common_text = " + 파일 공통 fallback" if has_common else " + 템플릿 fallback"
             return f"{slot_name} | {file_name} | 태그형 {tagged_count}개{common_text}"
         return f"{slot_name} | {file_name} | 총 {len(entries)}개 | S001=1번, S002=2번..."
 
@@ -4570,6 +4570,7 @@ class FlowVisionApp:
                 break
             num_txt = str(n).zfill(pad_width)
             tag = f"{prefix}{num_txt}"
+            template_prompt = template.replace("{tag}", tag).strip()
             if use_prompt_slot:
                 if slot_data.get("mode") == "tagged":
                     prompt = str((slot_data.get("tagged_prompts", {}) or {}).get(tag.upper(), "") or "").strip()
@@ -4580,13 +4581,14 @@ class FlowVisionApp:
                     if 0 <= prompt_idx < len(slot_prompts):
                         prompt = str(slot_prompts[prompt_idx] or "").strip()
                     else:
-                        missing_numbers.append(n)
-                        continue
+                        prompt = ""
+                if not prompt:
+                    prompt = template_prompt
                 if not prompt:
                     missing_numbers.append(n)
                     continue
             else:
-                prompt = template.replace("{tag}", tag).strip()
+                prompt = template_prompt
             items.append({"tag": tag, "prompt": prompt, "number": n})
         self.asset_prompt_missing_numbers = missing_numbers
         return items
