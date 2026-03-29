@@ -139,6 +139,7 @@ DEFAULT_CONFIG = {
     "asset_use_prompt_slot": False,
     "asset_prompt_slot": 0,
     "asset_prompt_file": "",
+    "download_number_mode_enabled": False,
     "asset_manual_selection": "",
     "asset_start_selector": "",
     "asset_search_button_selector": "",
@@ -2538,6 +2539,16 @@ class FlowVisionApp:
             self.asset_prompt_file_display_var.set(stored)
         self.on_option_toggle()
         self.log(f"📄 S개별 프롬프트 파일 선택: {stored}")
+
+    def on_asset_number_mode_toggle(self):
+        if self.asset_loop_var.get() and hasattr(self, "download_number_mode_var"):
+            self.download_number_mode_var.set(False)
+        self.on_option_toggle()
+
+    def on_download_number_mode_toggle(self):
+        if self.download_number_mode_var.get() and hasattr(self, "asset_loop_var"):
+            self.asset_loop_var.set(False)
+        self.on_option_toggle()
 
     def _pipeline_active_step(self):
         steps = self.cfg.get("pipeline_steps", []) or []
@@ -8546,7 +8557,7 @@ class FlowVisionApp:
             asset_f,
             text="S번호 자동 반복 사용",
             variable=self.asset_loop_var,
-            command=self.on_option_toggle,
+            command=self.on_asset_number_mode_toggle,
             bg=self.color_bg,
             font=self.font_body,
             activebackground=self.color_bg,
@@ -8970,6 +8981,16 @@ class FlowVisionApp:
             pady=6,
         )
         dl_target_box.pack(fill="x", pady=(0, 8))
+        self.download_number_mode_var = tk.BooleanVar(value=bool(self.cfg.get("download_number_mode_enabled", False)))
+        tk.Checkbutton(
+            dl_target_box,
+            text="다운로드 번호 사용",
+            variable=self.download_number_mode_var,
+            command=self.on_download_number_mode_toggle,
+            bg=self.color_bg,
+            font=self.font_body,
+            activebackground=self.color_bg,
+        ).pack(anchor="w", pady=(0, 6))
         tk.Label(
             dl_target_box,
             text="기능은 그대로이며, 현재는 S자동화와 같은 번호값을 함께 사용합니다.",
@@ -10313,6 +10334,7 @@ class FlowVisionApp:
         asset_prefix = self.asset_loop_prefix_var.get().strip() if hasattr(self, "asset_loop_prefix_var") else str(self.cfg.get("asset_loop_prefix", "S"))
         self.cfg["asset_loop_prefix"] = asset_prefix or "S"
         self.cfg["asset_use_prompt_slot"] = self.asset_use_prompt_slot_var.get() if hasattr(self, "asset_use_prompt_slot_var") else bool(self.cfg.get("asset_use_prompt_slot", False))
+        self.cfg["download_number_mode_enabled"] = self.download_number_mode_var.get() if hasattr(self, "download_number_mode_var") else bool(self.cfg.get("download_number_mode_enabled", False))
         self.cfg["asset_prompt_slot"] = self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0))
         self.cfg["asset_prompt_file"] = self.asset_prompt_file_display_var.get().strip() if hasattr(self, "asset_prompt_file_display_var") else str(self.cfg.get("asset_prompt_file", "") or "").strip()
         if hasattr(self, "text_asset_template"):
@@ -13079,6 +13101,16 @@ class FlowVisionApp:
             self.cfg["asset_loop_enabled"] = use_asset
             if hasattr(self, "asset_loop_var"):
                 self.asset_loop_var.set(use_asset)
+            if hasattr(self, "download_number_mode_var"):
+                self.download_number_mode_var.set(False)
+            self.cfg["download_number_mode_enabled"] = False
+        elif mode == "download":
+            self.cfg["asset_loop_enabled"] = False
+            if hasattr(self, "asset_loop_var"):
+                self.asset_loop_var.set(False)
+            if hasattr(self, "download_number_mode_var"):
+                self.download_number_mode_var.set(True)
+            self.cfg["download_number_mode_enabled"] = True
         self.save_config()
 
     def on_start_prompt(self):
