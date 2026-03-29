@@ -2080,17 +2080,37 @@ class FlowVisionApp:
                 source_tag = self._normalize_reference_asset_tag(inline_match.group(1))
                 prompt_text = str(inline_match.group(2) or "").strip()
             else:
-                lines = chunk.splitlines()
-                if lines:
-                    first_line = str(lines[0] or "").strip()
-                    first_match = re.match(
-                        rf"^\s*({re.escape(prefix)}\s*0*[1-9][0-9]*)\s*$",
-                        first_line,
-                        re.IGNORECASE,
-                    )
-                    if first_match:
-                        source_tag = self._normalize_reference_asset_tag(first_match.group(1))
-                        prompt_text = "\n".join(lines[1:]).strip()
+                prompt_label_match = re.match(
+                    rf"^\s*({re.escape(prefix)}\s*0*[1-9][0-9]*)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$",
+                    chunk,
+                    re.IGNORECASE | re.DOTALL,
+                )
+                if prompt_label_match:
+                    source_tag = self._normalize_reference_asset_tag(prompt_label_match.group(1))
+                    prompt_text = str(prompt_label_match.group(2) or "").strip()
+                else:
+                    lines = chunk.splitlines()
+                    if lines:
+                        first_line = str(lines[0] or "").strip()
+                        first_match = re.match(
+                            rf"^\s*({re.escape(prefix)}\s*0*[1-9][0-9]*)\s*$",
+                            first_line,
+                            re.IGNORECASE,
+                        )
+                        if first_match:
+                            source_tag = self._normalize_reference_asset_tag(first_match.group(1))
+                            prompt_text = "\n".join(lines[1:]).strip()
+                        else:
+                            first_prompt_match = re.match(
+                                rf"^\s*({re.escape(prefix)}\s*0*[1-9][0-9]*)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$",
+                                first_line,
+                                re.IGNORECASE,
+                            )
+                            if first_prompt_match:
+                                source_tag = self._normalize_reference_asset_tag(first_prompt_match.group(1))
+                                first_body = str(first_prompt_match.group(2) or "").strip()
+                                rest_body = "\n".join(lines[1:]).strip()
+                                prompt_text = "\n".join([part for part in (first_body, rest_body) if part]).strip()
 
             if source_tag:
                 num_match = re.match(r"^[A-Z]+\s*0*([1-9][0-9]*)$", source_tag, re.IGNORECASE)
@@ -2458,6 +2478,7 @@ class FlowVisionApp:
         entries = self._load_prompts_from_file_name(file_name)
         prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
         tag_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*::\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
+        prompt_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
         tagged_prompts = {}
         common_prompt = ""
         for entry in entries:
@@ -2465,6 +2486,8 @@ class FlowVisionApp:
             if not raw_text:
                 continue
             match = tag_pattern.match(raw_text)
+            if not match:
+                match = prompt_pattern.match(raw_text)
             if match:
                 tag = match.group(1).strip().upper()
                 body = match.group(2).strip()
