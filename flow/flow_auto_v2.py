@@ -138,6 +138,7 @@ DEFAULT_CONFIG = {
     "asset_loop_prompt_template": "{tag} : Naturally Seamless Loop animation.",
     "asset_use_prompt_slot": False,
     "asset_prompt_slot": 0,
+    "asset_prompt_file": "",
     "asset_manual_selection": "",
     "asset_start_selector": "",
     "asset_search_button_selector": "",
@@ -2393,11 +2394,19 @@ class FlowVisionApp:
     def _prompt_slot_names(self):
         return [str(slot.get("name", "") or f"슬롯 {idx+1}") for idx, slot in enumerate(self.cfg.get("prompt_slots", []) or [])]
 
+    def _resolve_prompt_source_path(self, file_name):
+        raw = str(file_name or "").strip()
+        if not raw:
+            return None
+        path = Path(raw)
+        if not path.is_absolute():
+            path = self.base / raw
+        return path
+
     def _load_prompts_from_file_name(self, file_name):
-        file_name = str(file_name or "").strip()
-        if not file_name:
+        path = self._resolve_prompt_source_path(file_name)
+        if path is None:
             return []
-        path = self.base / file_name
         if not path.exists():
             return []
         try:
@@ -2426,20 +2435,25 @@ class FlowVisionApp:
         return f"{file_name} | 총 {len(prompts)}개 | 1~{len(prompts)}"
 
     def _asset_prompt_slot_data(self):
-        slots = self.cfg.get("prompt_slots", []) or []
-        if not slots:
-            return {
-                "slot_name": "",
-                "file_name": "",
-                "entries": [],
-                "tagged_prompts": {},
-                "common_prompt": "",
-                "mode": "empty",
-            }
-        slot_idx = self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0))
-        slot = slots[slot_idx]
-        slot_name = str(slot.get("name", "") or f"슬롯 {slot_idx + 1}")
-        file_name = str(slot.get("file", "") or "").strip()
+        slot_name = ""
+        file_name = str(self.cfg.get("asset_prompt_file", "") or "").strip()
+        if file_name:
+            slot_name = "S개별 프롬프트 파일"
+        else:
+            slots = self.cfg.get("prompt_slots", []) or []
+            if not slots:
+                return {
+                    "slot_name": "",
+                    "file_name": "",
+                    "entries": [],
+                    "tagged_prompts": {},
+                    "common_prompt": "",
+                    "mode": "empty",
+                }
+            slot_idx = self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0))
+            slot = slots[slot_idx]
+            slot_name = str(slot.get("name", "") or f"슬롯 {slot_idx + 1}")
+            file_name = str(slot.get("file", "") or "").strip()
         entries = self._load_prompts_from_file_name(file_name)
         prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
         tag_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*::\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
@@ -2473,7 +2487,7 @@ class FlowVisionApp:
             return "공통 프롬프트 템플릿 사용"
         data = self._asset_prompt_slot_data()
         if not data.get("slot_name"):
-            return "개별 프롬프트 파일이 없습니다."
+            return "S개별 프롬프트 파일이 없습니다."
         slot_name = data.get("slot_name", "")
         file_name = data.get("file_name", "")
         if not file_name:
@@ -2489,17 +2503,41 @@ class FlowVisionApp:
         return f"{slot_name} | {file_name} | 총 {len(entries)}개 | S001=1번, S002=2번..."
 
     def _refresh_asset_prompt_slot_controls(self):
-        slot_names = self._prompt_slot_names()
         self.cfg["asset_prompt_slot"] = self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0))
-        if hasattr(self, "combo_asset_prompt_slot"):
-            self.combo_asset_prompt_slot["values"] = slot_names
-            if slot_names:
-                self.combo_asset_prompt_slot.current(self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0)))
+        if hasattr(self, "asset_prompt_file_display_var"):
+            file_name = str(self.cfg.get("asset_prompt_file", "") or "").strip()
+            if not file_name:
+                legacy = self._asset_prompt_slot_data().get("file_name", "")
+                file_name = str(legacy or "").strip()
+            self.asset_prompt_file_display_var.set(file_name)
         if hasattr(self, "lbl_asset_prompt_source_status"):
             self.lbl_asset_prompt_source_status.config(
                 text=self._asset_prompt_slot_summary(),
                 fg=self.color_info if self.cfg.get("asset_use_prompt_slot") else self.color_text_sec,
             )
+
+    def on_pick_asset_prompt_file(self):
+        initial = str(self.cfg.get("asset_prompt_file", "") or "").strip()
+        initial_path = self._resolve_prompt_source_path(initial)
+        initialdir = str(initial_path.parent) if initial_path and initial_path.parent.exists() else str(self.base)
+        picked = filedialog.askopenfilename(
+            initialdir=initialdir,
+            title="S자동화 개별 프롬프트 파일 선택",
+            filetypes=[("텍스트 파일", "*.txt"), ("모든 파일", "*.*")],
+        )
+        if not picked:
+            return
+        picked_path = Path(picked)
+        try:
+            rel = picked_path.relative_to(self.base)
+            stored = str(rel).replace("\\", "/")
+        except Exception:
+            stored = str(picked_path)
+        self.cfg["asset_prompt_file"] = stored
+        if hasattr(self, "asset_prompt_file_display_var"):
+            self.asset_prompt_file_display_var.set(stored)
+        self.on_option_toggle()
+        self.log(f"📄 S개별 프롬프트 파일 선택: {stored}")
 
     def _pipeline_active_step(self):
         steps = self.cfg.get("pipeline_steps", []) or []
@@ -4448,6 +4486,24 @@ class FlowVisionApp:
                 )
             else:
                 self.lbl_asset_manual_status.config(text="비워두면 시작~끝 범위 실행", fg=self.color_text_sec)
+        if hasattr(self, "lbl_download_manual_status"):
+            raw = str(self.cfg.get("asset_manual_selection", "") or "").strip()
+            if raw and asset_info.get("invalid_tokens"):
+                self.lbl_download_manual_status.config(
+                    text=f"형식 확인: {', '.join(asset_info['invalid_tokens'][:3])}",
+                    fg=self.color_error,
+                )
+            elif raw:
+                self.lbl_download_manual_status.config(
+                    text=self._format_manual_selection_preview(
+                        asset_info.get("numbers", []),
+                        prefix=(self.cfg.get("asset_loop_prefix") or "S").strip() or "S",
+                        pad_width=self._asset_pad_width(),
+                    ),
+                    fg=self.color_info,
+                )
+            else:
+                self.lbl_download_manual_status.config(text="비워두면 시작~끝 범위 실행", fg=self.color_text_sec)
         self._refresh_asset_prompt_slot_controls()
 
     def _load_prompt_source_prompts(self, update_preview=True):
@@ -8580,17 +8636,19 @@ class FlowVisionApp:
             font=self.font_small,
             activebackground=self.color_bg,
         ).pack(side="left")
-        tk.Label(asset_prompt_source_f, text="프롬프트 파일", bg=self.color_bg, font=self.font_small).pack(side="left", padx=(10, 0))
-        self.asset_prompt_slot_var = tk.StringVar()
-        self.combo_asset_prompt_slot = ttk.Combobox(
+        tk.Label(asset_prompt_source_f, text="S개별 프롬프트 파일", bg=self.color_bg, font=self.font_small).pack(side="left", padx=(10, 0))
+        self.asset_prompt_file_display_var = tk.StringVar(value=str(self.cfg.get("asset_prompt_file", "") or "").strip())
+        self.entry_asset_prompt_file = tk.Entry(
             asset_prompt_source_f,
-            textvariable=self.asset_prompt_slot_var,
+            textvariable=self.asset_prompt_file_display_var,
             state="readonly",
-            width=18,
-            font=self.font_small,
+            readonlybackground=self.color_input_bg,
+            fg=self.color_input_fg,
+            font=("Consolas", 9),
+            width=28,
         )
-        self.combo_asset_prompt_slot.pack(side="left", padx=(6, 0))
-        self.combo_asset_prompt_slot.bind("<<ComboboxSelected>>", self.on_option_toggle)
+        self.entry_asset_prompt_file.pack(side="left", fill="x", expand=True, padx=(6, 6), ipady=2)
+        ttk.Button(asset_prompt_source_f, text="파일 선택", command=self.on_pick_asset_prompt_file).pack(side="left")
         self.lbl_asset_prompt_source_status = tk.Label(
             asset_f,
             text="",
@@ -8609,19 +8667,21 @@ class FlowVisionApp:
         self._refresh_asset_prompt_slot_controls()
 
         tk.Label(asset_f, text="프롬프트 템플릿 ({tag}=S001/S002... 로 치환)", bg=self.color_bg, font=self.font_small).pack(anchor="w")
-        self.asset_loop_template_var = tk.StringVar(
-            value=self.cfg.get("asset_loop_prompt_template", "{tag} : Naturally Seamless Loop animation.")
-        )
-        self.entry_asset_template = tk.Entry(
+        self.text_asset_template = tk.Text(
             asset_f,
-            textvariable=self.asset_loop_template_var,
             bg=self.color_input_bg,
             fg=self.color_input_fg,
             insertbackground=self.color_input_fg,
             font=("Consolas", 10),
+            height=3,
+            wrap="word",
+            relief="solid",
+            borderwidth=1,
         )
-        self.entry_asset_template.pack(fill="x", ipady=3, pady=(2, 0))
-        self.entry_asset_template.bind("<FocusOut>", self.on_option_toggle)
+        self.text_asset_template.pack(fill="x", pady=(2, 0))
+        self.text_asset_template.insert("1.0", self.cfg.get("asset_loop_prompt_template", "{tag} : Naturally Seamless Loop animation."))
+        self.text_asset_template.bind("<FocusOut>", self.on_option_toggle)
+        self.text_asset_template.bind("<KeyRelease>", self.on_option_toggle)
 
         asset_preset_box = tk.LabelFrame(
             asset_f,
@@ -8899,7 +8959,75 @@ class FlowVisionApp:
         self.entry_download_output_dir.pack(side="left", fill="x", expand=True, padx=(6, 6), ipady=2)
         self.entry_download_output_dir.bind("<FocusOut>", self.on_option_toggle)
         ttk.Button(out_f, text="폴더선택", command=self.on_pick_download_output_dir).pack(side="left")
-        tk.Label(dl_body, text="개별 다운로드 번호는 위 S반복의 '개별 번호' 입력칸을 공유합니다.", bg=self.color_bg, fg=self.color_text_sec, font=self.font_small).pack(anchor="w", pady=(0, 8))
+
+        dl_target_box = tk.LabelFrame(
+            dl_f,
+            text="다운로드 대상 번호 설정",
+            bg=self.color_bg,
+            fg=self.color_text,
+            font=self.font_body_bold,
+            padx=8,
+            pady=6,
+        )
+        dl_target_box.pack(fill="x", pady=(0, 8))
+        tk.Label(
+            dl_target_box,
+            text="기능은 그대로이며, 현재는 S자동화와 같은 번호값을 함께 사용합니다.",
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            font=self.font_small,
+        ).pack(anchor="w", pady=(0, 6))
+        dl_range_f = tk.Frame(dl_target_box, bg=self.color_bg)
+        dl_range_f.pack(fill="x", pady=(0, 6))
+        tk.Label(dl_range_f, text="시작 번호", bg=self.color_bg, font=self.font_small).pack(side="left")
+        self.spin_download_start = tk.Spinbox(
+            dl_range_f,
+            from_=1,
+            to=9999,
+            width=6,
+            textvariable=self.asset_loop_start_var,
+            command=self.on_option_toggle,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+        )
+        self.spin_download_start.pack(side="left", padx=(6, 14))
+        self.spin_download_start.bind("<FocusOut>", self.on_option_toggle)
+        self.spin_download_start.bind("<Return>", self.on_option_toggle)
+        self.spin_download_start.bind("<KeyRelease>", self.on_option_toggle)
+        tk.Label(dl_range_f, text="끝 번호", bg=self.color_bg, font=self.font_small).pack(side="left")
+        self.spin_download_end = tk.Spinbox(
+            dl_range_f,
+            from_=1,
+            to=9999,
+            width=6,
+            textvariable=self.asset_loop_end_var,
+            command=self.on_option_toggle,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+        )
+        self.spin_download_end.pack(side="left", padx=(6, 0))
+        self.spin_download_end.bind("<FocusOut>", self.on_option_toggle)
+        self.spin_download_end.bind("<Return>", self.on_option_toggle)
+        self.spin_download_end.bind("<KeyRelease>", self.on_option_toggle)
+        dl_manual_f = tk.Frame(dl_target_box, bg=self.color_bg)
+        dl_manual_f.pack(fill="x", pady=(0, 4))
+        tk.Label(dl_manual_f, text="개별 번호", bg=self.color_bg, font=self.font_small).pack(side="left")
+        self.entry_download_manual_selection = tk.Entry(
+            dl_manual_f,
+            textvariable=self.asset_manual_selection_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono,
+        )
+        self.entry_download_manual_selection.pack(side="left", fill="x", expand=True, padx=(6, 0), ipady=2)
+        self.entry_download_manual_selection.bind("<FocusOut>", self.on_option_toggle)
+        self.entry_download_manual_selection.bind("<Return>", self.on_option_toggle)
+        self.entry_download_manual_selection.bind("<KeyRelease>", self.on_option_toggle)
+        ToolTip(self.entry_download_manual_selection, "예: 005,018,048,057,071-079,110 또는 S005,S018,S071-S079")
+        ttk.Button(dl_manual_f, text="최근 실패 자동채움", command=self.on_fill_asset_manual_from_failures).pack(side="left", padx=(6, 0))
+        self.lbl_download_manual_status = tk.Label(dl_target_box, text="", bg=self.color_bg, fg=self.color_text_sec, font=self.font_small)
+        self.lbl_download_manual_status.pack(anchor="w")
 
         tk.Label(dl_f, text="검색 입력 selector(공통)", bg=self.color_bg, font=self.font_small).pack(anchor="w")
         self.download_search_input_selector_var = tk.StringVar(value=self.cfg.get("download_search_input_selector", ""))
@@ -10185,11 +10313,12 @@ class FlowVisionApp:
         asset_prefix = self.asset_loop_prefix_var.get().strip() if hasattr(self, "asset_loop_prefix_var") else str(self.cfg.get("asset_loop_prefix", "S"))
         self.cfg["asset_loop_prefix"] = asset_prefix or "S"
         self.cfg["asset_use_prompt_slot"] = self.asset_use_prompt_slot_var.get() if hasattr(self, "asset_use_prompt_slot_var") else bool(self.cfg.get("asset_use_prompt_slot", False))
-        if hasattr(self, "combo_asset_prompt_slot") and self.combo_asset_prompt_slot.current() >= 0:
-            self.cfg["asset_prompt_slot"] = self._clamp_slot_index(self.combo_asset_prompt_slot.current())
+        self.cfg["asset_prompt_slot"] = self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0))
+        self.cfg["asset_prompt_file"] = self.asset_prompt_file_display_var.get().strip() if hasattr(self, "asset_prompt_file_display_var") else str(self.cfg.get("asset_prompt_file", "") or "").strip()
+        if hasattr(self, "text_asset_template"):
+            asset_template = self.text_asset_template.get("1.0", "end-1c").strip()
         else:
-            self.cfg["asset_prompt_slot"] = self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0))
-        asset_template = self.asset_loop_template_var.get().strip() if hasattr(self, "asset_loop_template_var") else str(self.cfg.get("asset_loop_prompt_template", ""))
+            asset_template = str(self.cfg.get("asset_loop_prompt_template", ""))
         self.cfg["asset_loop_prompt_template"] = asset_template or "{tag} : Naturally Seamless Loop animation."
         self.cfg["asset_manual_selection"] = self.asset_manual_selection_var.get().strip() if hasattr(self, "asset_manual_selection_var") else str(self.cfg.get("asset_manual_selection", "") or "").strip()
         self.cfg["asset_start_selector"] = self.asset_start_selector_var.get().strip() if hasattr(self, "asset_start_selector_var") else self.cfg.get("asset_start_selector", "")
