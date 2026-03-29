@@ -2087,7 +2087,7 @@ class FlowVisionApp:
                 )
                 if prompt_label_match:
                     source_tag = self._normalize_reference_asset_tag(prompt_label_match.group(1))
-                    prompt_text = str(prompt_label_match.group(2) or "").strip()
+                    prompt_text = chunk.strip()
                 else:
                     lines = chunk.splitlines()
                     if lines:
@@ -2108,9 +2108,7 @@ class FlowVisionApp:
                             )
                             if first_prompt_match:
                                 source_tag = self._normalize_reference_asset_tag(first_prompt_match.group(1))
-                                first_body = str(first_prompt_match.group(2) or "").strip()
-                                rest_body = "\n".join(lines[1:]).strip()
-                                prompt_text = "\n".join([part for part in (first_body, rest_body) if part]).strip()
+                                prompt_text = chunk.strip()
 
             if source_tag:
                 num_match = re.match(r"^[A-Z]+\s*0*([1-9][0-9]*)$", source_tag, re.IGNORECASE)
