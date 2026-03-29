@@ -4157,7 +4157,7 @@ class FlowVisionApp:
 
     def _asset_pad_width(self):
         try:
-            return max(3, int(self.cfg.get("asset_loop_num_width", 3) or 3))
+            return min(4, max(3, int(self.cfg.get("asset_loop_num_width", 3) or 3)))
         except Exception:
             return 3
 
@@ -10350,9 +10350,9 @@ class FlowVisionApp:
         except Exception:
             prev_width = 3
         if requested_width > 0:
-            self.cfg["asset_loop_num_width"] = max(3, requested_width)
+            self.cfg["asset_loop_num_width"] = min(4, max(3, requested_width))
         else:
-            self.cfg["asset_loop_num_width"] = max(3, prev_width)
+            self.cfg["asset_loop_num_width"] = min(4, max(3, prev_width))
 
         asset_prefix = self.asset_loop_prefix_var.get().strip() if hasattr(self, "asset_loop_prefix_var") else str(self.cfg.get("asset_loop_prefix", "S"))
         self.cfg["asset_loop_prefix"] = asset_prefix or "S"
@@ -10507,7 +10507,12 @@ class FlowVisionApp:
             focus_widget = self.root.focus_get()
         except Exception:
             focus_widget = None
-        if focus_widget not in (getattr(self, "spin_asset_start", None), getattr(self, "spin_asset_end", None)):
+        if focus_widget not in (
+            getattr(self, "spin_asset_start", None),
+            getattr(self, "spin_asset_end", None),
+            getattr(self, "spin_download_start", None),
+            getattr(self, "spin_download_end", None),
+        ):
             self._sync_asset_range_display()
         self.log(f"⚙️ 설정 동기화 완료 (입력방식: {self.cfg['input_mode']})")
 
