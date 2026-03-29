@@ -208,6 +208,8 @@ DEFAULT_CONFIG = {
     "ref_img5_area": None
 }
 
+MAX_SCENE_NUMBER = 999
+
 PROMPT_MEDIA_LABELS = {"image": "이미지", "video": "영상"}
 PROMPT_MEDIA_VALUES = {label: value for value, label in PROMPT_MEDIA_LABELS.items()}
 PROMPT_ORIENTATION_LABELS = {"landscape": "가로", "portrait": "세로"}
@@ -4187,6 +4189,8 @@ class FlowVisionApp:
 
     def _parse_manual_number_spec(self, raw_text, upper_bound=None, max_items=500, allowed_prefixes=None):
         raw = str(raw_text or "").strip()
+        if upper_bound is None:
+            upper_bound = MAX_SCENE_NUMBER
         if not raw:
             return {
                 "raw": "",
@@ -4453,7 +4457,7 @@ class FlowVisionApp:
     def _resolve_asset_number_plan(self):
         raw = str(self.cfg.get("asset_manual_selection", "") or "").strip()
         asset_prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
-        info = self._parse_manual_number_spec(raw, upper_bound=None, allowed_prefixes=[asset_prefix, "S"])
+        info = self._parse_manual_number_spec(raw, upper_bound=MAX_SCENE_NUMBER, allowed_prefixes=[asset_prefix, "S"])
         if raw and info.get("numbers"):
             return info
 
@@ -4465,8 +4469,8 @@ class FlowVisionApp:
             end_num = int(self.cfg.get("asset_loop_end", 1))
         except (TypeError, ValueError):
             end_num = start_num
-        start_num = max(1, start_num)
-        end_num = max(1, end_num)
+        start_num = max(1, min(MAX_SCENE_NUMBER, start_num))
+        end_num = max(1, min(MAX_SCENE_NUMBER, end_num))
         if start_num > end_num:
             start_num, end_num = end_num, start_num
         return {
@@ -8600,7 +8604,7 @@ class FlowVisionApp:
         self.spin_asset_start = tk.Spinbox(
             asset_range_f,
             from_=1,
-            to=9999,
+            to=MAX_SCENE_NUMBER,
             width=6,
             textvariable=self.asset_loop_start_var,
             command=self.on_option_toggle,
@@ -8617,7 +8621,7 @@ class FlowVisionApp:
         self.spin_asset_end = tk.Spinbox(
             asset_range_f,
             from_=1,
-            to=9999,
+            to=MAX_SCENE_NUMBER,
             width=6,
             textvariable=self.asset_loop_end_var,
             command=self.on_option_toggle,
@@ -9027,7 +9031,7 @@ class FlowVisionApp:
         self.spin_download_start = tk.Spinbox(
             dl_range_f,
             from_=1,
-            to=9999,
+            to=MAX_SCENE_NUMBER,
             width=6,
             textvariable=self.asset_loop_start_var,
             command=self.on_option_toggle,
@@ -9042,7 +9046,7 @@ class FlowVisionApp:
         self.spin_download_end = tk.Spinbox(
             dl_range_f,
             from_=1,
-            to=9999,
+            to=MAX_SCENE_NUMBER,
             width=6,
             textvariable=self.asset_loop_end_var,
             command=self.on_option_toggle,
@@ -10337,8 +10341,8 @@ class FlowVisionApp:
             asset_end = int(raw_end) if raw_end else int(self.cfg.get("asset_loop_end", 1))
         except Exception:
             asset_end = asset_start
-        self.cfg["asset_loop_start"] = max(1, asset_start)
-        self.cfg["asset_loop_end"] = max(1, asset_end)
+        self.cfg["asset_loop_start"] = max(1, min(MAX_SCENE_NUMBER, asset_start))
+        self.cfg["asset_loop_end"] = max(1, min(MAX_SCENE_NUMBER, asset_end))
 
         # S 자동화는 항상 S001 형식 이상으로 고정한다.
         requested_width = 0
