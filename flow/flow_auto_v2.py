@@ -484,7 +484,7 @@ class FlowVisionApp:
         self.live_failure_items = []
         self.live_failure_seen = set()
         self.pending_generation_watches = []
-        self.observed_failure_card_count = 0
+        self.observed_failure_card_signatures = {}
         self.pending_periodic_refresh = None
         self.current_selection_summary = ""
         self.current_selection_input = ""
@@ -1403,11 +1403,12 @@ class FlowVisionApp:
                 self.lbl_live_fail_status.config(text="실패 없음", fg=self.color_success)
         self.txt_live_failures.config(state="disabled")
 
-    def _reset_live_failure_tracking(self):
-        self.live_failure_items = []
-        self.live_failure_seen = set()
+    def _reset_live_failure_tracking(self, preserve_items=False):
+        if not preserve_items:
+            self.live_failure_items = []
+            self.live_failure_seen = set()
         self.pending_generation_watches = []
-        self.observed_failure_card_count = 0
+        self.observed_failure_card_signatures = {}
         self.pending_periodic_refresh = None
         self.root.after(0, self._refresh_live_failure_panel)
 
@@ -1431,45 +1432,81 @@ class FlowVisionApp:
             cards = self.page.evaluate(
                 """() => {
                     const failHits = [
+                        "이 생성은 google 정책을 위반할 수 있습니다",
+                        "google 정책을 위반할 수 있습니다",
+                        "정책을 위반할 수 있습니다",
                         "문제가 발생했습니다",
                         "실패",
                         "something went wrong",
                         "failed",
                         "error occurred",
                     ];
+                    const negativeKeys = [
+                        "무엇을 만들고 싶으신가요",
+                        "프롬프트",
+                        "prompt",
+                        "message",
+                        "메시지",
+                        "start",
+                        "종료",
+                        "시작",
+                    ];
                     const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
                     const isVisible = (el) => {
                         if (!el) return false;
                         const rect = el.getBoundingClientRect();
-                        if (!rect || rect.width < 120 || rect.height < 40) return false;
+                        if (!rect || rect.width < 24 || rect.height < 16) return false;
                         const style = window.getComputedStyle(el);
                         return style && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
                     };
+                    const findCard = (el) => {
+                        let cur = el;
+                        for (let depth = 0; cur && depth < 8; depth += 1, cur = cur.parentElement) {
+                            if (!isVisible(cur)) continue;
+                            const rect = cur.getBoundingClientRect();
+                            if (!rect) continue;
+                            if (rect.width < 220 || rect.height < 100) continue;
+                            if (rect.width > window.innerWidth * 0.98 || rect.height > window.innerHeight * 0.85) continue;
+                            const meta = clean(cur.innerText || cur.textContent || cur.getAttribute("aria-label") || "");
+                            const lower = meta.toLowerCase();
+                            if (negativeKeys.some((hit) => lower.includes(hit.toLowerCase()))) continue;
+                            return cur;
+                        }
+                        return el;
+                    };
                     const out = [];
                     const seen = new Set();
-                    const nodes = document.querySelectorAll("div, section, article, li, button, a, [role='button'], [role='link']");
+                    const nodes = document.querySelectorAll("div, section, article, li, button, a, span, p, [role='button'], [role='link']");
                     for (const node of nodes) {
                         if (!isVisible(node)) continue;
-                        const rect = node.getBoundingClientRect();
-                        if (rect.width > window.innerWidth * 0.98 || rect.height > window.innerHeight * 0.75) continue;
-                        const text = clean(node.innerText || "");
-                        if (text.length < 8 || text.length > 220) continue;
+                        const text = clean(node.innerText || node.textContent || node.getAttribute("aria-label") || "");
+                        if (text.length < 4 || text.length > 260) continue;
                         const lower = text.toLowerCase();
                         if (!failHits.some((hit) => lower.includes(hit.toLowerCase()))) continue;
-                        const lines = text.split(/\\n+/).map(clean).filter(Boolean);
+                        const card = findCard(node);
+                        if (!isVisible(card)) continue;
+                        const rect = card.getBoundingClientRect();
+                        if (rect.width > window.innerWidth * 0.98 || rect.height > window.innerHeight * 0.85) continue;
+                        const cardText = clean(card.innerText || card.textContent || "");
+                        const summaryText = cardText || text;
+                        const lines = summaryText.split(/\\n+/).map(clean).filter(Boolean);
                         const title = lines[0] || text;
-                        const summary = lines.slice(0, 3).join(" | ").slice(0, 160);
+                        const summary = lines.slice(0, 4).join(" | ").slice(0, 220);
+                        const bucketTop = Math.round(rect.top / 12) * 12;
+                        const bucketLeft = Math.round(rect.left / 12) * 12;
+                        const signature = [bucketTop, bucketLeft, summary.toLowerCase()].join("|");
                         const key = [
-                            Math.round(rect.left),
-                            Math.round(rect.top),
+                            bucketLeft,
+                            bucketTop,
                             Math.round(rect.width),
                             Math.round(rect.height),
-                            summary,
+                            signature,
                         ].join("|");
                         if (seen.has(key)) continue;
                         seen.add(key);
                         out.push({
                             key,
+                            signature,
                             title,
                             text: summary,
                             summary_key: summary.toLowerCase(),
@@ -1525,9 +1562,14 @@ class FlowVisionApp:
     def _register_generation_watch(self, session_idx, source_no=None, asset_tag="", baseline_cards=None, expected_outputs=1):
         if not self.pending_generation_watches:
             try:
-                self.observed_failure_card_count = len(self._snapshot_generation_failure_cards())
+                baseline_counter = {}
+                for card in self._snapshot_generation_failure_cards():
+                    sig = str((card or {}).get("signature", "") or (card or {}).get("key", "") or "").strip()
+                    if sig:
+                        baseline_counter[sig] = int(baseline_counter.get(sig, 0) or 0) + 1
+                self.observed_failure_card_signatures = baseline_counter
             except Exception:
-                self.observed_failure_card_count = 0
+                self.observed_failure_card_signatures = {}
         baseline_keys = set()
         baseline_summary_counts = {}
         for item in baseline_cards or []:
@@ -1609,18 +1651,25 @@ class FlowVisionApp:
         if not watches:
             return
         cards = self._snapshot_generation_failure_cards()
-        current_count = len(cards)
-        try:
-            observed_count = int(self.observed_failure_card_count or 0)
-        except Exception:
-            observed_count = 0
-        if current_count < observed_count:
-            observed_count = current_count
-            self.observed_failure_card_count = current_count
-        if current_count <= observed_count:
-            return
-        new_cards = cards[observed_count:current_count]
+        current_counter = {}
+        for card in cards:
+            sig = str((card or {}).get("signature", "") or (card or {}).get("key", "") or "").strip()
+            if sig:
+                current_counter[sig] = int(current_counter.get(sig, 0) or 0) + 1
+        observed_counter = dict(getattr(self, "observed_failure_card_signatures", {}) or {})
+        new_cards = []
+        consume_counter = dict(observed_counter)
+        for card in cards:
+            sig = str((card or {}).get("signature", "") or (card or {}).get("key", "") or "").strip()
+            if not sig:
+                continue
+            seen_count = int(consume_counter.get(sig, 0) or 0)
+            current_count = int(current_counter.get(sig, 0) or 0)
+            if seen_count < current_count:
+                new_cards.append(card)
+                consume_counter[sig] = seen_count + 1
         if not new_cards:
+            self.observed_failure_card_signatures = current_counter
             return
         for card in new_cards:
             if not self.pending_generation_watches:
@@ -1628,7 +1677,7 @@ class FlowVisionApp:
             watch = self.pending_generation_watches.pop(0)
             reason = str(card.get("text", "") or card.get("title", "") or "문제가 발생했습니다.").strip()
             self._record_generation_failure(watch, reason)
-        self.observed_failure_card_count = current_count
+        self.observed_failure_card_signatures = current_counter
 
     def _resolve_profile_dir(self):
         profile_dir = (self.cfg.get("browser_profile_dir") or "flow_human_profile_pw").strip()
@@ -14012,10 +14061,15 @@ class FlowVisionApp:
                 return
 
         if self.relay_progress == 0:
+            preserve_live_failures = bool(
+                self.pipeline_runtime_active and (
+                    self.pipeline_run_position > 0 or self.pipeline_runtime_retry_round > 0
+                )
+            )
             self.session_start_time = datetime.now()
             self.session_log = []
             self.retry_error_log = []
-            self._reset_live_failure_tracking()
+            self._reset_live_failure_tracking(preserve_items=preserve_live_failures)
             self._open_action_log("download_trace" if is_download_mode else "action_trace")
             self.session_report_path = self.logs_dir / f"session_report_{self.session_start_time.strftime('%Y%m%d_%H%M%S')}.json"
             self.completion_summary_path = None
