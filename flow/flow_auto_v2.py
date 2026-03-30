@@ -11507,6 +11507,31 @@ class FlowVisionApp:
             return
         profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
         self.cfg[self._preset_cfg_key(profile, "mode_preset_enabled")] = True
+        if profile == "asset":
+            # S자동화는 저장된 값보다 현재 화면 상태를 우선 본다.
+            detected_state = self.refresh_detected_media_state(
+                ensure_session=False,
+                input_locator=input_locator,
+                profile="asset",
+                write_log=False,
+            )
+            if detected_state == "video":
+                self.current_media_state = "video"
+                self.cfg["current_media_state"] = "video"
+                self.cfg["asset_prompt_media_mode"] = "video"
+                if hasattr(self, "asset_prompt_media_mode_var"):
+                    self.asset_prompt_media_mode_var.set(PROMPT_MEDIA_LABELS.get("video", "영상"))
+                self.save_config()
+                self.log("ℹ️ S자동화 생성 모드 유지: video")
+                return
+            ok = self._switch_media_state("video", input_locator=input_locator, profile="asset")
+            if not ok:
+                raise RuntimeError("S자동화 시작 전 image→video 전환에 실패했습니다. 상태 확인과 이미지→동영상 테스트를 다시 확인해주세요.")
+            self.cfg["asset_prompt_media_mode"] = "video"
+            if hasattr(self, "asset_prompt_media_mode_var"):
+                self.asset_prompt_media_mode_var.set(PROMPT_MEDIA_LABELS.get("video", "영상"))
+            self.save_config()
+            return
         desired_state = str(self.cfg.get(self._preset_cfg_key(profile, "media_mode"), "image")).strip().lower()
         desired_state = "video" if desired_state == "video" else "image"
         ok = self._switch_media_state(desired_state, input_locator=input_locator, profile=profile)
