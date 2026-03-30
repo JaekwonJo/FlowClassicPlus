@@ -3758,8 +3758,11 @@ class FlowVisionApp:
             if hasattr(self, "asset_loop_var"):
                 self.asset_loop_var.set(False)
             self.cfg["prompt_manual_selection"] = prompt_selection
+            self.cfg["prompt_manual_selection_enabled"] = bool(prompt_selection)
             if hasattr(self, "prompt_manual_selection_var"):
                 self.prompt_manual_selection_var.set(prompt_selection)
+            if hasattr(self, "prompt_manual_selection_enabled_var"):
+                self.prompt_manual_selection_enabled_var.set(bool(prompt_selection))
             prompt_slot_idx = self._clamp_slot_index(step.get("prompt_slot", self.cfg.get("active_prompt_slot", 0)))
             self.cfg["active_prompt_slot"] = prompt_slot_idx
             prompt_slots = self.cfg.get("prompt_slots", []) or []
