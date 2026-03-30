@@ -1491,7 +1491,38 @@ class FlowVisionApp:
             pass
         return []
 
-    def _register_generation_watch(self, session_idx, source_no=None, asset_tag="", baseline_cards=None):
+    def _expected_generation_output_count(self, profile="prompt"):
+        profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
+        cfg_key = "asset_prompt_variant_count" if profile == "asset" else "prompt_variant_count"
+        raw = str(self.cfg.get(cfg_key, "x1") or "x1").strip().lower()
+        m = re.match(r"^x\s*(\d+)$", raw)
+        if m:
+            try:
+                return max(1, min(4, int(m.group(1))))
+            except Exception:
+                return 1
+        try:
+            return max(1, min(4, int(raw)))
+        except Exception:
+            return 1
+
+    def _prune_pending_generation_watches(self, now_ts=None):
+        watches = list(self.pending_generation_watches or [])
+        if not watches:
+            return
+        if now_ts is None:
+            now_ts = time.time()
+        kept = []
+        for watch in watches:
+            try:
+                started_at = float(watch.get("started_at", 0.0) or 0.0)
+            except Exception:
+                started_at = 0.0
+            if started_at <= 0.0 or (now_ts - started_at) <= 180.0:
+                kept.append(watch)
+        self.pending_generation_watches = kept
+
+    def _register_generation_watch(self, session_idx, source_no=None, asset_tag="", baseline_cards=None, expected_outputs=1):
         if not self.pending_generation_watches:
             try:
                 self.observed_failure_card_count = len(self._snapshot_generation_failure_cards())
@@ -1506,15 +1537,24 @@ class FlowVisionApp:
             summary_key = str((item or {}).get("summary_key", "") or "").strip()
             if summary_key:
                 baseline_summary_counts[summary_key] = int(baseline_summary_counts.get(summary_key, 0) or 0) + 1
-        self.pending_generation_watches.append({
-            "session_idx": session_idx,
-            "source_no": source_no,
-            "asset_tag": str(asset_tag or "").strip(),
-            "baseline_keys": baseline_keys,
-            "baseline_count": len(list(baseline_cards or [])),
-            "baseline_summary_counts": baseline_summary_counts,
-            "started_at": time.time(),
-        })
+        try:
+            expected_outputs = int(expected_outputs or 1)
+        except Exception:
+            expected_outputs = 1
+        expected_outputs = max(1, min(4, expected_outputs))
+        started_at = time.time()
+        for slot_no in range(expected_outputs):
+            self.pending_generation_watches.append({
+                "session_idx": session_idx,
+                "source_no": source_no,
+                "asset_tag": str(asset_tag or "").strip(),
+                "baseline_keys": baseline_keys,
+                "baseline_count": len(list(baseline_cards or [])),
+                "baseline_summary_counts": baseline_summary_counts,
+                "started_at": started_at,
+                "slot_no": slot_no + 1,
+                "expected_outputs": expected_outputs,
+            })
 
     def _record_live_failure_event(self, source_no=None, asset_tag="", reason="", session_idx=None, retry_label="실패"):
         token = self._format_live_failure_token(source_no=source_no, asset_tag=asset_tag)
@@ -1563,6 +1603,10 @@ class FlowVisionApp:
     def _poll_pending_generation_failure(self):
         watches = list(self.pending_generation_watches or [])
         if (not watches) or self.current_run_mode not in ("prompt", "asset"):
+            return
+        self._prune_pending_generation_watches()
+        watches = list(self.pending_generation_watches or [])
+        if not watches:
             return
         cards = self._snapshot_generation_failure_cards()
         current_count = len(cards)
@@ -14666,11 +14710,13 @@ class FlowVisionApp:
                 "status": "success",
                 "error": "",
             })
+            expected_outputs = self._expected_generation_output_count("asset" if asset_tag else "prompt")
             self._register_generation_watch(
                 session_idx=len(self.session_log) - 1,
                 source_no=source_no or (self.index + 1),
                 asset_tag=asset_tag or "",
                 baseline_cards=failure_baseline_cards,
+                expected_outputs=expected_outputs,
             )
             self.actor.processed_count += 1
             self.index += 1
