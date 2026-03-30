@@ -5397,6 +5397,29 @@ class FlowVisionApp:
         except Exception:
             return None, None
 
+    def _resolve_focused_asset_search_input(self):
+        if not self.page:
+            return None, None
+        try:
+            focus_loc = self.page.locator(":focus").first
+            if focus_loc.count() <= 0:
+                return None, None
+            if not focus_loc.is_visible(timeout=400):
+                return None, None
+            box = focus_loc.bounding_box()
+            if (not box) or box["width"] < 80 or box["height"] < 18:
+                return None, None
+            meta = self._locator_meta_text(focus_loc)
+            positive_keys = ("asset", "search", "에셋", "검색")
+            negative_keys = ("project", "title", "이름", "rename", "name", "prompt", "프롬프트", "무엇을 만들고")
+            if any(k in meta for k in negative_keys):
+                return None, None
+            if not any(k in meta for k in positive_keys):
+                return None, None
+            return focus_loc, ":focus"
+        except Exception:
+            return None, None
+
     def _direct_fill_download_search_via_dom(self, search_text):
         if (not self.page) or (not search_text):
             return False, "page/text 없음", ""
@@ -6232,6 +6255,30 @@ class FlowVisionApp:
                 return
             time.sleep(0.18)
 
+    def _recover_after_missing_asset_search(self, asset_tag=""):
+        if not self.page or self.page.is_closed():
+            return
+        self.asset_video_ready_for_run = False
+        self.current_media_state = None
+        self.cfg["current_media_state"] = ""
+        try:
+            self.save_config()
+        except Exception:
+            pass
+        try:
+            self.actor.random_action_delay("에셋 없음 후 초기화 전 대기", 0.5, 1.0)
+            start_url = str(self.cfg.get("start_url") or "").strip()
+            if start_url:
+                self.log(f"🔄 에셋 없음 초기화 이동: {asset_tag or '-'} -> 시작 페이지")
+                self.page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+            else:
+                self.log(f"🔄 에셋 없음 초기화 새로고침: {asset_tag or '-'}")
+                self.page.reload(wait_until="domcontentloaded", timeout=45000)
+            self._apply_browser_zoom()
+            self.actor.random_action_delay("에셋 없음 초기화 후 대기", 1.0, 1.8)
+        except Exception as refresh_e:
+            self.log(f"⚠️ 에셋 없음 후 초기화 실패(계속 진행): {refresh_e}")
+
     def _run_asset_loop_prestep(self, asset_tag):
         if (not self.page) or (not asset_tag):
             return
@@ -6321,25 +6368,38 @@ class FlowVisionApp:
             ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
         )
         if search_input is None:
-            # 클릭 후 포커스가 검색칸으로 이미 이동했을 수 있어 키보드 직접 입력 1회 폴백
-            try:
-                self.page.keyboard.press("Control+A")
-                self.page.keyboard.press("Backspace")
-                self.page.keyboard.insert_text(asset_tag)
-                self.page.keyboard.press("Enter")
-                self.log(f"✅ Step2 에셋 검색 입력 완료(포커스 폴백): {asset_tag}")
-                self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.3, 1.0)
-                self._wait_asset_search_resolution(asset_tag)
-                return
-            except Exception:
-                ok_dom, reason_dom = self._direct_fill_asset_search_via_dom(asset_tag)
-                if ok_dom:
+            focus_input, _focus_sel = self._resolve_focused_asset_search_input()
+            if focus_input is not None:
+                try:
+                    focus_input.click(timeout=1200)
+                except Exception:
+                    pass
+                try:
+                    self.page.keyboard.press("Control+A")
+                    self.page.keyboard.press("Backspace")
+                except Exception:
+                    pass
+                try:
+                    focus_input.fill(asset_tag)
+                except Exception:
+                    try:
+                        focus_input.type(asset_tag, delay=random.randint(25, 70))
+                    except Exception:
+                        focus_input = None
+                if focus_input is not None:
                     self.page.keyboard.press("Enter")
-                    self.log(f"✅ Step2 에셋 검색 입력 완료(DOM 폴백): {asset_tag}")
+                    self.log(f"✅ Step2 에셋 검색 입력 완료(포커스 폴백): {asset_tag}")
                     self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.3, 1.0)
                     self._wait_asset_search_resolution(asset_tag)
                     return
-                raise RuntimeError(f"Step2 실패: 에셋 검색 입력창을 찾지 못했습니다. (dom={reason_dom})")
+            ok_dom, reason_dom = self._direct_fill_asset_search_via_dom(asset_tag)
+            if ok_dom:
+                self.page.keyboard.press("Enter")
+                self.log(f"✅ Step2 에셋 검색 입력 완료(DOM 폴백): {asset_tag}")
+                self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.3, 1.0)
+                self._wait_asset_search_resolution(asset_tag)
+                return
+            raise RuntimeError(f"Step2 실패: 에셋 검색 입력창을 찾지 못했습니다. (dom={reason_dom})")
 
         try:
             search_input.click(timeout=1500)
@@ -14620,13 +14680,7 @@ class FlowVisionApp:
                 self.actor.processed_count += 1
                 self.index += 1
                 if self.page and (not self.page.is_closed()):
-                    try:
-                        self.actor.random_action_delay("에셋 없음 후 새로고침 전 대기", 0.8, 1.6)
-                        self.page.reload(wait_until="domcontentloaded", timeout=45000)
-                        self._apply_browser_zoom()
-                        self.actor.random_action_delay("에셋 없음 새로고침 후 대기", 1.2, 2.2)
-                    except Exception as refresh_e:
-                        self.log(f"⚠️ 에셋 없음 후 새로고침 실패(계속 진행): {refresh_e}")
+                    self._recover_after_missing_asset_search(asset_tag)
                 self.t_next = time.time() + 2
                 return
             print(f"ERROR in run_task: {e}")
