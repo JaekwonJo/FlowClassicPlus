@@ -1495,11 +1495,7 @@ class FlowVisionApp:
             "started_at": time.time(),
         }
 
-    def _record_generation_failure(self, watch, reason):
-        if not isinstance(watch, dict):
-            return
-        source_no = watch.get("source_no")
-        asset_tag = str(watch.get("asset_tag", "") or "").strip()
+    def _record_live_failure_event(self, source_no=None, asset_tag="", reason="", session_idx=None, retry_label="실패"):
         token = self._format_live_failure_token(source_no=source_no, asset_tag=asset_tag)
         if not token:
             return
@@ -1508,13 +1504,13 @@ class FlowVisionApp:
             return
         self.live_failure_seen.add(dedupe_key)
         try:
-            session_idx = int(watch.get("session_idx"))
+            session_idx = int(session_idx)
         except Exception:
             session_idx = -1
         if 0 <= session_idx < len(self.session_log):
             self.session_log[session_idx]["status"] = "failed"
             self.session_log[session_idx]["error"] = str(reason or "").strip()
-        self.retry_error_log.append(f"{token} | Flow 생성 실패 | {str(reason or '').strip()[:160]}")
+        self.retry_error_log.append(f"{token} | {str(retry_label or '실패').strip()} | {str(reason or '').strip()[:160]}")
         self.live_failure_items.append({
             "token": token,
             "reason": str(reason or "").strip() or "문제가 발생했습니다.",
@@ -1525,6 +1521,23 @@ class FlowVisionApp:
         self.log(f"🚨 Flow 실패 감지: {token} | {str(reason or '').strip() or '문제가 발생했습니다.'}")
         self.update_status_label(f"🚨 생성 실패 감지: {token}", self.color_error)
         self.root.after(0, self._refresh_live_failure_panel)
+
+    def _record_generation_failure(self, watch, reason):
+        if not isinstance(watch, dict):
+            return
+        source_no = watch.get("source_no")
+        asset_tag = str(watch.get("asset_tag", "") or "").strip()
+        try:
+            session_idx = int(watch.get("session_idx"))
+        except Exception:
+            session_idx = -1
+        self._record_live_failure_event(
+            source_no=source_no,
+            asset_tag=asset_tag,
+            reason=reason,
+            session_idx=session_idx,
+            retry_label="Flow 생성 실패",
+        )
 
     def _poll_pending_generation_failure(self):
         watch = self.pending_generation_watch
@@ -6145,6 +6158,80 @@ class FlowVisionApp:
         except Exception as e:
             return False, str(e)
 
+    def _probe_asset_search_result_state(self, asset_tag):
+        if (not self.page) or (not asset_tag):
+            return "pending", ""
+        try:
+            result = self.page.evaluate(
+                """(payload) => {
+                    const expected = String(payload.tag || "").trim().toLowerCase();
+                    const emptyHits = [
+                        "일치하는 결과 없음",
+                        "선택한 항목과 일치하는 결과가 없습니다",
+                        "no matching results",
+                        "no results",
+                    ];
+                    const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const rect = el.getBoundingClientRect();
+                        if (!rect || rect.width < 24 || rect.height < 16) return false;
+                        const style = window.getComputedStyle(el);
+                        return style && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+                    };
+
+                    const nodes = document.querySelectorAll("div, li, button, span, p");
+                    let found = false;
+                    let emptyReason = "";
+                    for (const node of nodes) {
+                        if (!isVisible(node)) continue;
+                        const rect = node.getBoundingClientRect();
+                        if (rect.top < 0 || rect.top > window.innerHeight * 0.92) continue;
+                        if (rect.left < 0 || rect.left > window.innerWidth * 0.92) continue;
+                        if (rect.width > window.innerWidth * 0.98 && rect.height > window.innerHeight * 0.75) continue;
+                        const text = clean(node.innerText || "");
+                        if (!text || text.length > 220) continue;
+                        const lower = text.toLowerCase();
+                        if (!emptyReason && emptyHits.some((hit) => lower.includes(hit))) {
+                            emptyReason = text.slice(0, 160);
+                        }
+                        const lines = text.split(/\\n+/).map(clean).filter(Boolean);
+                        if (!found && lines.some((line) => line.toLowerCase() === expected)) {
+                            found = true;
+                        }
+                    }
+                    if (emptyReason) {
+                        return {state: "empty", reason: emptyReason};
+                    }
+                    if (found) {
+                        return {state: "found", reason: expected};
+                    }
+                    return {state: "pending", reason: ""};
+                }""",
+                {"tag": asset_tag},
+            )
+            state = str((result or {}).get("state", "") or "").strip().lower()
+            reason = str((result or {}).get("reason", "") or "").strip()
+            if state in ("found", "empty"):
+                return state, reason
+        except Exception:
+            pass
+        return "pending", ""
+
+    def _wait_asset_search_resolution(self, asset_tag, timeout_sec=1.8):
+        if (not self.page) or (not asset_tag):
+            return
+        deadline = time.time() + max(0.6, float(timeout_sec or 1.8))
+        while time.time() < deadline:
+            state, reason = self._probe_asset_search_result_state(asset_tag)
+            if state == "empty":
+                short_reason = reason or "일치하는 결과 없음"
+                self.log(f"⚠️ Step2 에셋 검색 결과 없음 감지: {asset_tag} | {short_reason}")
+                raise RuntimeError(f"에셋 검색 결과에 {asset_tag} 항목이 없습니다.")
+            if state == "found":
+                return
+            time.sleep(0.18)
+
     def _run_asset_loop_prestep(self, asset_tag):
         if (not self.page) or (not asset_tag):
             return
@@ -6197,6 +6284,7 @@ class FlowVisionApp:
                 self.page.keyboard.press("Enter")
                 self.log(f"✅ Step2 에셋 검색 입력 완료(직접입력): {asset_tag}")
                 self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.2, 1.0)
+                self._wait_asset_search_resolution(asset_tag)
                 return
 
         search_candidates = self._asset_search_button_candidates() + [
@@ -6241,6 +6329,7 @@ class FlowVisionApp:
                 self.page.keyboard.press("Enter")
                 self.log(f"✅ Step2 에셋 검색 입력 완료(포커스 폴백): {asset_tag}")
                 self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.3, 1.0)
+                self._wait_asset_search_resolution(asset_tag)
                 return
             except Exception:
                 ok_dom, reason_dom = self._direct_fill_asset_search_via_dom(asset_tag)
@@ -6248,6 +6337,7 @@ class FlowVisionApp:
                     self.page.keyboard.press("Enter")
                     self.log(f"✅ Step2 에셋 검색 입력 완료(DOM 폴백): {asset_tag}")
                     self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.3, 1.0)
+                    self._wait_asset_search_resolution(asset_tag)
                     return
                 raise RuntimeError(f"Step2 실패: 에셋 검색 입력창을 찾지 못했습니다. (dom={reason_dom})")
 
@@ -6272,6 +6362,7 @@ class FlowVisionApp:
         self.page.keyboard.press("Enter")
         self.log(f"✅ Step2 에셋 검색 입력 완료: {asset_tag}")
         self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.2, 1.0)
+        self._wait_asset_search_resolution(asset_tag)
 
     def _prompt_reference_search_input_candidates(self):
         cands = []
@@ -14504,6 +14595,40 @@ class FlowVisionApp:
             self.t_next = time.time() + 5
             self._shutdown_browser()
         except Exception as e:
+            err_text = str(e).strip()
+            if asset_tag and ("에셋 검색 결과에" in err_text and "항목이 없습니다" in err_text):
+                self.log(f"❌ {err_text}")
+                self.update_status_label(f"⚠️ 에셋 없음 후 다음으로 이동: {asset_tag}", self.color_error)
+                session_idx = len(self.session_log)
+                self.session_log.append({
+                    "index": self.index + 1,
+                    "source_no": source_no or (self.index + 1),
+                    "tag": asset_tag or "",
+                    "prompt": prompt,
+                    "duration": f"{(datetime.now()-start_t).total_seconds():.1f}초",
+                    "status": "failed",
+                    "error": err_text,
+                })
+                self._record_live_failure_event(
+                    source_no=source_no or (self.index + 1),
+                    asset_tag=asset_tag or "",
+                    reason=err_text,
+                    session_idx=session_idx,
+                    retry_label="에셋 검색 실패",
+                )
+                self.pending_generation_watch = None
+                self.actor.processed_count += 1
+                self.index += 1
+                if self.page and (not self.page.is_closed()):
+                    try:
+                        self.actor.random_action_delay("에셋 없음 후 새로고침 전 대기", 0.8, 1.6)
+                        self.page.reload(wait_until="domcontentloaded", timeout=45000)
+                        self._apply_browser_zoom()
+                        self.actor.random_action_delay("에셋 없음 새로고침 후 대기", 1.2, 2.2)
+                    except Exception as refresh_e:
+                        self.log(f"⚠️ 에셋 없음 후 새로고침 실패(계속 진행): {refresh_e}")
+                self.t_next = time.time() + 2
+                return
             print(f"ERROR in run_task: {e}")
             traceback.print_exc()
             self.log(f"❌ 오류: {e}")
