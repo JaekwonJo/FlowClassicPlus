@@ -145,6 +145,7 @@ DEFAULT_CONFIG = {
     "asset_search_button_selector": "",
     "asset_search_input_selector": "",
     "prompt_manual_selection": "",
+    "prompt_manual_selection_enabled": False,
     "download_mode": "video",  # video / image
     "download_video_quality": "1080P",
     "download_image_quality": "4K",
@@ -194,6 +195,10 @@ DEFAULT_CONFIG = {
     "work_break_every_count": 40,
     "work_break_minutes": 12,
     "work_break_random_ratio": 0.30,
+    "periodic_refresh_enabled": False,
+    "periodic_refresh_every_count": 2,
+    "periodic_refresh_wait_min_seconds": 3,
+    "periodic_refresh_wait_max_seconds": 5,
     "use_ref_images": False,
     "ref_image_count": 1,
     "add_btn1_area": None,
@@ -2145,14 +2150,17 @@ class FlowVisionApp:
 
     def _resolve_prompt_number_plan(self):
         raw = str(self.cfg.get("prompt_manual_selection", "") or "").strip()
+        enabled = bool(self.cfg.get("prompt_manual_selection_enabled", bool(raw)))
         prefix = self._prompt_source_prefix()
         available = set(self._available_prompt_source_numbers())
         info = self._parse_manual_number_spec(raw, upper_bound=None, allowed_prefixes=[prefix, "S"])
         valid_numbers = [n for n in info.get("numbers", []) if n in available]
         out_of_range = [n for n in info.get("numbers", []) if n not in available]
-        if not raw:
+        if not raw or not enabled:
             return {
-                "raw": raw,
+                "raw": raw if enabled else "",
+                "saved_raw": raw,
+                "enabled": enabled,
                 "numbers": self._available_prompt_source_numbers(),
                 "invalid_tokens": [],
                 "out_of_range": [],
@@ -2160,6 +2168,8 @@ class FlowVisionApp:
             }
         return {
             "raw": raw,
+            "saved_raw": raw,
+            "enabled": enabled,
             "numbers": valid_numbers,
             "invalid_tokens": list(info.get("invalid_tokens", []) or []),
             "out_of_range": out_of_range,
@@ -4500,21 +4510,28 @@ class FlowVisionApp:
     def _refresh_manual_selection_labels(self):
         prompt_info = self._resolve_prompt_number_plan()
         if hasattr(self, "lbl_prompt_manual_status"):
-            if prompt_info.get("invalid_tokens"):
+            enabled = bool(prompt_info.get("enabled", False))
+            saved_raw = str(prompt_info.get("saved_raw", "") or "").strip()
+            if enabled and prompt_info.get("invalid_tokens"):
                 self.lbl_prompt_manual_status.config(
                     text=f"형식 확인: {', '.join(prompt_info['invalid_tokens'][:3])}",
                     fg=self.color_error,
                 )
-            elif prompt_info.get("out_of_range"):
+            elif enabled and prompt_info.get("out_of_range"):
                 preview = ", ".join(str(x).zfill(3) for x in prompt_info.get("out_of_range", [])[:3])
                 self.lbl_prompt_manual_status.config(
                     text=f"없는 번호: {preview}",
                     fg=self.color_error,
                 )
-            elif prompt_info.get("raw"):
+            elif enabled and prompt_info.get("raw"):
                 self.lbl_prompt_manual_status.config(
                     text=self._format_manual_selection_preview(prompt_info.get("numbers", []), prefix="", pad_width=3),
                     fg=self.color_info,
+                )
+            elif saved_raw:
+                self.lbl_prompt_manual_status.config(
+                    text=f"개별 실행 대기: {saved_raw}",
+                    fg=self.color_text_sec,
                 )
             else:
                 self.lbl_prompt_manual_status.config(text="전체 프롬프트 실행", fg=self.color_text_sec)
@@ -8533,6 +8550,74 @@ class FlowVisionApp:
         self.entry_work_break_minutes.bind("<FocusOut>", self.on_option_toggle)
         self.entry_work_break_minutes.bind("<Return>", self.on_option_toggle)
 
+        refresh_f = tk.Frame(left_card, bg=self.color_bg)
+        refresh_f.pack(fill="x", pady=(2, 8))
+        tk.Label(refresh_f, text="🔄 주기적 새로고침 (프롬프트/S반복 전용)", bg=self.color_bg, font=self.font_body_bold).grid(row=0, column=0, columnspan=6, sticky="w")
+        self.periodic_refresh_enabled_var = tk.BooleanVar(value=bool(self.cfg.get("periodic_refresh_enabled", False)))
+        tk.Checkbutton(
+            refresh_f,
+            text="사용",
+            variable=self.periodic_refresh_enabled_var,
+            command=self.on_option_toggle,
+            bg=self.color_bg,
+            font=self.font_small,
+            activebackground=self.color_bg,
+        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
+        tk.Label(refresh_f, text="몇 개마다", bg=self.color_bg, font=self.font_small).grid(row=1, column=1, sticky="w", padx=(10, 0), pady=(6, 0))
+        self.periodic_refresh_every_var = tk.StringVar(value=str(int(self.cfg.get("periodic_refresh_every_count", 2) or 2)))
+        self.entry_periodic_refresh_every = tk.Entry(
+            refresh_f,
+            textvariable=self.periodic_refresh_every_var,
+            width=6,
+            justify="center",
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono,
+        )
+        self.entry_periodic_refresh_every.grid(row=1, column=2, sticky="w", padx=(6, 10), pady=(6, 0))
+        tk.Label(refresh_f, text="개 후", bg=self.color_bg, font=self.font_small).grid(row=1, column=3, sticky="w", pady=(6, 0))
+        self.periodic_refresh_wait_min_var = tk.StringVar(value=str(int(self.cfg.get("periodic_refresh_wait_min_seconds", 3) or 3)))
+        self.periodic_refresh_wait_max_var = tk.StringVar(value=str(int(self.cfg.get("periodic_refresh_wait_max_seconds", 5) or 5)))
+        tk.Label(refresh_f, text="대기", bg=self.color_bg, font=self.font_small).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.entry_periodic_refresh_wait_min = tk.Entry(
+            refresh_f,
+            textvariable=self.periodic_refresh_wait_min_var,
+            width=6,
+            justify="center",
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono,
+        )
+        self.entry_periodic_refresh_wait_min.grid(row=2, column=1, sticky="w", padx=(6, 6), pady=(6, 0))
+        tk.Label(refresh_f, text="~", bg=self.color_bg, font=self.font_small).grid(row=2, column=2, sticky="w", pady=(6, 0))
+        self.entry_periodic_refresh_wait_max = tk.Entry(
+            refresh_f,
+            textvariable=self.periodic_refresh_wait_max_var,
+            width=6,
+            justify="center",
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono,
+        )
+        self.entry_periodic_refresh_wait_max.grid(row=2, column=3, sticky="w", padx=(6, 6), pady=(6, 0))
+        tk.Label(refresh_f, text="초 랜덤", bg=self.color_bg, font=self.font_small).grid(row=2, column=4, sticky="w", pady=(6, 0))
+        tk.Label(
+            refresh_f,
+            text="※ 프롬프트/S반복 성공 후에만 새로고침합니다. 다운로드 자동화에는 적용되지 않습니다.",
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            font=("Malgun Gothic", 9),
+        ).grid(row=3, column=0, columnspan=6, sticky="w", pady=(6, 0))
+        self.entry_periodic_refresh_every.bind("<FocusOut>", self.on_option_toggle)
+        self.entry_periodic_refresh_every.bind("<Return>", self.on_option_toggle)
+        self.entry_periodic_refresh_wait_min.bind("<FocusOut>", self.on_option_toggle)
+        self.entry_periodic_refresh_wait_min.bind("<Return>", self.on_option_toggle)
+        self.entry_periodic_refresh_wait_max.bind("<FocusOut>", self.on_option_toggle)
+        self.entry_periodic_refresh_wait_max.bind("<Return>", self.on_option_toggle)
+
         preset_body, _set_preset_open = self._create_collapsible_section(left_card, "프롬프트 자동화 전용 생성 옵션", opened=True)
         self._set_prompt_preset_open = _set_preset_open
         preset_f = tk.Frame(preset_body, bg=self.color_bg)
@@ -9348,6 +9433,18 @@ class FlowVisionApp:
         prompt_manual_f = tk.Frame(file_nav, bg=self.color_bg)
         prompt_manual_f.pack(side="right")
         tk.Label(prompt_manual_f, text="개별 실행:", font=self.font_small, bg=self.color_bg).pack(side="left", padx=(8, 4))
+        self.prompt_manual_selection_enabled_var = tk.BooleanVar(
+            value=bool(self.cfg.get("prompt_manual_selection_enabled", bool(self.cfg.get("prompt_manual_selection", ""))))
+        )
+        tk.Checkbutton(
+            prompt_manual_f,
+            text="사용",
+            variable=self.prompt_manual_selection_enabled_var,
+            command=self.on_option_toggle,
+            bg=self.color_bg,
+            font=self.font_small,
+            activebackground=self.color_bg,
+        ).pack(side="left", padx=(0, 6))
         self.prompt_manual_selection_var = tk.StringVar(value=str(self.cfg.get("prompt_manual_selection", "") or ""))
         self.entry_prompt_manual_selection = tk.Entry(
             prompt_manual_f,
@@ -10203,6 +10300,8 @@ class FlowVisionApp:
             return
         spec = self._compress_numbers_to_spec(numbers, pad_width=0)
         self.prompt_manual_selection_var.set(spec)
+        if hasattr(self, "prompt_manual_selection_enabled_var"):
+            self.prompt_manual_selection_enabled_var.set(True)
         self.on_option_toggle()
         source_text = source_name or "최근 로그"
         self.log(f"🧩 프롬프트 개별 실행 자동채움: {spec} ({source_text})")
@@ -10390,6 +10489,7 @@ class FlowVisionApp:
         self.cfg["asset_search_button_selector"] = self.asset_search_btn_selector_var.get().strip() if hasattr(self, "asset_search_btn_selector_var") else self.cfg.get("asset_search_button_selector", "")
         self.cfg["asset_search_input_selector"] = self.asset_search_input_selector_var.get().strip() if hasattr(self, "asset_search_input_selector_var") else self.cfg.get("asset_search_input_selector", "")
         self.cfg["prompt_manual_selection"] = self.prompt_manual_selection_var.get().strip() if hasattr(self, "prompt_manual_selection_var") else str(self.cfg.get("prompt_manual_selection", "") or "").strip()
+        self.cfg["prompt_manual_selection_enabled"] = self.prompt_manual_selection_enabled_var.get() if hasattr(self, "prompt_manual_selection_enabled_var") else bool(self.cfg.get("prompt_manual_selection_enabled", bool(self.cfg.get("prompt_manual_selection", ""))))
         self.cfg["prompt_reference_test_tag"] = self._normalized_prompt_reference_test_tag()
         self.cfg["prompt_reference_enabled"] = self.prompt_reference_enabled_var.get() if hasattr(self, "prompt_reference_enabled_var") else bool(self.cfg.get("prompt_reference_enabled", False))
         if hasattr(self, "prompt_reference_row_vars"):
@@ -10453,6 +10553,24 @@ class FlowVisionApp:
         except Exception:
             self.cfg["work_break_minutes"] = int(self.cfg.get("work_break_minutes", 12) or 12)
         self.cfg["work_break_random_ratio"] = 0.30
+        self.cfg["periodic_refresh_enabled"] = self.periodic_refresh_enabled_var.get() if hasattr(self, "periodic_refresh_enabled_var") else bool(self.cfg.get("periodic_refresh_enabled", False))
+        try:
+            raw_refresh_every = self.periodic_refresh_every_var.get().strip() if hasattr(self, "periodic_refresh_every_var") else str(self.cfg.get("periodic_refresh_every_count", 2))
+            self.cfg["periodic_refresh_every_count"] = max(1, min(999, int(raw_refresh_every or 2)))
+        except Exception:
+            self.cfg["periodic_refresh_every_count"] = int(self.cfg.get("periodic_refresh_every_count", 2) or 2)
+        try:
+            raw_refresh_min = self.periodic_refresh_wait_min_var.get().strip() if hasattr(self, "periodic_refresh_wait_min_var") else str(self.cfg.get("periodic_refresh_wait_min_seconds", 3))
+            self.cfg["periodic_refresh_wait_min_seconds"] = max(1, min(30, int(raw_refresh_min or 3)))
+        except Exception:
+            self.cfg["periodic_refresh_wait_min_seconds"] = int(self.cfg.get("periodic_refresh_wait_min_seconds", 3) or 3)
+        try:
+            raw_refresh_max = self.periodic_refresh_wait_max_var.get().strip() if hasattr(self, "periodic_refresh_wait_max_var") else str(self.cfg.get("periodic_refresh_wait_max_seconds", 5))
+            self.cfg["periodic_refresh_wait_max_seconds"] = max(1, min(30, int(raw_refresh_max or 5)))
+        except Exception:
+            self.cfg["periodic_refresh_wait_max_seconds"] = int(self.cfg.get("periodic_refresh_wait_max_seconds", 5) or 5)
+        if self.cfg["periodic_refresh_wait_max_seconds"] < self.cfg["periodic_refresh_wait_min_seconds"]:
+            self.cfg["periodic_refresh_wait_max_seconds"] = self.cfg["periodic_refresh_wait_min_seconds"]
         # 실행 중에는 시작 시 확정한 입력방식을 유지(중간 변경으로 typing/paste 뒤바뀜 방지)
         self.cfg["input_mode"] = "typing"
         try:
@@ -13158,6 +13276,57 @@ class FlowVisionApp:
         self.cfg["work_break_minutes"] = max(1, min(180, break_minutes))
         self.cfg["work_break_random_ratio"] = 0.30
 
+    def _normalize_periodic_refresh_config(self):
+        try:
+            every_count = int(self.cfg.get("periodic_refresh_every_count", 2) or 2)
+        except Exception:
+            every_count = 2
+        try:
+            wait_min = int(self.cfg.get("periodic_refresh_wait_min_seconds", 3) or 3)
+        except Exception:
+            wait_min = 3
+        try:
+            wait_max = int(self.cfg.get("periodic_refresh_wait_max_seconds", 5) or 5)
+        except Exception:
+            wait_max = 5
+        every_count = max(1, min(999, every_count))
+        wait_min = max(1, min(30, wait_min))
+        wait_max = max(wait_min, min(30, wait_max))
+        self.cfg["periodic_refresh_every_count"] = every_count
+        self.cfg["periodic_refresh_wait_min_seconds"] = wait_min
+        self.cfg["periodic_refresh_wait_max_seconds"] = wait_max
+
+    def _maybe_periodic_refresh(self, completed_count, mode_label="작업"):
+        self._normalize_periodic_refresh_config()
+        if not bool(self.cfg.get("periodic_refresh_enabled", False)):
+            return
+        if self.current_run_mode not in ("prompt", "asset"):
+            return
+        try:
+            completed_count = int(completed_count or 0)
+        except Exception:
+            completed_count = 0
+        if completed_count < 1:
+            return
+        every_count = int(self.cfg.get("periodic_refresh_every_count", 2) or 2)
+        if every_count < 1 or (completed_count % every_count) != 0:
+            return
+        if not self.page or self.page.is_closed():
+            return
+        wait_min = int(self.cfg.get("periodic_refresh_wait_min_seconds", 3) or 3)
+        wait_max = int(self.cfg.get("periodic_refresh_wait_max_seconds", 5) or 5)
+        wait_sec = random.uniform(wait_min, wait_max)
+        self.log(f"🔄 주기적 새로고침 실행 ({mode_label} {completed_count}개 처리 후)")
+        self.update_status_label("🔄 페이지 새로고침 중...", self.color_info)
+        try:
+            self.page.reload(wait_until="domcontentloaded", timeout=45000)
+            self._apply_browser_zoom()
+        except Exception as e:
+            self.log(f"⚠️ 주기적 새로고침 실패(계속 진행): {e}")
+            return
+        self.log(f"⏳ 새로고침 후 안정화 대기: {wait_sec:.1f}초")
+        time.sleep(wait_sec)
+
     def _apply_actor_break_settings(self, reset_batch=False):
         self._normalize_work_break_config()
         if not hasattr(self, "actor") or self.actor is None:
@@ -13324,8 +13493,11 @@ class FlowVisionApp:
                     return
                 self.prompt_run_numbers = prompt_numbers
                 self._refresh_prompt_run_sequence(update_preview=False)
-                self.current_selection_input = str(self.cfg.get("prompt_manual_selection", "") or "").strip()
-                self.current_selection_summary = self._format_manual_selection_preview(prompt_numbers, prefix="", pad_width=3) if self.current_selection_input else "전체 프롬프트 실행"
+                self.current_selection_input = str(prompt_info.get("raw", "") or "").strip()
+                self.current_selection_summary = (
+                    self._format_manual_selection_preview(prompt_numbers, prefix="", pad_width=3)
+                    if self.current_selection_input else "전체 프롬프트 실행"
+                )
                 self._set_current_expected_items("prompt", prompt_numbers)
             
             if not self.prompts and not self.cfg.get("relay_mode"):
@@ -14043,6 +14215,10 @@ class FlowVisionApp:
             self.actor.processed_count += 1
             self.index += 1
             self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 프롬프트 #{self.index} 처리 완료")
+            self._maybe_periodic_refresh(
+                completed_count=self.index,
+                mode_label="S반복 자동화" if asset_tag else "프롬프트 자동화",
+            )
         except PlaywrightTimeoutError as e:
             print(f"TIMEOUT in run_task: {e}")
             self.log(f"⏳ 요소 대기 시간 초과: {e}")
