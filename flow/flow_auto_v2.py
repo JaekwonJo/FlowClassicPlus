@@ -1445,7 +1445,7 @@ class FlowVisionApp:
                     };
                     const out = [];
                     const seen = new Set();
-                    const nodes = document.querySelectorAll("div, section, article, li");
+                    const nodes = document.querySelectorAll("div, section, article, li, button, a, [role='button'], [role='link']");
                     for (const node of nodes) {
                         if (!isVisible(node)) continue;
                         const rect = node.getBoundingClientRect();
@@ -1470,8 +1470,16 @@ class FlowVisionApp:
                             key,
                             title,
                             text: summary,
+                            summary_key: summary.toLowerCase(),
+                            top: Math.round(rect.top),
+                            left: Math.round(rect.left),
                         });
                     }
+                    out.sort((a, b) => {
+                        const topDiff = Number(a.top || 0) - Number(b.top || 0);
+                        if (Math.abs(topDiff) > 8) return topDiff;
+                        return Number(a.left || 0) - Number(b.left || 0);
+                    });
                     return out;
                 }"""
             )
@@ -1483,15 +1491,21 @@ class FlowVisionApp:
 
     def _register_generation_watch(self, session_idx, source_no=None, asset_tag="", baseline_cards=None):
         baseline_keys = set()
+        baseline_summary_counts = {}
         for item in baseline_cards or []:
             key = str((item or {}).get("key", "") or "").strip()
             if key:
                 baseline_keys.add(key)
+            summary_key = str((item or {}).get("summary_key", "") or "").strip()
+            if summary_key:
+                baseline_summary_counts[summary_key] = int(baseline_summary_counts.get(summary_key, 0) or 0) + 1
         self.pending_generation_watch = {
             "session_idx": session_idx,
             "source_no": source_no,
             "asset_tag": str(asset_tag or "").strip(),
             "baseline_keys": baseline_keys,
+            "baseline_count": len(list(baseline_cards or [])),
+            "baseline_summary_counts": baseline_summary_counts,
             "started_at": time.time(),
         }
 
@@ -1546,6 +1560,28 @@ class FlowVisionApp:
         cards = self._snapshot_generation_failure_cards()
         baseline_keys = set(watch.get("baseline_keys", set()) or set())
         new_cards = [card for card in cards if str(card.get("key", "") or "").strip() not in baseline_keys]
+        if not new_cards and cards:
+            try:
+                baseline_count = int(watch.get("baseline_count", 0) or 0)
+            except Exception:
+                baseline_count = 0
+            baseline_summary_counts = dict(watch.get("baseline_summary_counts", {}) or {})
+            if baseline_count <= 0:
+                new_cards = cards[:1]
+            elif len(cards) > baseline_count:
+                new_cards = cards[baseline_count:]
+            else:
+                current_summary_counts = {}
+                candidate = None
+                for card in cards:
+                    summary_key = str(card.get("summary_key", "") or "").strip()
+                    if summary_key:
+                        current_summary_counts[summary_key] = int(current_summary_counts.get(summary_key, 0) or 0) + 1
+                        if current_summary_counts[summary_key] > int(baseline_summary_counts.get(summary_key, 0) or 0):
+                            candidate = card
+                            break
+                if candidate is not None:
+                    new_cards = [candidate]
         if not new_cards:
             return
         reason = str(new_cards[0].get("text", "") or new_cards[0].get("title", "") or "문제가 발생했습니다.").strip()
