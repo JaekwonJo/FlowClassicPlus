@@ -2904,6 +2904,33 @@ class FlowVisionApp:
             return f"{slot_name} | {file_name} | 태그형 {tagged_count}개{common_text}"
         return f"{slot_name} | {file_name} | 총 {len(entries)}개 | S001=1번, S002=2번..."
 
+    def _asset_prompt_file_summary_for_path(self, file_name="", use_file=False):
+        if not use_file:
+            return "공통 프롬프트 템플릿 사용"
+        file_name = str(file_name or "").strip()
+        if not file_name:
+            return "S개별 프롬프트 파일을 선택해 주세요."
+        entries = self._load_prompts_from_file_name(file_name)
+        if not entries:
+            return f"S개별 프롬프트 파일 | {file_name} | 프롬프트 없음"
+        prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
+        tag_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*::\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
+        prompt_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
+        tagged_count = 0
+        has_common = False
+        for entry in entries:
+            raw_text = str(entry or "").strip()
+            if not raw_text:
+                continue
+            if tag_pattern.match(raw_text) or prompt_pattern.match(raw_text):
+                tagged_count += 1
+            elif not has_common:
+                has_common = True
+        if tagged_count:
+            common_text = " + 파일 공통 fallback" if has_common else " + 템플릿 fallback"
+            return f"S개별 프롬프트 파일 | {file_name} | 태그형 {tagged_count}개{common_text}"
+        return f"S개별 프롬프트 파일 | {file_name} | 총 {len(entries)}개 | S001=1번, S002=2번..."
+
     def _refresh_asset_prompt_slot_controls(self):
         self.cfg["asset_prompt_slot"] = self._clamp_slot_index(self.cfg.get("asset_prompt_slot", 0))
         if hasattr(self, "asset_prompt_file_display_var"):
@@ -3036,6 +3063,31 @@ class FlowVisionApp:
             else:
                 self.lbl_pipeline_prompt_range.config(text="프롬프트 자동화를 선택하면 파일과 범위가 표시됩니다.", fg=self.color_text_sec)
 
+        asset_only = (step_type == "asset")
+        for widget in getattr(self, "_pipeline_asset_only_widgets", []):
+            try:
+                if asset_only:
+                    widget.grid()
+                else:
+                    widget.grid_remove()
+            except Exception:
+                pass
+        if hasattr(self, "chk_pipeline_asset_prompt_file"):
+            self.chk_pipeline_asset_prompt_file.config(state="normal" if asset_only else "disabled")
+        if hasattr(self, "entry_pipeline_asset_prompt_file"):
+            entry_state = "normal" if (asset_only and bool(getattr(self, "pipeline_step_asset_use_prompt_var", tk.BooleanVar(value=False)).get())) else "disabled"
+            self.entry_pipeline_asset_prompt_file.config(state=entry_state)
+        if hasattr(self, "btn_pipeline_asset_prompt_file"):
+            btn_state = "normal" if (asset_only and bool(getattr(self, "pipeline_step_asset_use_prompt_var", tk.BooleanVar(value=False)).get())) else "disabled"
+            self.btn_pipeline_asset_prompt_file.config(state=btn_state)
+        if hasattr(self, "lbl_pipeline_asset_prompt_status"):
+            use_asset_file = bool(getattr(self, "pipeline_step_asset_use_prompt_var", tk.BooleanVar(value=False)).get()) if asset_only else False
+            file_name = str(getattr(self, "pipeline_step_asset_prompt_file_var", tk.StringVar(value="")).get() or "").strip() if asset_only else ""
+            self.lbl_pipeline_asset_prompt_status.config(
+                text=self._asset_prompt_file_summary_for_path(file_name=file_name, use_file=use_asset_file) if asset_only else "S반복 자동화를 선택하면 단계별 개별 프롬프트 파일을 설정할 수 있습니다.",
+                fg=self.color_info if (asset_only and use_asset_file) else self.color_text_sec,
+            )
+
         download_only = (step_type == "download")
         for widget in getattr(self, "_pipeline_download_only_widgets", []):
             try:
@@ -3066,6 +3118,8 @@ class FlowVisionApp:
             "type": "prompt",
             "project_profile": 0,
             "prompt_slot": self._clamp_slot_index(self.cfg.get("active_prompt_slot", 0)),
+            "asset_use_prompt_slot": bool(self.cfg.get("asset_use_prompt_slot", False)),
+            "asset_prompt_file": str(self.cfg.get("asset_prompt_file", "") or "").strip(),
             "number_mode": "range",
             "start": 1,
             "end": 1,
@@ -3244,6 +3298,8 @@ class FlowVisionApp:
                     "type": step_type,
                     "project_profile": project_profile,
                     "prompt_slot": self._clamp_slot_index(item.get("prompt_slot", self.cfg.get("active_prompt_slot", 0))),
+                    "asset_use_prompt_slot": bool(item.get("asset_use_prompt_slot", self.cfg.get("asset_use_prompt_slot", False))),
+                    "asset_prompt_file": str(item.get("asset_prompt_file", self.cfg.get("asset_prompt_file", "")) or "").strip(),
                     "number_mode": number_mode,
                     "start": start,
                     "end": end,
@@ -3307,6 +3363,10 @@ class FlowVisionApp:
             self.pipeline_step_end_var.set(str(step.get("end", 1)))
         if hasattr(self, "pipeline_step_manual_var"):
             self.pipeline_step_manual_var.set(str(step.get("manual_selection", "") or ""))
+        if hasattr(self, "pipeline_step_asset_use_prompt_var"):
+            self.pipeline_step_asset_use_prompt_var.set(bool(step.get("asset_use_prompt_slot", False)))
+        if hasattr(self, "pipeline_step_asset_prompt_file_var"):
+            self.pipeline_step_asset_prompt_file_var.set(str(step.get("asset_prompt_file", "") or "").strip())
         if hasattr(self, "pipeline_step_interval_var"):
             self.pipeline_step_interval_var.set(str(step.get("interval_seconds", self.cfg.get("interval_seconds", 180) or 180)))
         if hasattr(self, "pipeline_step_media_mode_var"):
@@ -3360,6 +3420,8 @@ class FlowVisionApp:
         step["type"] = type_value
         step["project_profile"] = self._clamp_project_profile_index(profile_idx)
         step["prompt_slot"] = prompt_slot_idx
+        step["asset_use_prompt_slot"] = bool(self.pipeline_step_asset_use_prompt_var.get()) if hasattr(self, "pipeline_step_asset_use_prompt_var") else False
+        step["asset_prompt_file"] = str(self.pipeline_step_asset_prompt_file_var.get() or "").strip() if hasattr(self, "pipeline_step_asset_prompt_file_var") else ""
         step["number_mode"] = number_mode
         step["start"] = start
         step["end"] = end
@@ -3387,6 +3449,37 @@ class FlowVisionApp:
         self._save_pipeline_step_fields()
 
     def on_pipeline_step_number_mode_change(self, event=None):
+        self._refresh_pipeline_step_editor_state()
+        self._save_pipeline_step_fields()
+
+    def on_pipeline_step_asset_prompt_toggle(self):
+        self._refresh_pipeline_step_editor_state()
+        self._save_pipeline_step_fields()
+
+    def on_pick_pipeline_asset_prompt_file(self):
+        self._save_pipeline_step_fields()
+        step, _active = self._pipeline_active_step()
+        initial = str((step or {}).get("asset_prompt_file", "") or "").strip()
+        if not initial:
+            initial = str(self.cfg.get("asset_prompt_file", "") or "").strip()
+        initial_path = self._resolve_prompt_source_path(initial)
+        initialdir = str(initial_path.parent) if initial_path and initial_path.parent.exists() else str(self.base)
+        picked = filedialog.askopenfilename(
+            parent=self.pipeline_window,
+            initialdir=initialdir,
+            title="이어달리기 S개별 프롬프트 파일 선택",
+            filetypes=[("텍스트 파일", "*.txt"), ("모든 파일", "*.*")],
+        )
+        if not picked:
+            return
+        picked_path = Path(picked)
+        try:
+            rel = picked_path.relative_to(self.base)
+            stored = str(rel).replace("\\", "/")
+        except Exception:
+            stored = str(picked_path)
+        if hasattr(self, "pipeline_step_asset_prompt_file_var"):
+            self.pipeline_step_asset_prompt_file_var.set(stored)
         self._refresh_pipeline_step_editor_state()
         self._save_pipeline_step_fields()
 
@@ -4149,6 +4242,13 @@ class FlowVisionApp:
             self.cfg["asset_loop_enabled"] = True
             if hasattr(self, "asset_loop_var"):
                 self.asset_loop_var.set(True)
+            self.cfg["asset_use_prompt_slot"] = bool(step.get("asset_use_prompt_slot", False))
+            self.cfg["asset_prompt_file"] = str(step.get("asset_prompt_file", "") or "").strip()
+            if hasattr(self, "asset_use_prompt_slot_var"):
+                self.asset_use_prompt_slot_var.set(self.cfg["asset_use_prompt_slot"])
+            if hasattr(self, "asset_prompt_file_display_var"):
+                self.asset_prompt_file_display_var.set(self.cfg["asset_prompt_file"])
+            self._refresh_asset_prompt_slot_controls()
             self.cfg["asset_manual_selection"] = manual_text
             if hasattr(self, "asset_manual_selection_var"):
                 self.asset_manual_selection_var.set(manual_text)
@@ -10412,6 +10512,8 @@ class FlowVisionApp:
         self.pipeline_step_start_var = tk.StringVar()
         self.pipeline_step_end_var = tk.StringVar()
         self.pipeline_step_manual_var = tk.StringVar()
+        self.pipeline_step_asset_use_prompt_var = tk.BooleanVar(value=bool(self.cfg.get("asset_use_prompt_slot", False)))
+        self.pipeline_step_asset_prompt_file_var = tk.StringVar(value=str(self.cfg.get("asset_prompt_file", "") or "").strip())
         self.pipeline_step_interval_var = tk.StringVar()
         self.pipeline_step_media_mode_var = tk.StringVar()
         self.pipeline_step_download_mode_var = tk.StringVar()
@@ -10487,25 +10589,68 @@ class FlowVisionApp:
         self.combo_pipeline_media_mode = ttk.Combobox(step_form, textvariable=self.pipeline_step_media_mode_var, state="readonly", values=tuple(self._pipeline_mode_labels().values()), font=self.font_small)
         self.combo_pipeline_media_mode.grid(row=7, column=3, sticky="ew", pady=(0, 8))
 
+        self.chk_pipeline_asset_prompt_file = ttk.Checkbutton(
+            step_form,
+            text="S개별 프롬프트 파일 사용",
+            variable=self.pipeline_step_asset_use_prompt_var,
+            command=self.on_pipeline_step_asset_prompt_toggle,
+        )
+        self.chk_pipeline_asset_prompt_file.grid(row=8, column=0, sticky="w")
+        pipeline_asset_prompt_wrap = tk.Frame(step_form, bg="#13233A")
+        pipeline_asset_prompt_wrap.grid(row=8, column=1, columnspan=3, sticky="ew", pady=(0, 8), padx=(6, 0))
+        pipeline_asset_prompt_wrap.grid_columnconfigure(0, weight=1)
+        self.entry_pipeline_asset_prompt_file = tk.Entry(
+            pipeline_asset_prompt_wrap,
+            textvariable=self.pipeline_step_asset_prompt_file_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        )
+        self.entry_pipeline_asset_prompt_file.grid(row=0, column=0, sticky="ew", padx=(0, 6), ipady=3)
+        self.btn_pipeline_asset_prompt_file = ttk.Button(
+            pipeline_asset_prompt_wrap,
+            text="파일 선택",
+            command=self.on_pick_pipeline_asset_prompt_file,
+        )
+        self.btn_pipeline_asset_prompt_file.grid(row=0, column=1, sticky="e")
+        self.lbl_pipeline_asset_prompt_status = tk.Label(
+            step_form,
+            text="S반복 자동화를 선택하면 단계별 개별 프롬프트 파일을 설정할 수 있습니다.",
+            font=self.font_small,
+            bg="#13233A",
+            fg=self.color_text_sec,
+            anchor="w",
+            justify="left",
+            wraplength=620,
+        )
+        self.lbl_pipeline_asset_prompt_status.grid(row=9, column=0, columnspan=4, sticky="ew", pady=(0, 8))
+
         self.lbl_pipeline_download_mode = tk.Label(step_form, text="다운로드 모드", font=self.font_small, bg="#13233A", fg=self.color_text)
-        self.lbl_pipeline_download_mode.grid(row=8, column=0, sticky="w")
+        self.lbl_pipeline_download_mode.grid(row=10, column=0, sticky="w")
         self.combo_pipeline_download_mode = ttk.Combobox(step_form, textvariable=self.pipeline_step_download_mode_var, state="readonly", values=tuple(self._pipeline_mode_labels().values()), font=self.font_small)
-        self.combo_pipeline_download_mode.grid(row=8, column=1, sticky="ew", pady=(0, 8), padx=(6, 14))
+        self.combo_pipeline_download_mode.grid(row=10, column=1, sticky="ew", pady=(0, 8), padx=(6, 14))
 
         self.lbl_pipeline_quality = tk.Label(step_form, text="품질", font=self.font_small, bg="#13233A", fg=self.color_text)
-        self.lbl_pipeline_quality.grid(row=8, column=2, sticky="w")
+        self.lbl_pipeline_quality.grid(row=10, column=2, sticky="w")
         self.combo_pipeline_quality = ttk.Combobox(step_form, textvariable=self.pipeline_step_quality_var, state="readonly", font=self.font_small)
-        self.combo_pipeline_quality.grid(row=8, column=3, sticky="ew", pady=(0, 8))
+        self.combo_pipeline_quality.grid(row=10, column=3, sticky="ew", pady=(0, 8))
 
         self.lbl_pipeline_output_dir = tk.Label(step_form, text="저장 폴더", font=self.font_small, bg="#13233A", fg=self.color_text)
-        self.lbl_pipeline_output_dir.grid(row=9, column=0, sticky="w")
+        self.lbl_pipeline_output_dir.grid(row=11, column=0, sticky="w")
         pipeline_output_wrap = tk.Frame(step_form, bg="#13233A")
-        pipeline_output_wrap.grid(row=9, column=1, columnspan=3, sticky="ew", pady=(0, 8))
+        pipeline_output_wrap.grid(row=11, column=1, columnspan=3, sticky="ew", pady=(0, 8))
         pipeline_output_wrap.grid_columnconfigure(0, weight=1)
         self.entry_pipeline_output_dir = tk.Entry(pipeline_output_wrap, textvariable=self.pipeline_step_output_dir_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_mono_small, state="readonly")
         self.entry_pipeline_output_dir.grid(row=0, column=0, sticky="ew", padx=(6, 6), ipady=3)
         self.btn_pipeline_output_dir = ttk.Button(pipeline_output_wrap, text="폴더선택", command=self.on_pick_pipeline_output_dir)
         self.btn_pipeline_output_dir.grid(row=0, column=1, sticky="e")
+
+        self._pipeline_asset_only_widgets = [
+            self.chk_pipeline_asset_prompt_file,
+            pipeline_asset_prompt_wrap,
+            self.lbl_pipeline_asset_prompt_status,
+        ]
 
         self._pipeline_download_only_widgets = [
             self.lbl_pipeline_download_mode,
@@ -10522,6 +10667,7 @@ class FlowVisionApp:
             self.entry_pipeline_step_start,
             self.entry_pipeline_step_end,
             self.entry_pipeline_step_manual,
+            self.entry_pipeline_asset_prompt_file,
             self.combo_pipeline_step_type,
             self.combo_pipeline_project_profile,
             self.combo_pipeline_prompt_slot,
