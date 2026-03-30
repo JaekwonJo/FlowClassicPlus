@@ -4455,6 +4455,21 @@ class FlowVisionApp:
         self.prompt_run_numbers = valid_numbers
         self.prompts = filtered
 
+    def _refresh_prompt_manual_preview(self):
+        if self.cfg.get("asset_loop_enabled"):
+            return
+        prompt_numbers, _prompt_info = self._build_prompt_run_numbers()
+        self.prompt_run_numbers = prompt_numbers
+        self._refresh_prompt_run_sequence(update_preview=True)
+        if self.prompts:
+            if self.running and self.index >= len(self.prompts):
+                self.index = len(self.prompts)
+            else:
+                self.index = min(self.index, len(self.prompts) - 1)
+        else:
+            self.index = 0
+        self._update_progress_ui()
+
     def _resolve_asset_number_plan(self):
         raw = str(self.cfg.get("asset_manual_selection", "") or "").strip()
         asset_prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
@@ -10490,6 +10505,11 @@ class FlowVisionApp:
         self._refresh_prompt_preset_selector_label()
         self._sync_relay_selection_label()
         self._refresh_manual_selection_labels()
+        if not self.running:
+            try:
+                self._refresh_prompt_manual_preview()
+            except Exception:
+                pass
         self._refresh_download_timeout_ui()
         self._refresh_prompt_reference_ui()
         if hasattr(self, 'actor'):
