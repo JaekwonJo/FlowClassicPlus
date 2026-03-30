@@ -483,7 +483,8 @@ class FlowVisionApp:
         self.retry_error_log = []
         self.live_failure_items = []
         self.live_failure_seen = set()
-        self.pending_generation_watch = None
+        self.pending_generation_watches = []
+        self.observed_failure_card_count = 0
         self.pending_periodic_refresh = None
         self.current_selection_summary = ""
         self.current_selection_input = ""
@@ -1405,7 +1406,8 @@ class FlowVisionApp:
     def _reset_live_failure_tracking(self):
         self.live_failure_items = []
         self.live_failure_seen = set()
-        self.pending_generation_watch = None
+        self.pending_generation_watches = []
+        self.observed_failure_card_count = 0
         self.pending_periodic_refresh = None
         self.root.after(0, self._refresh_live_failure_panel)
 
@@ -1490,6 +1492,11 @@ class FlowVisionApp:
         return []
 
     def _register_generation_watch(self, session_idx, source_no=None, asset_tag="", baseline_cards=None):
+        if not self.pending_generation_watches:
+            try:
+                self.observed_failure_card_count = len(self._snapshot_generation_failure_cards())
+            except Exception:
+                self.observed_failure_card_count = 0
         baseline_keys = set()
         baseline_summary_counts = {}
         for item in baseline_cards or []:
@@ -1499,7 +1506,7 @@ class FlowVisionApp:
             summary_key = str((item or {}).get("summary_key", "") or "").strip()
             if summary_key:
                 baseline_summary_counts[summary_key] = int(baseline_summary_counts.get(summary_key, 0) or 0) + 1
-        self.pending_generation_watch = {
+        self.pending_generation_watches.append({
             "session_idx": session_idx,
             "source_no": source_no,
             "asset_tag": str(asset_tag or "").strip(),
@@ -1507,7 +1514,7 @@ class FlowVisionApp:
             "baseline_count": len(list(baseline_cards or [])),
             "baseline_summary_counts": baseline_summary_counts,
             "started_at": time.time(),
-        }
+        })
 
     def _record_live_failure_event(self, source_no=None, asset_tag="", reason="", session_idx=None, retry_label="실패"):
         token = self._format_live_failure_token(source_no=source_no, asset_tag=asset_tag)
@@ -1554,39 +1561,30 @@ class FlowVisionApp:
         )
 
     def _poll_pending_generation_failure(self):
-        watch = self.pending_generation_watch
-        if not watch or self.current_run_mode not in ("prompt", "asset"):
+        watches = list(self.pending_generation_watches or [])
+        if (not watches) or self.current_run_mode not in ("prompt", "asset"):
             return
         cards = self._snapshot_generation_failure_cards()
-        baseline_keys = set(watch.get("baseline_keys", set()) or set())
-        new_cards = [card for card in cards if str(card.get("key", "") or "").strip() not in baseline_keys]
-        if not new_cards and cards:
-            try:
-                baseline_count = int(watch.get("baseline_count", 0) or 0)
-            except Exception:
-                baseline_count = 0
-            baseline_summary_counts = dict(watch.get("baseline_summary_counts", {}) or {})
-            if baseline_count <= 0:
-                new_cards = cards[:1]
-            elif len(cards) > baseline_count:
-                new_cards = cards[baseline_count:]
-            else:
-                current_summary_counts = {}
-                candidate = None
-                for card in cards:
-                    summary_key = str(card.get("summary_key", "") or "").strip()
-                    if summary_key:
-                        current_summary_counts[summary_key] = int(current_summary_counts.get(summary_key, 0) or 0) + 1
-                        if current_summary_counts[summary_key] > int(baseline_summary_counts.get(summary_key, 0) or 0):
-                            candidate = card
-                            break
-                if candidate is not None:
-                    new_cards = [candidate]
+        current_count = len(cards)
+        try:
+            observed_count = int(self.observed_failure_card_count or 0)
+        except Exception:
+            observed_count = 0
+        if current_count < observed_count:
+            observed_count = current_count
+            self.observed_failure_card_count = current_count
+        if current_count <= observed_count:
+            return
+        new_cards = cards[observed_count:current_count]
         if not new_cards:
             return
-        reason = str(new_cards[0].get("text", "") or new_cards[0].get("title", "") or "문제가 발생했습니다.").strip()
-        self._record_generation_failure(watch, reason)
-        self.pending_generation_watch = None
+        for card in new_cards:
+            if not self.pending_generation_watches:
+                break
+            watch = self.pending_generation_watches.pop(0)
+            reason = str(card.get("text", "") or card.get("title", "") or "문제가 발생했습니다.").strip()
+            self._record_generation_failure(watch, reason)
+        self.observed_failure_card_count = current_count
 
     def _resolve_profile_dir(self):
         profile_dir = (self.cfg.get("browser_profile_dir") or "flow_human_profile_pw").strip()
@@ -14332,7 +14330,7 @@ class FlowVisionApp:
             pass
 
     def _tick(self):
-        if self.running and self.current_run_mode in ("prompt", "asset") and self.pending_generation_watch:
+        if self.running and self.current_run_mode in ("prompt", "asset") and self.pending_generation_watches:
             try:
                 self._poll_pending_generation_failure()
             except Exception:
@@ -14378,6 +14376,11 @@ class FlowVisionApp:
                     self.alert_window.close()
                     self.alert_window = None
                 if not self.is_processing:
+                    if self.current_run_mode in ("prompt", "asset") and self.pending_generation_watches:
+                        try:
+                            self._poll_pending_generation_failure()
+                        except Exception:
+                            pass
                     if self.scheduled_waiting:
                         self.scheduled_waiting = False
                         self.scheduled_start_ts = None
@@ -14711,7 +14714,6 @@ class FlowVisionApp:
                     session_idx=session_idx,
                     retry_label="에셋 검색 실패",
                 )
-                self.pending_generation_watch = None
                 self.actor.processed_count += 1
                 self.index += 1
                 if self.page and (not self.page.is_closed()):
