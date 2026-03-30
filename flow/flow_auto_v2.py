@@ -14364,6 +14364,7 @@ class FlowVisionApp:
         if self.current_run_mode == "download":
             self._run_download_task()
             return
+        start_t = datetime.now()
         self._run_pending_periodic_refresh()
         if self.current_run_mode == "asset":
             self.on_reload()
@@ -14515,8 +14516,6 @@ class FlowVisionApp:
             except Exception as e:
                 print(f"Persona update failed: {e}")
                 self.log(f"⚠️ 페르소나 업데이트 오류: {e}")
-
-            start_t = datetime.now()
 
             input_locator, resolved_input_selector = self._resolve_prompt_input_locator(
                 input_selector,
