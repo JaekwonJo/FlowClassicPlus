@@ -461,6 +461,7 @@ class FlowVisionApp:
         self.live_failure_items = []
         self.live_failure_seen = set()
         self.pending_generation_watch = None
+        self.pending_periodic_refresh = None
         self.current_selection_summary = ""
         self.current_selection_input = ""
         self.current_expected_mode = None
@@ -1382,6 +1383,7 @@ class FlowVisionApp:
         self.live_failure_items = []
         self.live_failure_seen = set()
         self.pending_generation_watch = None
+        self.pending_periodic_refresh = None
         self.root.after(0, self._refresh_live_failure_panel)
 
     def on_copy_live_failures(self):
@@ -13527,12 +13529,28 @@ class FlowVisionApp:
         every_count = int(self.cfg.get("periodic_refresh_every_count", 2) or 2)
         if every_count < 1 or (completed_count % every_count) != 0:
             return
+        self.pending_periodic_refresh = {
+            "completed_count": completed_count,
+            "mode_label": str(mode_label or "작업"),
+        }
+        self.log(f"🔄 주기적 새로고침 예약 ({mode_label} {completed_count}개 처리 후, 다음 작업 직전 실행)")
+
+    def _run_pending_periodic_refresh(self):
+        pending = self.pending_periodic_refresh
+        if not pending:
+            return
+        self.pending_periodic_refresh = None
+        if self.current_run_mode not in ("prompt", "asset"):
+            return
         if not self.page or self.page.is_closed():
             return
+        self._normalize_periodic_refresh_config()
         wait_min = int(self.cfg.get("periodic_refresh_wait_min_seconds", 3) or 3)
         wait_max = int(self.cfg.get("periodic_refresh_wait_max_seconds", 5) or 5)
         wait_sec = random.uniform(wait_min, wait_max)
-        self.log(f"🔄 주기적 새로고침 실행 ({mode_label} {completed_count}개 처리 후)")
+        completed_count = int(pending.get("completed_count", 0) or 0)
+        mode_label = str(pending.get("mode_label", "작업") or "작업").strip()
+        self.log(f"🔄 주기적 새로고침 실행 ({mode_label} {completed_count}개 처리 후, 다음 작업 직전)")
         self.update_status_label("🔄 페이지 새로고침 중...", self.color_info)
         try:
             self.page.reload(wait_until="domcontentloaded", timeout=45000)
@@ -14172,6 +14190,7 @@ class FlowVisionApp:
         if self.current_run_mode == "download":
             self._run_download_task()
             return
+        self._run_pending_periodic_refresh()
         if self.current_run_mode == "asset":
             self.on_reload()
         else:
