@@ -1431,15 +1431,19 @@ class FlowVisionApp:
         try:
             cards = self.page.evaluate(
                 """() => {
-                    const failHits = [
+                    const failReasonHits = [
                         "이 생성은 google 정책을 위반할 수 있습니다",
                         "google 정책을 위반할 수 있습니다",
                         "정책을 위반할 수 있습니다",
                         "문제가 발생했습니다",
-                        "실패",
                         "something went wrong",
-                        "failed",
+                        "this generation may violate google policies",
+                        "may violate google policies",
                         "error occurred",
+                    ];
+                    const failTitleHits = [
+                        "실패",
+                        "failed",
                     ];
                     const negativeKeys = [
                         "무엇을 만들고 싶으신가요",
@@ -1450,6 +1454,12 @@ class FlowVisionApp:
                         "start",
                         "종료",
                         "시작",
+                        "undo",
+                        "delete",
+                        "delete_forever",
+                        "프롬프트 재사용",
+                        "삭제",
+                        "warning",
                     ];
                     const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
                     const isVisible = (el) => {
@@ -1482,13 +1492,19 @@ class FlowVisionApp:
                         const text = clean(node.innerText || node.textContent || node.getAttribute("aria-label") || "");
                         if (text.length < 4 || text.length > 260) continue;
                         const lower = text.toLowerCase();
-                        if (!failHits.some((hit) => lower.includes(hit.toLowerCase()))) continue;
+                        const hasFailTitle = failTitleHits.some((hit) => lower.includes(hit.toLowerCase()));
+                        const hasFailReason = failReasonHits.some((hit) => lower.includes(hit.toLowerCase()));
+                        if (!hasFailTitle && !hasFailReason) continue;
                         const card = findCard(node);
                         if (!isVisible(card)) continue;
                         const rect = card.getBoundingClientRect();
                         if (rect.width > window.innerWidth * 0.98 || rect.height > window.innerHeight * 0.85) continue;
                         const cardText = clean(card.innerText || card.textContent || "");
                         const summaryText = cardText || text;
+                        const summaryLower = summaryText.toLowerCase();
+                        const cardHasFailTitle = failTitleHits.some((hit) => summaryLower.includes(hit.toLowerCase()));
+                        const cardHasFailReason = failReasonHits.some((hit) => summaryLower.includes(hit.toLowerCase()));
+                        if (!(cardHasFailTitle && cardHasFailReason)) continue;
                         const lines = summaryText.split(/\\n+/).map(clean).filter(Boolean);
                         const title = lines[0] || text;
                         const summary = lines.slice(0, 4).join(" | ").slice(0, 220);
