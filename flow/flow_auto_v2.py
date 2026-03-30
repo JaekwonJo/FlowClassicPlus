@@ -439,6 +439,7 @@ class FlowVisionApp:
         self.run_input_mode = None
         self.enter_only_submit = True
         self.asset_loop_items = []
+        self.asset_video_ready_for_run = False
         self.current_run_mode = None
         self.tray_icon = None
         self.tray_thread = None
@@ -13153,6 +13154,7 @@ class FlowVisionApp:
 
     def _set_run_mode(self, mode):
         self.current_run_mode = mode
+        self.asset_video_ready_for_run = False
         if mode in ("prompt", "asset"):
             use_asset = (mode == "asset")
             self.cfg["asset_loop_enabled"] = use_asset
@@ -13857,17 +13859,26 @@ class FlowVisionApp:
                             self.log(f"🧭 S전환 기준 입력칸 확인: {preset_input_selector or '자동 탐색'}")
                     except Exception:
                         preset_input_locator = None
-                self.refresh_detected_media_state(
-                    ensure_session=False,
-                    input_locator=preset_input_locator,
-                    profile="asset",
-                    write_log=True,
-                )
-                try:
+                if not self.asset_video_ready_for_run:
+                    self.refresh_detected_media_state(
+                        ensure_session=False,
+                        input_locator=preset_input_locator,
+                        profile="asset",
+                        write_log=True,
+                    )
                     self.update_status_label("🎛️ 생성 옵션 맞추는 중...", self.color_info)
                     self._apply_prompt_generation_preset(input_locator=preset_input_locator, profile="asset")
-                except Exception as e:
-                    self.log(f"⚠️ 프롬프트 생성 옵션 자동 맞춤 실패: {e}")
+                    verified_asset_state = self.refresh_detected_media_state(
+                        ensure_session=False,
+                        input_locator=preset_input_locator,
+                        profile="asset",
+                        write_log=True,
+                    )
+                    if verified_asset_state != "video":
+                        raise RuntimeError(
+                            f"S자동화 시작 전 video 전환 검증 실패: 감지={verified_asset_state or '미확인'}"
+                        )
+                    self.asset_video_ready_for_run = True
                 if asset_tag:
                     self.update_status_label(f"🔁 에셋 준비 중... ({asset_tag})", self.color_info)
                     self._run_asset_loop_prestep(asset_tag)
