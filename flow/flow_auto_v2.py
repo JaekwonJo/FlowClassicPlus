@@ -2815,6 +2815,45 @@ class FlowVisionApp:
         sep = self.cfg.get("prompts_separator", "|||")
         return [part.strip() for part in raw.split(sep) if part.strip()]
 
+    def _parse_asset_prompt_entries(self, entries):
+        prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
+        tag_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*::\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
+        prompt_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
+        tag_only_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*$", re.IGNORECASE)
+        tagged_prompts = {}
+        common_prompt = ""
+        idx = 0
+        source = list(entries or [])
+        while idx < len(source):
+            raw_text = str(source[idx] or "").strip()
+            idx += 1
+            if not raw_text:
+                continue
+            match = tag_pattern.match(raw_text)
+            if not match:
+                match = prompt_pattern.match(raw_text)
+            if match:
+                tag = match.group(1).strip().upper()
+                body = match.group(2).strip()
+                if body:
+                    tagged_prompts[tag] = body
+                continue
+            tag_only_match = tag_only_pattern.match(raw_text)
+            if tag_only_match and idx < len(source):
+                next_body = str(source[idx] or "").strip()
+                if next_body:
+                    tagged_prompts[tag_only_match.group(1).strip().upper()] = next_body
+                    idx += 1
+                    continue
+            if not common_prompt:
+                common_prompt = raw_text
+        mode = "tagged" if tagged_prompts else ("sequential" if source else "empty")
+        return {
+            "tagged_prompts": tagged_prompts,
+            "common_prompt": common_prompt,
+            "mode": mode,
+        }
+
     def _pipeline_prompt_slot_summary(self, slot_idx):
         slots = self.cfg.get("prompt_slots", []) or []
         if not slots:
@@ -2854,34 +2893,14 @@ class FlowVisionApp:
             slot_name = str(slot.get("name", "") or f"슬롯 {slot_idx + 1}")
             file_name = str(slot.get("file", "") or "").strip()
         entries = self._load_prompts_from_file_name(file_name)
-        prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
-        tag_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*::\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
-        prompt_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
-        tagged_prompts = {}
-        common_prompt = ""
-        for entry in entries:
-            raw_text = str(entry or "").strip()
-            if not raw_text:
-                continue
-            match = tag_pattern.match(raw_text)
-            if not match:
-                match = prompt_pattern.match(raw_text)
-            if match:
-                tag = match.group(1).strip().upper()
-                body = match.group(2).strip()
-                if body:
-                    tagged_prompts[tag] = body
-                continue
-            if not common_prompt:
-                common_prompt = raw_text
-        mode = "tagged" if tagged_prompts else ("sequential" if entries else "empty")
+        parsed = self._parse_asset_prompt_entries(entries)
         return {
             "slot_name": slot_name,
             "file_name": file_name,
             "entries": entries,
-            "tagged_prompts": tagged_prompts,
-            "common_prompt": common_prompt,
-            "mode": mode,
+            "tagged_prompts": parsed.get("tagged_prompts", {}),
+            "common_prompt": parsed.get("common_prompt", ""),
+            "mode": parsed.get("mode", "empty"),
         }
 
     def _asset_prompt_slot_summary(self):
@@ -2913,19 +2932,9 @@ class FlowVisionApp:
         entries = self._load_prompts_from_file_name(file_name)
         if not entries:
             return f"S개별 프롬프트 파일 | {file_name} | 프롬프트 없음"
-        prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
-        tag_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*::\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
-        prompt_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
-        tagged_count = 0
-        has_common = False
-        for entry in entries:
-            raw_text = str(entry or "").strip()
-            if not raw_text:
-                continue
-            if tag_pattern.match(raw_text) or prompt_pattern.match(raw_text):
-                tagged_count += 1
-            elif not has_common:
-                has_common = True
+        parsed = self._parse_asset_prompt_entries(entries)
+        tagged_count = len(parsed.get("tagged_prompts", {}) or {})
+        has_common = bool(parsed.get("common_prompt"))
         if tagged_count:
             common_text = " + 파일 공통 fallback" if has_common else " + 템플릿 fallback"
             return f"S개별 프롬프트 파일 | {file_name} | 태그형 {tagged_count}개{common_text}"
@@ -9406,7 +9415,7 @@ class FlowVisionApp:
         self.lbl_asset_prompt_source_status.pack(anchor="w", pady=(0, 6))
         tk.Label(
             asset_f,
-            text="예: S004::개별 프롬프트 / 태그 없는 프롬프트는 공통 fallback",
+            text="예: S004::개별 프롬프트 또는 S004 ||| 실제 본문 / 태그 없는 프롬프트는 공통 fallback",
             bg=self.color_bg,
             fg=self.color_text_sec,
             font=self.font_small,
