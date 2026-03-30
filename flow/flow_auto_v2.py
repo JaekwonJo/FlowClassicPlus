@@ -255,10 +255,12 @@ class CountdownAlert:
     def __init__(self, master, seconds=30, sound_enabled=True):
         self.root = tk.Toplevel(master)
         self.sound_enabled = sound_enabled
+        self._drag_offset_x = 0
+        self._drag_offset_y = 0
         self.root.title("알림")
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
-        self.root.attributes("-alpha", 0.95)
+        self.root.attributes("-alpha", 0.84)
         self.root.configure(bg="#F8F9FA")
         
         sw = self.root.winfo_screenwidth()
@@ -270,10 +272,31 @@ class CountdownAlert:
         
         frame = tk.Frame(self.root, bg="#FFFFFF", highlightbackground="#007AFF", highlightthickness=3)
         frame.pack(fill="both", expand=True)
-        
-        tk.Label(frame, text="⚡ 봇 출동 준비!", font=("Malgun Gothic", 12, "bold"), bg="#FFFFFF", fg="#007AFF").pack(pady=10)
+
+        title = tk.Label(frame, text="⚡ 봇 출동 준비!", font=("Malgun Gothic", 12, "bold"), bg="#FFFFFF", fg="#007AFF", cursor="fleur")
+        title.pack(pady=10)
         self.lbl_time = tk.Label(frame, text=f"{seconds}초 전", font=("Malgun Gothic", 20, "bold"), bg="#FFFFFF", fg="#DC3545")
         self.lbl_time.pack()
+
+        for widget in (self.root, frame, title, self.lbl_time):
+            widget.bind("<ButtonPress-1>", self._start_drag)
+            widget.bind("<B1-Motion>", self._on_drag)
+
+    def _start_drag(self, event):
+        try:
+            self._drag_offset_x = int(event.x_root - self.root.winfo_x())
+            self._drag_offset_y = int(event.y_root - self.root.winfo_y())
+        except Exception:
+            self._drag_offset_x = 0
+            self._drag_offset_y = 0
+
+    def _on_drag(self, event):
+        try:
+            x = int(event.x_root - self._drag_offset_x)
+            y = int(event.y_root - self._drag_offset_y)
+            self.root.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
 
     def update_time(self, seconds):
         if not self.root.winfo_exists(): return
