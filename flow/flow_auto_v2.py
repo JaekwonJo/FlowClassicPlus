@@ -14145,12 +14145,12 @@ class FlowVisionApp:
             pass
 
     def _tick(self):
+        if self.running and self.current_run_mode in ("prompt", "asset") and self.pending_generation_watch:
+            try:
+                self._poll_pending_generation_failure()
+            except Exception:
+                pass
         if self.running and self.t_next:
-            if (not self.is_processing) and self.current_run_mode in ("prompt", "asset"):
-                try:
-                    self._poll_pending_generation_failure()
-                except Exception:
-                    pass
             remain = self.t_next - time.time()
             if remain > 0:
                 if not self.is_processing:
