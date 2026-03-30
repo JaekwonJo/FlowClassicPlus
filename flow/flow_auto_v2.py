@@ -458,6 +458,9 @@ class FlowVisionApp:
         self.download_report_path = None
         self.completion_summary_path = None
         self.retry_error_log = []
+        self.live_failure_items = []
+        self.live_failure_seen = set()
+        self.pending_generation_watch = None
         self.current_selection_summary = ""
         self.current_selection_input = ""
         self.current_expected_mode = None
@@ -1327,6 +1330,189 @@ class FlowVisionApp:
             pass
         finally:
             self.action_log_fp = None
+
+    def _format_live_failure_token(self, source_no=None, asset_tag=""):
+        asset_tag = str(asset_tag or "").strip()
+        if asset_tag:
+            return asset_tag
+        try:
+            return str(int(source_no)).zfill(3)
+        except Exception:
+            return str(source_no or "").strip()
+
+    def _live_failure_copy_text(self):
+        tokens = []
+        seen = set()
+        for item in self.live_failure_items:
+            token = str(item.get("token", "") or "").strip()
+            if token and token not in seen:
+                seen.add(token)
+                tokens.append(token)
+        return ",".join(tokens)
+
+    def _refresh_live_failure_panel(self):
+        if not hasattr(self, "txt_live_failures"):
+            return
+        items = list(self.live_failure_items or [])
+        self.txt_live_failures.config(state="normal")
+        self.txt_live_failures.delete("1.0", "end")
+        if items:
+            lines = []
+            for item in items[-20:]:
+                stamp = str(item.get("time", "") or "").strip()
+                token = str(item.get("token", "") or "").strip()
+                reason = str(item.get("reason", "") or "").strip()
+                if stamp:
+                    lines.append(f"[{stamp}] {token} | {reason}")
+                else:
+                    lines.append(f"{token} | {reason}")
+            self.txt_live_failures.insert("1.0", "\n".join(lines))
+            if hasattr(self, "lbl_live_fail_status"):
+                self.lbl_live_fail_status.config(
+                    text=f"실패 {len(items)}개 감지",
+                    fg=self.color_error,
+                )
+        else:
+            self.txt_live_failures.insert("1.0", "작업 중 실패가 감지되면 여기에 번호가 쌓입니다.\n종료 후에는 완료 요약과 세션 리포트에도 같이 저장됩니다.")
+            if hasattr(self, "lbl_live_fail_status"):
+                self.lbl_live_fail_status.config(text="실패 없음", fg=self.color_success)
+        self.txt_live_failures.config(state="disabled")
+
+    def _reset_live_failure_tracking(self):
+        self.live_failure_items = []
+        self.live_failure_seen = set()
+        self.pending_generation_watch = None
+        self.root.after(0, self._refresh_live_failure_panel)
+
+    def on_copy_live_failures(self):
+        text = self._live_failure_copy_text()
+        if not text:
+            self.log("ℹ️ 복사할 실패 번호가 아직 없습니다.")
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.root.update_idletasks()
+            self.log(f"📋 실패 번호 복사: {text}")
+        except Exception as e:
+            self.log(f"⚠️ 실패 번호 복사 실패: {e}")
+
+    def _snapshot_generation_failure_cards(self):
+        if not self.page:
+            return []
+        try:
+            cards = self.page.evaluate(
+                """() => {
+                    const failHits = [
+                        "문제가 발생했습니다",
+                        "실패",
+                        "something went wrong",
+                        "failed",
+                        "error occurred",
+                    ];
+                    const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const rect = el.getBoundingClientRect();
+                        if (!rect || rect.width < 120 || rect.height < 40) return false;
+                        const style = window.getComputedStyle(el);
+                        return style && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+                    };
+                    const out = [];
+                    const seen = new Set();
+                    const nodes = document.querySelectorAll("div, section, article, li");
+                    for (const node of nodes) {
+                        if (!isVisible(node)) continue;
+                        const rect = node.getBoundingClientRect();
+                        if (rect.width > window.innerWidth * 0.98 || rect.height > window.innerHeight * 0.75) continue;
+                        const text = clean(node.innerText || "");
+                        if (text.length < 8 || text.length > 220) continue;
+                        const lower = text.toLowerCase();
+                        if (!failHits.some((hit) => lower.includes(hit.toLowerCase()))) continue;
+                        const lines = text.split(/\\n+/).map(clean).filter(Boolean);
+                        const title = lines[0] || text;
+                        const summary = lines.slice(0, 3).join(" | ").slice(0, 160);
+                        const key = [
+                            Math.round(rect.left),
+                            Math.round(rect.top),
+                            Math.round(rect.width),
+                            Math.round(rect.height),
+                            summary,
+                        ].join("|");
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+                        out.push({
+                            key,
+                            title,
+                            text: summary,
+                        });
+                    }
+                    return out;
+                }"""
+            )
+            if isinstance(cards, list):
+                return cards
+        except Exception:
+            pass
+        return []
+
+    def _register_generation_watch(self, session_idx, source_no=None, asset_tag="", baseline_cards=None):
+        baseline_keys = set()
+        for item in baseline_cards or []:
+            key = str((item or {}).get("key", "") or "").strip()
+            if key:
+                baseline_keys.add(key)
+        self.pending_generation_watch = {
+            "session_idx": session_idx,
+            "source_no": source_no,
+            "asset_tag": str(asset_tag or "").strip(),
+            "baseline_keys": baseline_keys,
+            "started_at": time.time(),
+        }
+
+    def _record_generation_failure(self, watch, reason):
+        if not isinstance(watch, dict):
+            return
+        source_no = watch.get("source_no")
+        asset_tag = str(watch.get("asset_tag", "") or "").strip()
+        token = self._format_live_failure_token(source_no=source_no, asset_tag=asset_tag)
+        if not token:
+            return
+        dedupe_key = f"{token}|{str(reason or '').strip()}"
+        if dedupe_key in self.live_failure_seen:
+            return
+        self.live_failure_seen.add(dedupe_key)
+        try:
+            session_idx = int(watch.get("session_idx"))
+        except Exception:
+            session_idx = -1
+        if 0 <= session_idx < len(self.session_log):
+            self.session_log[session_idx]["status"] = "failed"
+            self.session_log[session_idx]["error"] = str(reason or "").strip()
+        self.retry_error_log.append(f"{token} | Flow 생성 실패 | {str(reason or '').strip()[:160]}")
+        self.live_failure_items.append({
+            "token": token,
+            "reason": str(reason or "").strip() or "문제가 발생했습니다.",
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "source_no": source_no,
+            "tag": asset_tag,
+        })
+        self.log(f"🚨 Flow 실패 감지: {token} | {str(reason or '').strip() or '문제가 발생했습니다.'}")
+        self.update_status_label(f"🚨 생성 실패 감지: {token}", self.color_error)
+        self.root.after(0, self._refresh_live_failure_panel)
+
+    def _poll_pending_generation_failure(self):
+        watch = self.pending_generation_watch
+        if not watch or self.current_run_mode not in ("prompt", "asset"):
+            return
+        cards = self._snapshot_generation_failure_cards()
+        baseline_keys = set(watch.get("baseline_keys", set()) or set())
+        new_cards = [card for card in cards if str(card.get("key", "") or "").strip() not in baseline_keys]
+        if not new_cards:
+            return
+        reason = str(new_cards[0].get("text", "") or new_cards[0].get("title", "") or "문제가 발생했습니다.").strip()
+        self._record_generation_failure(watch, reason)
+        self.pending_generation_watch = None
 
     def _resolve_profile_dir(self):
         profile_dir = (self.cfg.get("browser_profile_dir") or "flow_human_profile_pw").strip()
@@ -9314,6 +9500,33 @@ class FlowVisionApp:
         self.lbl_hud_trait.pack(anchor="w", pady=(4, 0))
         self._set_mini_hud_collapsed(True)
 
+        fail_card = ttk.LabelFrame(right_scrollable, text=" ⚠ 실시간 실패 번호 ", padding=8)
+        fail_card.pack(fill="x", pady=(0, 8))
+        fail_top = tk.Frame(fail_card, bg=self.color_bg)
+        fail_top.pack(fill="x")
+        self.lbl_live_fail_status = tk.Label(
+            fail_top,
+            text="실패 없음",
+            font=("Malgun Gothic", 10, "bold"),
+            fg=self.color_success,
+            bg=self.color_bg,
+        )
+        self.lbl_live_fail_status.pack(side="left")
+        ttk.Button(fail_top, text="복사", command=self.on_copy_live_failures).pack(side="right")
+        self.txt_live_failures = tk.Text(
+            fail_card,
+            height=7,
+            wrap="word",
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+            relief="flat",
+        )
+        self.txt_live_failures.pack(fill="x", pady=(6, 0))
+        self.txt_live_failures.insert("1.0", "작업 중 실패가 감지되면 여기에 번호가 쌓입니다.\n종료 후에는 완료 요약과 세션 리포트에도 같이 저장됩니다.")
+        self.txt_live_failures.config(state="disabled")
+
         ctrl_card = ttk.LabelFrame(right_scrollable, text=" ▶ 실행 컨트롤 ", padding=8)
         ctrl_card.pack(fill="x", pady=(0, 8))
         self.ctrl_card = ctrl_card
@@ -13532,6 +13745,7 @@ class FlowVisionApp:
             self.session_start_time = datetime.now()
             self.session_log = []
             self.retry_error_log = []
+            self._reset_live_failure_tracking()
             self._open_action_log("download_trace" if is_download_mode else "action_trace")
             self.session_report_path = self.logs_dir / f"session_report_{self.session_start_time.strftime('%Y%m%d_%H%M%S')}.json"
             self.completion_summary_path = None
@@ -13891,6 +14105,11 @@ class FlowVisionApp:
 
     def _tick(self):
         if self.running and self.t_next:
+            if (not self.is_processing) and self.current_run_mode in ("prompt", "asset"):
+                try:
+                    self._poll_pending_generation_failure()
+                except Exception:
+                    pass
             remain = self.t_next - time.time()
             if remain > 0:
                 if not self.is_processing:
@@ -14178,6 +14397,7 @@ class FlowVisionApp:
             self.update_status_label("🚀 제출 중...", self.color_accent)
             submitted = False
             attempt_notes = []
+            failure_baseline_cards = self._snapshot_generation_failure_cards()
             self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 정책: 안전 단일 제출")
 
             try:
@@ -14215,6 +14435,12 @@ class FlowVisionApp:
                 "status": "success",
                 "error": "",
             })
+            self._register_generation_watch(
+                session_idx=len(self.session_log) - 1,
+                source_no=source_no or (self.index + 1),
+                asset_tag=asset_tag or "",
+                baseline_cards=failure_baseline_cards,
+            )
             self.actor.processed_count += 1
             self.index += 1
             self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 프롬프트 #{self.index} 처리 완료")
@@ -14495,6 +14721,10 @@ class FlowVisionApp:
     def save_session_report(self):
         if not hasattr(self, "session_log"):
             return
+        try:
+            self._poll_pending_generation_failure()
+        except Exception:
+            pass
         if self.session_report_path is None:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.session_report_path = self.logs_dir / f"session_report_{stamp}.json"
