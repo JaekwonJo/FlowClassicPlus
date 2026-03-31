@@ -594,6 +594,7 @@ class FlowVisionApp:
         self.pipeline_runtime_results = []
         self.pipeline_runtime_report_path = None
         self.pipeline_runtime_retry_round = 0
+        self.worker_launch_counters = {}
         self.prompt_image_baseline_ready = bool(self.cfg.get("prompt_image_baseline_ready", False))
         self.asset_image_baseline_ready = bool(self.cfg.get("asset_image_baseline_ready", False))
         current_media_state = str(self.cfg.get("current_media_state", "") or "").strip().lower()
@@ -11343,27 +11344,22 @@ class FlowVisionApp:
         meta = self._worker_mode_meta(kind)
         default_name = str(meta.get("default_name", "워커1") or "워커1").strip()
         base_name = re.sub(r"\d+$", "", default_name).rstrip("_") or default_name
-        existing = set()
-        try:
-            existing.add(self._browser_profile_dir_name())
-        except Exception:
-            pass
-        try:
-            existing.add(self._current_config_display_name())
-        except Exception:
-            pass
-        for path in self.base.glob("flow_config_*.json"):
-            existing.add(config_display_name_from_path(path))
-        for path in self.base.iterdir():
-            if path.is_dir():
-                existing.add(path.name)
+        next_idx = max(1, int(self.worker_launch_counters.get(kind, 1) or 1))
+        return f"{base_name}{next_idx}"
 
-        idx = 1
-        while True:
-            candidate = f"{base_name}{idx}"
-            if candidate not in existing and sanitize_named_token(candidate, fallback="worker") not in existing:
-                return candidate
-            idx += 1
+    def _advance_worker_bundle_name(self, kind, launched_name=""):
+        current_idx = max(1, int(self.worker_launch_counters.get(kind, 1) or 1))
+        launched_name = str(launched_name or "").strip()
+        launched_idx = current_idx
+        if launched_name:
+            m = re.search(r"(\d+)\s*$", launched_name)
+            if m:
+                try:
+                    launched_idx = max(1, int(m.group(1)))
+                except Exception:
+                    launched_idx = current_idx
+        self.worker_launch_counters[kind] = max(current_idx + 1, launched_idx + 1)
+        return self._suggest_worker_bundle_name(kind)
 
     def _launch_worker_process(self, kind, worker_name, config_name, browser_profile_name, project_index=0, extra_cfg=None):
         meta = self._worker_mode_meta(kind)
@@ -12020,8 +12016,8 @@ class FlowVisionApp:
         bottom = tk.Frame(outer, bg=self.color_bg)
         bottom.pack(fill="x", pady=(18, 6))
 
-        def _prepare_next_worker_names():
-            next_name = self._suggest_worker_bundle_name(kind)
+        def _prepare_next_worker_names(last_name=""):
+            next_name = self._advance_worker_bundle_name(kind, last_name)
             worker_name_var.set(next_name)
             config_name_var.set(sanitize_named_token(next_name, fallback="worker"))
             profile_name_var.set(self._sanitize_browser_profile_name(next_name))
@@ -12163,7 +12159,7 @@ class FlowVisionApp:
             except Exception as e:
                 messagebox.showerror("워커 실행 실패", f"{meta['title']} 실행 실패:\n{e}", parent=win)
                 return
-            _prepare_next_worker_names()
+            _prepare_next_worker_names(worker_name_var.get())
 
         ttk.Button(bottom, text="취소", command=win.destroy).pack(side="right")
         ttk.Button(bottom, text=f"{meta['title']} 열기", command=_launch).pack(side="right", padx=(0, 8))
