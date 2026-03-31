@@ -11125,7 +11125,7 @@ class FlowVisionApp:
             self.lbl_worker_hud_status.config(text=f"상태: {status_text}", fg=status_color)
             self.lbl_worker_hud_progress.config(text=f"진행률: {progress_text}")
             if not self.worker_quick_hud.winfo_ismapped():
-                self.worker_quick_hud.pack(fill="x", pady=(0, 6))
+                self.worker_quick_hud.pack(fill="x", pady=(0, 6), before=self.body_pane)
         else:
             if self.worker_quick_hud.winfo_ismapped():
                 self.worker_quick_hud.pack_forget()
