@@ -11867,6 +11867,7 @@ class FlowVisionApp:
             profile_name_var.set(self._sanitize_browser_profile_name(next_name))
             worker_name_entry.focus_force()
             worker_name_entry.selection_range(0, "end")
+            return next_name
 
         def _launch():
             project_idx = project_values.index(project_var.get()) if project_var.get() in project_values else 0
@@ -12003,8 +12004,8 @@ class FlowVisionApp:
                 messagebox.showerror("워커 실행 실패", f"{meta['title']} 실행 실패:\n{e}", parent=win)
                 return
             requested_name = worker_name_var.get().strip() or meta["default_name"]
-            launch_status_var.set(f"{requested_name} 실행 요청 완료. 같은 창에서 다음 워커도 계속 만들 수 있습니다.")
-            _prepare_next_worker_names()
+            next_name = _prepare_next_worker_names()
+            launch_status_var.set(f"{requested_name} 실행 요청 완료 | 다음: {next_name}")
 
         ttk.Button(bottom, text="취소", command=win.destroy).pack(side="right")
         ttk.Button(bottom, text=f"{meta['title']} 열기", command=_launch).pack(side="right", padx=(0, 8))
