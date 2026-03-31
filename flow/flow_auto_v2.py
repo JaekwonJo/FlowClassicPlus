@@ -11390,7 +11390,8 @@ class FlowVisionApp:
 
         cmd = [
             sys.executable,
-            str(Path(__file__).resolve()),
+            "-m",
+            "flow.flow_auto_v2",
             "--worker",
             kind,
             "--worker-name",
@@ -11411,6 +11412,21 @@ class FlowVisionApp:
             if creationflags:
                 popen_kwargs["creationflags"] = creationflags
         proc = subprocess.Popen(cmd, **popen_kwargs)
+        time.sleep(0.9)
+        exit_code = proc.poll()
+        if exit_code is not None:
+            crash_hint = ""
+            crash_log = self.base.parent / "CRASH_LOG.txt"
+            if crash_log.exists():
+                try:
+                    preview = crash_log.read_text(encoding="utf-8", errors="ignore").strip()
+                except Exception:
+                    preview = ""
+                if preview:
+                    preview = preview.splitlines()[-1].strip()
+                    if preview:
+                        crash_hint = f"\n최근 오류: {preview}"
+            raise RuntimeError(f"워커 프로세스가 바로 종료되었습니다. (exit={exit_code}){crash_hint}")
         self.log(f"🚀 워커 실행: {meta['title']} | 이름={worker_name} | 설정={config_name} | 프로필={browser_profile_name}")
         return proc
 
