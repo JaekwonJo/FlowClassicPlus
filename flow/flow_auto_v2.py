@@ -742,7 +742,7 @@ class FlowVisionApp:
         except Exception:
             saved_w = 0
             saved_h = 0
-        if self.worker_mode in ("prompt", "asset"):
+        if self.worker_mode in ("prompt", "asset", "download"):
             w = min(960, max(780, int(sw * 0.50)))
             h = min(680, max(540, int(sh * 0.66)))
         elif saved_w > 0 and saved_h > 0:
@@ -760,7 +760,7 @@ class FlowVisionApp:
             x = max((sw - w) // 2, 0)
             y = max((sh - h) // 2, 0)
         self.root.geometry(f"{w}x{h}+{x}+{y}")
-        if self.worker_mode in ("prompt", "asset"):
+        if self.worker_mode in ("prompt", "asset", "download"):
             self.root.minsize(740, 520)
         else:
             self.root.minsize(860, 620)
@@ -11644,6 +11644,159 @@ class FlowVisionApp:
         )
         self.lbl_worker_asset_help.pack(fill="x", pady=(0, 6))
 
+        self.download_worker_simple = tk.Frame(card, bg=self.color_card)
+
+        download_defaults = self._asset_worker_selection_defaults()
+        self.worker_download_project_var = tk.StringVar(value=project_values[active_project_idx] if project_values else "기본 프로젝트")
+        self.worker_download_mode_var = tk.StringVar(value=self._pipeline_mode_labels().get(self._download_mode(), "동영상"))
+        self.worker_download_quality_var = tk.StringVar(value=self._download_quality(self._download_mode()))
+        self.worker_download_interval_var = tk.StringVar(value=str(int(self.cfg.get("interval_seconds", 180) or 180)))
+        self.worker_download_number_mode_var = tk.StringVar(value=download_defaults["mode"])
+        self.worker_download_range_start_var = tk.StringVar(value=download_defaults["start"])
+        self.worker_download_range_end_var = tk.StringVar(value=download_defaults["end"])
+        self.worker_download_manual_var = tk.StringVar(value=download_defaults["manual"])
+        self.worker_download_output_dir_var = tk.StringVar(value=str(self.cfg.get("download_output_dir", "") or self._resolve_download_output_dir()))
+        self.worker_download_summary_var = tk.StringVar()
+
+        download_content = tk.Frame(self.download_worker_simple, bg=self.color_card)
+        download_content.pack(fill="x")
+        download_content.grid_columnconfigure(0, weight=1, uniform="download_block")
+        download_content.grid_columnconfigure(1, weight=1, uniform="download_block")
+
+        download_basic_box = tk.Frame(download_content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
+        download_basic_box.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        tk.Label(download_basic_box, text="기본 설정", font=self.font_body_bold, bg=self.color_panel_soft, fg=self.color_info).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 8))
+        download_basic_box.grid_columnconfigure(1, weight=1)
+
+        tk.Label(download_basic_box, text="프로젝트", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
+        self.combo_worker_download_project = ttk.Combobox(download_basic_box, textvariable=self.worker_download_project_var, state="readonly", values=project_values, font=self.font_body)
+        self.combo_worker_download_project.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(0, 8))
+
+        tk.Label(download_basic_box, text="다운로드 모드", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=2, column=0, sticky="w", padx=12, pady=(0, 8))
+        self.combo_worker_download_mode = ttk.Combobox(
+            download_basic_box,
+            textvariable=self.worker_download_mode_var,
+            state="readonly",
+            values=tuple(self._pipeline_mode_labels().values()),
+            font=self.font_body,
+            width=10,
+        )
+        self.combo_worker_download_mode.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
+
+        tk.Label(download_basic_box, text="품질", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=12, pady=(0, 8))
+        self.combo_worker_download_quality = ttk.Combobox(
+            download_basic_box,
+            textvariable=self.worker_download_quality_var,
+            state="readonly",
+            font=self.font_body,
+            width=10,
+        )
+        self.combo_worker_download_quality.grid(row=3, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
+
+        tk.Label(download_basic_box, text="작업 간격(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=4, column=0, sticky="w", padx=12, pady=(0, 8))
+        tk.Entry(
+            download_basic_box,
+            textvariable=self.worker_download_interval_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        ).grid(row=4, column=1, sticky="ew", padx=(0, 12), pady=(0, 8), ipady=2)
+
+        tk.Label(download_basic_box, text="저장 폴더", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=5, column=0, sticky="w", padx=12, pady=(0, 12))
+        download_output_wrap = tk.Frame(download_basic_box, bg=self.color_panel_soft)
+        download_output_wrap.grid(row=5, column=1, sticky="ew", padx=(0, 12), pady=(0, 12))
+        download_output_wrap.grid_columnconfigure(0, weight=1)
+        tk.Entry(
+            download_output_wrap,
+            textvariable=self.worker_download_output_dir_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 6), ipady=2)
+        ttk.Button(download_output_wrap, text="폴더 선택", command=self._pick_download_output_dir_for_compact).grid(row=0, column=1, sticky="e")
+
+        download_number_box = tk.Frame(download_content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
+        download_number_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        download_number_box.grid_columnconfigure(1, weight=1)
+        tk.Label(download_number_box, text="번호 설정", font=self.font_body_bold, bg=self.color_panel_soft, fg=self.color_info).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 8))
+
+        tk.Label(download_number_box, text="번호 방식", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
+        download_mode_wrap = tk.Frame(download_number_box, bg=self.color_panel_soft)
+        download_mode_wrap.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
+        ttk.Radiobutton(download_mode_wrap, text="연속", value="range", variable=self.worker_download_number_mode_var, command=self._refresh_download_worker_compact_summary).pack(side="left")
+        ttk.Radiobutton(download_mode_wrap, text="개별", value="manual", variable=self.worker_download_number_mode_var, command=self._refresh_download_worker_compact_summary).pack(side="left", padx=(8, 0))
+
+        tk.Label(download_number_box, text="연속 범위", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=2, column=0, sticky="w", padx=12, pady=(0, 8))
+        download_range_wrap = tk.Frame(download_number_box, bg=self.color_panel_soft)
+        download_range_wrap.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
+        tk.Entry(
+            download_range_wrap,
+            textvariable=self.worker_download_range_start_var,
+            width=7,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+            justify="center",
+        ).pack(side="left", ipady=2)
+        tk.Label(download_range_wrap, text="~", bg=self.color_panel_soft, fg=self.color_text, font=self.font_small).pack(side="left", padx=6)
+        tk.Entry(
+            download_range_wrap,
+            textvariable=self.worker_download_range_end_var,
+            width=7,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+            justify="center",
+        ).pack(side="left", ipady=2)
+
+        tk.Label(download_number_box, text="개별 번호", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=12, pady=(0, 12))
+        tk.Entry(
+            download_number_box,
+            textvariable=self.worker_download_manual_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        ).grid(row=3, column=1, sticky="ew", padx=(0, 12), pady=(0, 12), ipady=2)
+
+        download_summary_box = tk.Frame(self.download_worker_simple, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
+        download_summary_box.pack(fill="x", pady=(6, 10))
+        self.lbl_worker_download_summary = tk.Label(
+            download_summary_box,
+            textvariable=self.worker_download_summary_var,
+            font=self.font_small,
+            bg=self.color_panel_soft,
+            fg=self.color_info,
+            anchor="w",
+            justify="left",
+            padx=10,
+            pady=8,
+        )
+        self.lbl_worker_download_summary.pack(fill="x")
+
+        download_action_row = tk.Frame(self.download_worker_simple, bg=self.color_card)
+        download_action_row.pack(fill="x", pady=(2, 8))
+        ttk.Button(download_action_row, text="■ 중지", command=self.on_stop).pack(side="left")
+        ttk.Button(download_action_row, text="🤖 작업봇 창 열기", command=self._open_download_worker_bot_from_compact).pack(side="right")
+        self.btn_worker_download_start = ttk.Button(download_action_row, text="▶ 다운로드 시작", command=self._start_download_worker_from_compact)
+        self.btn_worker_download_start.pack(side="right", padx=(0, 8))
+
+        self.lbl_worker_download_help = tk.Label(
+            self.download_worker_simple,
+            text="다운로드 워커는 모드와 품질, 번호, 저장 폴더만 맞추면 됩니다. 나머지 긴 대기 옵션은 메인 작업창에서 조정하면 됩니다.",
+            font=self.font_small,
+            bg=self.color_card,
+            fg=self.color_text_sec,
+            anchor="w",
+            justify="left",
+            wraplength=760,
+        )
+        self.lbl_worker_download_help.pack(fill="x", pady=(0, 6))
+
         for var in (
             self.worker_project_var,
             self.worker_prompt_slot_var,
@@ -11669,9 +11822,25 @@ class FlowVisionApp:
             var.trace_add("write", self._refresh_asset_worker_compact_summary)
         self.worker_asset_use_prompt_file_var.trace_add("write", self._refresh_asset_worker_compact_summary)
 
+        for var in (
+            self.worker_download_project_var,
+            self.worker_download_mode_var,
+            self.worker_download_quality_var,
+            self.worker_download_interval_var,
+            self.worker_download_number_mode_var,
+            self.worker_download_range_start_var,
+            self.worker_download_range_end_var,
+            self.worker_download_manual_var,
+            self.worker_download_output_dir_var,
+        ):
+            var.trace_add("write", self._refresh_download_worker_compact_summary)
+        self.worker_download_mode_var.trace_add("write", self._refresh_download_worker_quality_options)
+
         self._refresh_worker_compact_identity()
         self._refresh_prompt_worker_compact_summary()
         self._refresh_asset_worker_compact_summary()
+        self._refresh_download_worker_quality_options()
+        self._refresh_download_worker_compact_summary()
 
     def _refresh_worker_compact_identity(self):
         if hasattr(self, "lbl_worker_compact_subtitle"):
@@ -11899,6 +12068,125 @@ class FlowVisionApp:
             return
         self.on_start_asset()
 
+    def _refresh_download_worker_quality_options(self, *_args):
+        if not hasattr(self, "combo_worker_download_quality"):
+            return
+        mode_value = self._pipeline_mode_values().get(str(self.worker_download_mode_var.get() or "").strip(), "video")
+        values = self._pipeline_download_quality_options(mode_value)
+        self.combo_worker_download_quality.config(values=values)
+        normalized = self._normalize_pipeline_quality(self.worker_download_quality_var.get(), mode_value)
+        if normalized not in values:
+            normalized = values[0]
+        self.worker_download_quality_var.set(normalized)
+
+    def _refresh_download_worker_compact_summary(self, *_args):
+        if not hasattr(self, "worker_download_summary_var"):
+            return
+        mode_label = str(self.worker_download_mode_var.get() or "동영상").strip() or "동영상"
+        if str(self.worker_download_number_mode_var.get() or "range").strip().lower() == "manual":
+            target = self.worker_download_manual_var.get().strip() or "(비어 있음)"
+        else:
+            target = f"S{self.worker_download_range_start_var.get().strip() or '-'} ~ S{self.worker_download_range_end_var.get().strip() or '-'}"
+        folder_text = self.worker_download_output_dir_var.get().strip() or "(기본 폴더)"
+        self.worker_download_summary_var.set(
+            f"프로젝트: {self.worker_download_project_var.get().strip() or '-'} | 모드: {mode_label} {self.worker_download_quality_var.get().strip() or '-'} | 대상: {target} | 저장: {folder_text}"
+        )
+
+    def _pick_download_output_dir_for_compact(self):
+        initial = str(self.worker_download_output_dir_var.get() or "").strip() or str(self._resolve_download_output_dir())
+        picked = filedialog.askdirectory(parent=self.root, initialdir=initial, title="다운로드 저장 폴더 선택")
+        if picked:
+            self.worker_download_output_dir_var.set(picked)
+
+    def _apply_download_worker_compact_to_cfg(self, show_errors=True):
+        try:
+            interval_seconds = max(1, int(str(self.worker_download_interval_var.get() or "180").strip()))
+        except Exception:
+            if show_errors:
+                messagebox.showwarning("안내", "작업 간격은 1초 이상 숫자로 적어주세요.", parent=self.root)
+            return False
+
+        profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
+        project_values = [str(item.get("project_name", "") or f"프로젝트 {idx+1}") for idx, item in enumerate(profiles)]
+        project_name = str(self.worker_download_project_var.get() or "").strip()
+        project_idx = project_values.index(project_name) if project_name in project_values else self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0)
+        project_idx = self._clamp_project_profile_index(project_idx, default=0)
+        self.cfg["active_project_profile"] = project_idx
+        if profiles:
+            project = profiles[project_idx]
+            self.cfg["start_url"] = str(project.get("url", "") or self.cfg.get("start_url", "")).strip()
+
+        number_mode = str(self.worker_download_number_mode_var.get() or "range").strip().lower()
+        manual_spec = ""
+        start_no = max(1, int(self.cfg.get("asset_loop_start", 1) or 1))
+        end_no = max(1, int(self.cfg.get("asset_loop_end", start_no) or start_no))
+        if number_mode == "manual":
+            manual_spec = str(self.worker_download_manual_var.get() or "").strip()
+            if not manual_spec:
+                if show_errors:
+                    messagebox.showwarning("안내", "개별 번호 방식이면 번호를 적어주세요.", parent=self.root)
+                return False
+        else:
+            try:
+                start_no = int(str(self.worker_download_range_start_var.get() or "1").strip())
+                end_no = int(str(self.worker_download_range_end_var.get() or "1").strip())
+            except Exception:
+                if show_errors:
+                    messagebox.showwarning("안내", "연속 범위는 숫자로 적어주세요.", parent=self.root)
+                return False
+            if start_no > end_no:
+                start_no, end_no = end_no, start_no
+
+        download_mode = self._pipeline_mode_values().get(str(self.worker_download_mode_var.get() or "").strip(), "video")
+        quality = self._normalize_pipeline_quality(self.worker_download_quality_var.get(), download_mode)
+        output_dir = str(self.worker_download_output_dir_var.get() or "").strip()
+
+        self.cfg["interval_seconds"] = interval_seconds
+        self.cfg["asset_loop_start"] = max(1, min(MAX_SCENE_NUMBER, start_no))
+        self.cfg["asset_loop_end"] = max(1, min(MAX_SCENE_NUMBER, end_no))
+        self.cfg["asset_manual_selection"] = manual_spec
+        self.cfg["download_mode"] = download_mode
+        self.cfg["download_number_mode_enabled"] = True
+        self.cfg["download_output_dir"] = output_dir
+        self.cfg["current_media_state"] = "image" if download_mode == "image" else "video"
+        if download_mode == "image":
+            self.cfg["download_image_quality"] = quality
+        else:
+            self.cfg["download_video_quality"] = quality
+        if hasattr(self, "entry_interval"):
+            try:
+                self.entry_interval.delete(0, "end")
+                self.entry_interval.insert(0, str(interval_seconds))
+            except Exception:
+                pass
+        if hasattr(self, "asset_manual_selection_var"):
+            self.asset_manual_selection_var.set(manual_spec)
+        if hasattr(self, "asset_loop_start_var"):
+            self.asset_loop_start_var.set(self._format_asset_number_text(self.cfg["asset_loop_start"]))
+        if hasattr(self, "asset_loop_end_var"):
+            self.asset_loop_end_var.set(self._format_asset_number_text(self.cfg["asset_loop_end"]))
+        if hasattr(self, "download_mode_var"):
+            self.download_mode_var.set(download_mode)
+        if hasattr(self, "download_output_dir_var"):
+            self.download_output_dir_var.set(output_dir)
+        if hasattr(self, "download_image_quality_var") and download_mode == "image":
+            self.download_image_quality_var.set(quality)
+        if hasattr(self, "download_video_quality_var") and download_mode == "video":
+            self.download_video_quality_var.set(quality)
+        self.save_config()
+        self._refresh_worker_quick_hud()
+        return True
+
+    def _open_download_worker_bot_from_compact(self):
+        if not self._apply_download_worker_compact_to_cfg(show_errors=True):
+            return
+        self.on_open_bot_work_window()
+
+    def _start_download_worker_from_compact(self):
+        if not self._apply_download_worker_compact_to_cfg(show_errors=True):
+            return
+        self.on_start_download()
+
     def _refresh_worker_quick_hud(self):
         if not hasattr(self, "worker_quick_hud"):
             return
@@ -11979,7 +12267,7 @@ class FlowVisionApp:
                 widget.pack_configure(fill="x")
             else:
                 widget.pack_forget()
-        if self.worker_mode in ("prompt", "asset"):
+        if self.worker_mode in ("prompt", "asset", "download"):
             if hasattr(self, "body_pane") and self.body_pane.winfo_ismapped():
                 self.body_pane.pack_forget()
             if hasattr(self, "bottom_frame") and self.bottom_frame.winfo_ismapped():
@@ -11996,10 +12284,17 @@ class FlowVisionApp:
                     self.asset_worker_simple.pack(fill="both", expand=True, padx=16, pady=(0, 14))
                 else:
                     self.asset_worker_simple.pack_forget()
+            if hasattr(self, "download_worker_simple"):
+                if self.worker_mode == "download":
+                    self.download_worker_simple.pack(fill="both", expand=True, padx=16, pady=(0, 14))
+                else:
+                    self.download_worker_simple.pack_forget()
             if self.worker_mode == "prompt":
                 self._refresh_prompt_worker_compact_summary()
-            else:
+            elif self.worker_mode == "asset":
                 self._refresh_asset_worker_compact_summary()
+            else:
+                self._refresh_download_worker_compact_summary()
         else:
             if hasattr(self, "worker_compact_panel") and self.worker_compact_panel.winfo_ismapped():
                 self.worker_compact_panel.pack_forget()
@@ -12943,7 +13238,18 @@ class FlowVisionApp:
                 messagebox.showerror("S자동화 워커 실행 실패", f"S자동화 워커 실행 실패:\n{e}", parent=self.home_window or self.root)
             return
         if target == "download_worker":
-            self._open_worker_launcher("download")
+            try:
+                suggested_name = self._suggest_worker_bundle_name("download")
+                self._launch_worker_process(
+                    "download",
+                    suggested_name,
+                    suggested_name,
+                    suggested_name,
+                    self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0),
+                )
+                self._advance_worker_bundle_name("download", suggested_name)
+            except Exception as e:
+                messagebox.showerror("다운로드 워커 실행 실패", f"다운로드 워커 실행 실패:\n{e}", parent=self.home_window or self.root)
             return
         self.hide_home_menu()
         if target == "relay":
