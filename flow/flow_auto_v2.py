@@ -12865,7 +12865,18 @@ class FlowVisionApp:
                 messagebox.showerror("이미지 워커 실행 실패", f"이미지 워커 실행 실패:\n{e}", parent=self.home_window or self.root)
             return
         if target == "asset_worker":
-            self._open_worker_launcher("asset")
+            try:
+                suggested_name = self._suggest_worker_bundle_name("asset")
+                self._launch_worker_process(
+                    "asset",
+                    suggested_name,
+                    suggested_name,
+                    suggested_name,
+                    self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0),
+                )
+                self._advance_worker_bundle_name("asset", suggested_name)
+            except Exception as e:
+                messagebox.showerror("S자동화 워커 실행 실패", f"S자동화 워커 실행 실패:\n{e}", parent=self.home_window or self.root)
             return
         if target == "download_worker":
             self._open_worker_launcher("download")
