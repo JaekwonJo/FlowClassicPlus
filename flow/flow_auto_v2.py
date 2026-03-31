@@ -2901,6 +2901,17 @@ class FlowVisionApp:
     def _project_profile_preview(self, item):
         return str(item.get("project_name", "") or "").strip() or "이름 없음"
 
+    def _active_project_profile_item(self):
+        profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
+        active = self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0)
+        try:
+            return profiles[active]
+        except Exception:
+            return self._default_project_profile()
+
+    def _active_project_name(self):
+        return self._project_profile_preview(self._active_project_profile_item())
+
     def _sync_project_profile_ui(self):
         if not hasattr(self, "project_profile_listbox"):
             return
@@ -8964,6 +8975,8 @@ class FlowVisionApp:
         self.lbl_main_status.config(text=text, fg=color)
         if hasattr(self, "lbl_hud_state"):
             self.lbl_hud_state.config(text=f"상태: {text}", fg=color)
+        if hasattr(self, "lbl_worker_hud_status"):
+            self.lbl_worker_hud_status.config(text=f"상태: {text}", fg=color)
 
     def _create_collapsible_section(self, parent, title, opened=False):
         title_key = str(title or "")
@@ -9161,6 +9174,44 @@ class FlowVisionApp:
         mid_frame = tk.Frame(self.root, bg=self.color_bg, pady=6)
         mid_frame.grid(row=1, column=0, sticky="nsew", padx=6, pady=(6, 2))
         self.mid_frame = mid_frame
+
+        self.worker_quick_hud = tk.Frame(mid_frame, bg="#13233A", highlightbackground="#355273", highlightthickness=1)
+        hud_top = tk.Frame(self.worker_quick_hud, bg="#13233A")
+        hud_top.pack(fill="x", padx=10, pady=(8, 2))
+        self.lbl_worker_hud_title = tk.Label(
+            hud_top,
+            text="워커 HUD",
+            font=self.font_body_bold,
+            bg="#13233A",
+            fg=self.color_info,
+        )
+        self.lbl_worker_hud_title.pack(side="left")
+        self.lbl_worker_hud_project = tk.Label(
+            hud_top,
+            text="프로젝트: -",
+            font=self.font_small,
+            bg="#13233A",
+            fg=self.color_text,
+        )
+        self.lbl_worker_hud_project.pack(side="right")
+        hud_bottom = tk.Frame(self.worker_quick_hud, bg="#13233A")
+        hud_bottom.pack(fill="x", padx=10, pady=(0, 8))
+        self.lbl_worker_hud_status = tk.Label(
+            hud_bottom,
+            text="상태: 준비 완료",
+            font=self.font_small,
+            bg="#13233A",
+            fg=self.color_success,
+        )
+        self.lbl_worker_hud_status.pack(side="left")
+        self.lbl_worker_hud_progress = tk.Label(
+            hud_bottom,
+            text="진행률: 0 / 0 (0.0%)",
+            font=self.font_mono_small,
+            bg="#13233A",
+            fg=self.color_accent,
+        )
+        self.lbl_worker_hud_progress.pack(side="right")
 
         self.body_pane = ttk.Panedwindow(mid_frame, orient="horizontal")
         self.body_pane.pack(fill="both", expand=True)
@@ -10157,6 +10208,7 @@ class FlowVisionApp:
         self.lbl_prog_text.pack(side="left")
         self.lbl_eta = tk.Label(info_f, text="종료 예정: --:--", font=("Malgun Gothic", 10), fg=self.color_text_sec, bg=self.color_bg)
         self.lbl_eta.pack(side="right", pady=4)
+        self._refresh_worker_quick_hud()
         
         # 2. Mini HUD (핵심 정보만 표시)
         mon_card = ttk.LabelFrame(right_scrollable, text=" ⚡ Mini HUD ", padding=8)
@@ -11058,6 +11110,26 @@ class FlowVisionApp:
             f"이름={self.worker_name or '-'} | 설정={self._current_config_display_name()} | 프로필={self._browser_profile_dir_name()}"
         )
 
+    def _refresh_worker_quick_hud(self):
+        if not hasattr(self, "worker_quick_hud"):
+            return
+        if self.worker_mode in ("prompt", "asset", "download"):
+            title = self._worker_mode_meta(self.worker_mode).get("title", "워커")
+            worker_name = self.worker_name or self._worker_mode_meta(self.worker_mode).get("default_name", "워커1")
+            project_name = self._active_project_name()
+            status_text = self.lbl_main_status.cget("text") if hasattr(self, "lbl_main_status") else "준비 완료"
+            status_color = self.lbl_main_status.cget("fg") if hasattr(self, "lbl_main_status") else self.color_success
+            progress_text = self.lbl_header_progress.cget("text") if hasattr(self, "lbl_header_progress") else "0 / 0 (0.0%)"
+            self.lbl_worker_hud_title.config(text=f"{title} | {worker_name}")
+            self.lbl_worker_hud_project.config(text=f"프로젝트: {project_name}")
+            self.lbl_worker_hud_status.config(text=f"상태: {status_text}", fg=status_color)
+            self.lbl_worker_hud_progress.config(text=f"진행률: {progress_text}")
+            if not self.worker_quick_hud.winfo_ismapped():
+                self.worker_quick_hud.pack(fill="x", pady=(0, 6))
+        else:
+            if self.worker_quick_hud.winfo_ismapped():
+                self.worker_quick_hud.pack_forget()
+
     def _apply_worker_layout(self):
         meta = self._worker_mode_meta(self.worker_mode)
         title = meta.get("title", "워커")
@@ -11103,6 +11175,7 @@ class FlowVisionApp:
                 widget.pack_configure(fill="x")
             else:
                 widget.pack_forget()
+        self._refresh_worker_quick_hud()
 
     def _worker_mode_meta(self, kind):
         kind = str(kind or "").strip().lower()
@@ -11845,18 +11918,6 @@ class FlowVisionApp:
         )
         hint.pack(anchor="w", pady=(10, 8))
 
-        launch_status_var = tk.StringVar(value="")
-        lbl_launch_status = tk.Label(
-            outer,
-            textvariable=launch_status_var,
-            font=self.font_small,
-            bg=self.color_bg,
-            fg=self.color_success,
-            anchor="w",
-            justify="left",
-        )
-        lbl_launch_status.pack(fill="x", pady=(0, 4))
-
         bottom = tk.Frame(outer, bg=self.color_bg)
         bottom.pack(fill="x", pady=(18, 6))
 
@@ -12003,9 +12064,7 @@ class FlowVisionApp:
             except Exception as e:
                 messagebox.showerror("워커 실행 실패", f"{meta['title']} 실행 실패:\n{e}", parent=win)
                 return
-            requested_name = worker_name_var.get().strip() or meta["default_name"]
-            next_name = _prepare_next_worker_names()
-            launch_status_var.set(f"{requested_name} 실행 요청 완료 | 다음: {next_name}")
+            _prepare_next_worker_names()
 
         ttk.Button(bottom, text="취소", command=win.destroy).pack(side="right")
         ttk.Button(bottom, text=f"{meta['title']} 열기", command=_launch).pack(side="right", padx=(0, 8))
@@ -12615,6 +12674,7 @@ class FlowVisionApp:
             getattr(self, "spin_download_end", None),
         ):
             self._sync_asset_range_display()
+        self._refresh_worker_quick_hud()
         self.log(f"⚙️ 설정 동기화 완료 (입력방식: {self.cfg['input_mode']})")
 
     def _pick_first_visible_selector(self, candidates):
@@ -15188,6 +15248,9 @@ class FlowVisionApp:
                 processed = 0
                 batch_size = 0
             self.lbl_hud_progress.config(text=f"진행: {min(current, total)} / {total} | 배치: {processed} / {batch_size}")
+        if hasattr(self, "lbl_worker_hud_progress"):
+            progress_text = self.lbl_header_progress.cget("text") if hasattr(self, "lbl_header_progress") else "0 / 0 (0.0%)"
+            self.lbl_worker_hud_progress.config(text=f"진행률: {progress_text}")
 
     def _update_monitor_ui(self):
         # 미니 HUD 갱신: 핵심 정보만 짧게 표시
