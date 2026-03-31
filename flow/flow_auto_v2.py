@@ -595,6 +595,7 @@ class FlowVisionApp:
         self.pipeline_runtime_results = []
         self.pipeline_runtime_report_path = None
         self.pipeline_runtime_retry_round = 0
+        self.pipeline_runtime_image_download_done = False
         self.worker_launch_counters = {}
         self.prompt_image_baseline_ready = bool(self.cfg.get("prompt_image_baseline_ready", False))
         self.asset_image_baseline_ready = bool(self.cfg.get("asset_image_baseline_ready", False))
@@ -4282,6 +4283,7 @@ class FlowVisionApp:
         self.pipeline_runtime_results = []
         self.pipeline_runtime_report_path = None
         self.pipeline_runtime_retry_round = 0
+        self.pipeline_runtime_image_download_done = False
         self.pipeline_run_order = list(range(len(runtime_steps)))
         self.pipeline_run_position = -1
         if hasattr(self, "btn_pipeline_start"):
@@ -4459,6 +4461,43 @@ class FlowVisionApp:
             base_name = str(cloned.get("name", "") or f"{idx+1}번 작업").strip()
             cloned["name"] = f"{base_name} (자동 재시도 1회)"
         return retry_steps
+
+    def _build_pipeline_final_image_download_steps(self):
+        if not bool(self.cfg.get("pipeline_auto_retry_failed_once", True)):
+            return []
+        if int(getattr(self, "pipeline_runtime_retry_round", 0) or 0) < 1:
+            return []
+        if bool(getattr(self, "pipeline_runtime_image_download_done", False)):
+            return []
+        results = list(self.pipeline_runtime_results or [])
+        source_steps = self._get_pipeline_steps_source()
+        if not results or not source_steps:
+            return []
+        retry_source = self._pick_pipeline_retry_source_result(results)
+        retry_numbers = self._pipeline_retry_numbers_from_result(retry_source)
+        if not retry_numbers:
+            return []
+        download_idx = -1
+        for idx in range(len(source_steps) - 1, -1, -1):
+            if str(source_steps[idx].get("type", "") or "").strip().lower() == "download":
+                download_idx = idx
+                break
+        if download_idx < 0:
+            return []
+        cloned = self._clone_pipeline_steps([source_steps[download_idx]])[0]
+        cloned["number_mode"] = "manual"
+        cloned["manual_selection"] = self._tagged_number_spec(
+            retry_numbers,
+            prefix=(self.cfg.get("asset_loop_prefix") or "S").strip() or "S",
+            pad_width=self._asset_pad_width(),
+        )
+        cloned["start"] = 1
+        cloned["end"] = 1
+        cloned["download_mode"] = "image"
+        cloned["quality"] = "1K"
+        base_name = str(cloned.get("name", "") or "다운로드 자동화").strip() or "다운로드 자동화"
+        cloned["name"] = f"{base_name} (마무리 이미지 1K)"
+        return [cloned]
 
     def _pick_pipeline_retry_source_result(self, results):
         items = list(results or [])
@@ -4699,6 +4738,7 @@ class FlowVisionApp:
         self.pipeline_runtime_results = []
         self.pipeline_runtime_report_path = None
         self.pipeline_runtime_retry_round = 0
+        self.pipeline_runtime_image_download_done = False
         if hasattr(self, "btn_pipeline_start"):
             self.btn_pipeline_start.config(state="normal")
         if hasattr(self, "lbl_pipeline_runtime_status"):
@@ -4889,6 +4929,7 @@ class FlowVisionApp:
         self.pipeline_runtime_started_at = datetime.now()
         self.pipeline_runtime_results = []
         self.pipeline_runtime_report_path = None
+        self.pipeline_runtime_image_download_done = False
         steps = self._get_pipeline_steps_source()
         if not steps:
             messagebox.showwarning("안내", "이어달리기 작업이 없습니다.", parent=self.pipeline_window)
@@ -8746,6 +8787,29 @@ class FlowVisionApp:
                     self.root.after(700, lambda: self._run_pipeline_step_at(0))
 
                 self.root.after(0, _retry_pipeline_ui)
+                return
+
+            final_image_download_steps = self._build_pipeline_final_image_download_steps()
+            if final_image_download_steps:
+                def _final_image_download_ui():
+                    self.on_stop(pipeline_transition=True)
+                    self.pipeline_runtime_image_download_done = True
+                    self.pipeline_runtime_steps_override = final_image_download_steps
+                    self.pipeline_run_order = list(range(len(final_image_download_steps)))
+                    self.pipeline_run_position = -1
+                    self.update_status_label("🖼️ 마지막 실패 번호 이미지 1K 다운로드 준비 중...", self.color_info)
+                    if hasattr(self, "lbl_pipeline_runtime_status"):
+                        self.lbl_pipeline_runtime_status.config(
+                            text="마무리 이미지 1K 다운로드 1회 | 남은 실패 번호 정리 중"
+                        )
+                    if hasattr(self, "lbl_onetouch_status"):
+                        self.lbl_onetouch_status.config(
+                            text="원터치 마무리 다운로드 실행 중 | 이미지 1K"
+                        )
+                    self.log("🖼️ 이어달리기 마무리 단계 시작 | 남은 실패 번호로 이미지 1K 다운로드 1회")
+                    self.root.after(700, lambda: self._run_pipeline_step_at(0))
+
+                self.root.after(0, _final_image_download_ui)
                 return
 
             def _done_pipeline_ui():
