@@ -672,13 +672,18 @@ class FlowVisionApp:
         self.color_input_bg = "#E6EDF7"
         self.color_input_fg = "#10203A"
         self.color_input_soft = "#D7E1F0"
+        self.color_badge_fg = "#08111F"
+        self.color_panel_soft = "#152741"
         if self.worker_mode in ("prompt", "asset", "download"):
             palette = self._worker_palette()
             if palette:
+                self.color_bg = palette.get("bg", self.color_bg)
                 self.color_header = palette.get("header", self.color_header)
                 self.color_card = palette.get("card", self.color_card)
                 self.color_accent = palette.get("accent", self.color_accent)
                 self.color_info = palette.get("info", self.color_info)
+                self.color_badge_fg = palette.get("badge_fg", self.color_badge_fg)
+                self.color_panel_soft = palette.get("panel_soft", self.color_panel_soft)
         self.root.configure(bg=self.color_bg)
         self._apply_ui_zoom_fonts(force=True)
         self.root.option_add("*Font", self.font_body)
@@ -1496,36 +1501,22 @@ class FlowVisionApp:
         return sum(ord(ch) for ch in seed) % 6
 
     def _worker_palette(self):
-        palettes = {
-            "prompt": [
-                {"header": "#132B4B", "card": "#183455", "accent": "#59A8FF", "info": "#8AD7FF"},
-                {"header": "#18354B", "card": "#1D4158", "accent": "#49C2FF", "info": "#93E3FF"},
-                {"header": "#183C37", "card": "#204A44", "accent": "#55D6A9", "info": "#9BEFD2"},
-                {"header": "#3C3018", "card": "#4A3B20", "accent": "#FFBE55", "info": "#FFE09B"},
-                {"header": "#3B1E3F", "card": "#4B2750", "accent": "#D98BFF", "info": "#EBC2FF"},
-                {"header": "#3B2224", "card": "#4C2A2E", "accent": "#FF8E8E", "info": "#FFC2C2"},
-            ],
-            "asset": [
-                {"header": "#231B45", "card": "#2D2455", "accent": "#9E8BFF", "info": "#C8BEFF"},
-                {"header": "#1D3048", "card": "#24405B", "accent": "#6FB7FF", "info": "#A8D8FF"},
-                {"header": "#203A2E", "card": "#27493A", "accent": "#68D89B", "info": "#A9EFC7"},
-                {"header": "#3A2D1D", "card": "#4A3924", "accent": "#FFB86A", "info": "#FFD5A7"},
-                {"header": "#3A1F38", "card": "#4A2750", "accent": "#E18FFF", "info": "#F0C4FF"},
-                {"header": "#3D2720", "card": "#4D322A", "accent": "#FF9B79", "info": "#FFC9B7"},
-            ],
-            "download": [
-                {"header": "#143142", "card": "#1A3C50", "accent": "#63C7FF", "info": "#AEE7FF"},
-                {"header": "#20342A", "card": "#284338", "accent": "#71D68A", "info": "#B8F0C5"},
-                {"header": "#3A3118", "card": "#4A4020", "accent": "#FFCA55", "info": "#FFE59F"},
-                {"header": "#3A2026", "card": "#4A2931", "accent": "#FF8EA1", "info": "#FFC3CF"},
-                {"header": "#2C2240", "card": "#372B50", "accent": "#B094FF", "info": "#D5C5FF"},
-                {"header": "#17323A", "card": "#21414A", "accent": "#65D8D8", "info": "#A9F0F0"},
-            ],
-        }
-        palette_list = palettes.get(self.worker_mode, palettes.get("prompt", []))
+        palette_list = [
+            {"bg": "#08182F", "header": "#0C2548", "card": "#12315D", "panel_soft": "#0E284D", "accent": "#67B7FF", "info": "#B6E2FF", "badge_fg": "#08182F"},
+            {"bg": "#102413", "header": "#16361C", "card": "#204A27", "panel_soft": "#173920", "accent": "#76E18C", "info": "#C1F5CA", "badge_fg": "#102413"},
+            {"bg": "#2D1608", "header": "#47220C", "card": "#603012", "panel_soft": "#4A250E", "accent": "#FFB15C", "info": "#FFD8A8", "badge_fg": "#2D1608"},
+            {"bg": "#2A0E1D", "header": "#431430", "card": "#5A1D41", "panel_soft": "#471734", "accent": "#FF88C2", "info": "#FFCBE5", "badge_fg": "#2A0E1D"},
+            {"bg": "#1A1230", "header": "#261B47", "card": "#33245F", "panel_soft": "#2A1E4E", "accent": "#B28DFF", "info": "#DDD1FF", "badge_fg": "#1A1230"},
+            {"bg": "#0F2428", "header": "#16373C", "card": "#1E4A50", "panel_soft": "#173A40", "accent": "#6BE6E6", "info": "#BDF7F7", "badge_fg": "#0F2428"},
+            {"bg": "#301017", "header": "#471722", "card": "#5F2230", "panel_soft": "#4C1B28", "accent": "#FF8F9D", "info": "#FFD0D7", "badge_fg": "#301017"},
+            {"bg": "#2A210B", "header": "#403313", "card": "#55441A", "panel_soft": "#453716", "accent": "#FFD56B", "info": "#FFF0B8", "badge_fg": "#2A210B"},
+            {"bg": "#172433", "header": "#21364B", "card": "#2A4662", "panel_soft": "#223B54", "accent": "#8FC7FF", "info": "#D3EAFF", "badge_fg": "#172433"},
+        ]
         if not palette_list:
             return None
-        return palette_list[self._worker_palette_index() % len(palette_list)]
+        mode_offset = {"prompt": 0, "asset": 3, "download": 6}.get(self.worker_mode, 0)
+        palette_idx = (self._worker_palette_index() + mode_offset) % len(palette_list)
+        return palette_list[palette_idx]
 
     def _current_config_display_name(self):
         return str(self.cfg.get("config_label", "") or config_display_name_from_path(self.cfg_path)).strip() or "기본 설정"
@@ -11217,8 +11208,10 @@ class FlowVisionApp:
 
         head = tk.Frame(card, bg=self.color_card)
         head.pack(fill="x", padx=16, pady=(14, 8))
+        head_left = tk.Frame(head, bg=self.color_card)
+        head_left.pack(side="left", fill="x", expand=True)
         self.lbl_worker_compact_title = tk.Label(
-            head,
+            head_left,
             text="워커",
             font=self.font_section,
             bg=self.color_card,
@@ -11226,7 +11219,7 @@ class FlowVisionApp:
         )
         self.lbl_worker_compact_title.pack(anchor="w")
         self.lbl_worker_compact_subtitle = tk.Label(
-            head,
+            head_left,
             text="",
             font=self.font_small,
             bg=self.color_card,
@@ -11234,16 +11227,26 @@ class FlowVisionApp:
             justify="left",
         )
         self.lbl_worker_compact_subtitle.pack(anchor="w", pady=(4, 0))
+        self.lbl_worker_compact_name_badge = tk.Label(
+            head,
+            text="워커1",
+            font=self.font_body_bold,
+            bg=self.color_accent,
+            fg=self.color_badge_fg,
+            padx=10,
+            pady=6,
+        )
+        self.lbl_worker_compact_name_badge.pack(side="right")
 
-        meta_strip = tk.Frame(card, bg="#1B2D49", highlightbackground="#355273", highlightthickness=1)
+        meta_strip = tk.Frame(card, bg=self.color_header, highlightbackground=self.color_accent, highlightthickness=1)
         meta_strip.pack(fill="x", padx=16, pady=(0, 12))
-        meta_left = tk.Frame(meta_strip, bg="#1B2D49")
+        meta_left = tk.Frame(meta_strip, bg=self.color_header)
         meta_left.pack(side="left", fill="x", expand=True, padx=10, pady=8)
         self.lbl_worker_compact_identity = tk.Label(
             meta_left,
             text="설정: -",
             font=self.font_small,
-            bg="#1B2D49",
+            bg=self.color_header,
             fg=self.color_text,
             justify="left",
         )
@@ -11252,12 +11255,12 @@ class FlowVisionApp:
             meta_left,
             text="현재 프로필: -",
             font=self.font_small,
-            bg="#1B2D49",
+            bg=self.color_header,
             fg=self.color_info,
             justify="left",
         )
         self.lbl_worker_compact_profile_state.pack(anchor="w", pady=(4, 0))
-        meta_right = tk.Frame(meta_strip, bg="#1B2D49")
+        meta_right = tk.Frame(meta_strip, bg=self.color_header)
         meta_right.pack(side="right", padx=10, pady=8)
         ttk.Button(meta_right, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left")
         ttk.Button(meta_right, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
@@ -11282,50 +11285,60 @@ class FlowVisionApp:
         self.worker_prompt_manual_var = tk.StringVar(value=defaults["manual"])
         self.worker_prompt_summary_var = tk.StringVar()
 
-        form = tk.Frame(self.prompt_worker_simple, bg=self.color_card)
-        form.pack(fill="x")
-        form.grid_columnconfigure(1, weight=1)
-        form.grid_columnconfigure(3, weight=1)
+        content = tk.Frame(self.prompt_worker_simple, bg=self.color_card)
+        content.pack(fill="x")
+        content.grid_columnconfigure(0, weight=1, uniform="prompt_block")
+        content.grid_columnconfigure(1, weight=1, uniform="prompt_block")
 
-        tk.Label(form, text="프로젝트", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=0, column=0, sticky="w", pady=(0, 8))
-        self.combo_worker_project = ttk.Combobox(form, textvariable=self.worker_project_var, state="readonly", values=project_values, font=self.font_body)
-        self.combo_worker_project.grid(row=0, column=1, sticky="ew", padx=(8, 14), pady=(0, 8))
+        basic_box = tk.Frame(content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
+        basic_box.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        tk.Label(basic_box, text="기본 설정", font=self.font_body_bold, bg=self.color_panel_soft, fg=self.color_info).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 8))
+        basic_box.grid_columnconfigure(1, weight=1)
 
-        tk.Label(form, text="프롬프트 파일", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=0, column=2, sticky="w", pady=(0, 8))
-        self.combo_worker_prompt_slot = ttk.Combobox(form, textvariable=self.worker_prompt_slot_var, state="readonly", values=slot_names, font=self.font_body)
-        self.combo_worker_prompt_slot.grid(row=0, column=3, sticky="ew", pady=(0, 8))
+        tk.Label(basic_box, text="프로젝트", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
+        self.combo_worker_project = ttk.Combobox(basic_box, textvariable=self.worker_project_var, state="readonly", values=project_values, font=self.font_body)
+        self.combo_worker_project.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(0, 8))
 
-        tk.Label(form, text="생성 개수", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=1, column=0, sticky="w", pady=(0, 8))
+        tk.Label(basic_box, text="프롬프트 파일", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=2, column=0, sticky="w", padx=12, pady=(0, 8))
+        self.combo_worker_prompt_slot = ttk.Combobox(basic_box, textvariable=self.worker_prompt_slot_var, state="readonly", values=slot_names, font=self.font_body)
+        self.combo_worker_prompt_slot.grid(row=2, column=1, sticky="ew", padx=(0, 12), pady=(0, 8))
+
+        tk.Label(basic_box, text="생성 개수", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=12, pady=(0, 8))
         self.combo_worker_prompt_count = ttk.Combobox(
-            form,
+            basic_box,
             textvariable=self.worker_prompt_count_var,
             state="readonly",
             values=("x1", "x2", "x3", "x4"),
             font=self.font_body,
             width=8,
         )
-        self.combo_worker_prompt_count.grid(row=1, column=1, sticky="w", padx=(8, 14), pady=(0, 8))
+        self.combo_worker_prompt_count.grid(row=3, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
 
-        tk.Label(form, text="작업 간격(초)", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=1, column=2, sticky="w", pady=(0, 8))
+        tk.Label(basic_box, text="작업 간격(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=4, column=0, sticky="w", padx=12, pady=(0, 12))
         tk.Entry(
-            form,
+            basic_box,
             textvariable=self.worker_prompt_interval_var,
             bg=self.color_input_bg,
             fg=self.color_input_fg,
             insertbackground=self.color_input_fg,
             font=self.font_mono_small,
-        ).grid(row=1, column=3, sticky="ew", pady=(0, 8), ipady=2)
+        ).grid(row=4, column=1, sticky="ew", padx=(0, 12), pady=(0, 12), ipady=2)
 
-        tk.Label(form, text="번호 방식", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=2, column=0, sticky="w", pady=(0, 8))
-        mode_wrap = tk.Frame(form, bg=self.color_card)
-        mode_wrap.grid(row=2, column=1, columnspan=3, sticky="w", pady=(0, 8))
+        number_box = tk.Frame(content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
+        number_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        tk.Label(number_box, text="번호 설정", font=self.font_body_bold, bg=self.color_panel_soft, fg=self.color_info).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 8))
+        number_box.grid_columnconfigure(1, weight=1)
+
+        tk.Label(number_box, text="번호 방식", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
+        mode_wrap = tk.Frame(number_box, bg=self.color_panel_soft)
+        mode_wrap.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
         ttk.Radiobutton(mode_wrap, text="전체", value="all", variable=self.worker_prompt_number_mode_var, command=self._refresh_prompt_worker_compact_summary).pack(side="left")
         ttk.Radiobutton(mode_wrap, text="연속", value="range", variable=self.worker_prompt_number_mode_var, command=self._refresh_prompt_worker_compact_summary).pack(side="left", padx=(8, 0))
         ttk.Radiobutton(mode_wrap, text="개별", value="manual", variable=self.worker_prompt_number_mode_var, command=self._refresh_prompt_worker_compact_summary).pack(side="left", padx=(8, 0))
 
-        tk.Label(form, text="연속 범위", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=3, column=0, sticky="w", pady=(0, 8))
-        range_wrap = tk.Frame(form, bg=self.color_card)
-        range_wrap.grid(row=3, column=1, sticky="w", padx=(8, 14), pady=(0, 8))
+        tk.Label(number_box, text="연속 범위", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=2, column=0, sticky="w", padx=12, pady=(0, 8))
+        range_wrap = tk.Frame(number_box, bg=self.color_panel_soft)
+        range_wrap.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
         tk.Entry(
             range_wrap,
             textvariable=self.worker_prompt_range_start_var,
@@ -11336,7 +11349,7 @@ class FlowVisionApp:
             font=self.font_mono_small,
             justify="center",
         ).pack(side="left", ipady=2)
-        tk.Label(range_wrap, text="~", bg=self.color_card, fg=self.color_text, font=self.font_small).pack(side="left", padx=6)
+        tk.Label(range_wrap, text="~", bg=self.color_panel_soft, fg=self.color_text, font=self.font_small).pack(side="left", padx=6)
         tk.Entry(
             range_wrap,
             textvariable=self.worker_prompt_range_end_var,
@@ -11348,37 +11361,41 @@ class FlowVisionApp:
             justify="center",
         ).pack(side="left", ipady=2)
 
-        tk.Label(form, text="개별 번호", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=3, column=2, sticky="w", pady=(0, 8))
+        tk.Label(number_box, text="개별 번호", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=12, pady=(0, 12))
         tk.Entry(
-            form,
+            number_box,
             textvariable=self.worker_prompt_manual_var,
             bg=self.color_input_bg,
             fg=self.color_input_fg,
             insertbackground=self.color_input_fg,
             font=self.font_mono_small,
-        ).grid(row=3, column=3, sticky="ew", pady=(0, 8), ipady=2)
+        ).grid(row=3, column=1, sticky="ew", padx=(0, 12), pady=(0, 12), ipady=2)
 
+        summary_box = tk.Frame(self.prompt_worker_simple, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
+        summary_box.pack(fill="x", pady=(6, 10))
         self.lbl_worker_prompt_summary = tk.Label(
-            self.prompt_worker_simple,
+            summary_box,
             textvariable=self.worker_prompt_summary_var,
             font=self.font_small,
-            bg=self.color_card,
+            bg=self.color_panel_soft,
             fg=self.color_info,
             anchor="w",
             justify="left",
+            padx=10,
+            pady=8,
         )
-        self.lbl_worker_prompt_summary.pack(fill="x", pady=(4, 8))
+        self.lbl_worker_prompt_summary.pack(fill="x")
 
         action_row = tk.Frame(self.prompt_worker_simple, bg=self.color_card)
-        action_row.pack(fill="x", pady=(8, 8))
-        ttk.Button(action_row, text="🤖 작업봇 창 열기", command=self._open_prompt_worker_bot_from_compact).pack(side="left")
+        action_row.pack(fill="x", pady=(2, 8))
+        ttk.Button(action_row, text="■ 중지", command=self.on_stop).pack(side="left")
+        ttk.Button(action_row, text="🤖 작업봇 창 열기", command=self._open_prompt_worker_bot_from_compact).pack(side="right")
         self.btn_worker_prompt_start = ttk.Button(action_row, text="▶ 이미지 자동화 시작", command=self._start_prompt_worker_from_compact)
-        self.btn_worker_prompt_start.pack(side="left", padx=(8, 0))
-        ttk.Button(action_row, text="■ 중지", command=self.on_stop).pack(side="left", padx=(8, 0))
+        self.btn_worker_prompt_start.pack(side="right", padx=(0, 8))
 
         self.lbl_worker_prompt_help = tk.Label(
             self.prompt_worker_simple,
-            text="이 창이 실제 이미지 워커입니다. 여기서 설정하고 바로 작업봇 창을 열거나 자동화를 시작하면 됩니다.",
+            text="여기서 바로 시작하면 됩니다. 프로젝트/파일은 기존 설정을 그대로 불러와 선택만 바꾸면 됩니다.",
             font=self.font_small,
             bg=self.color_card,
             fg=self.color_text_sec,
@@ -11405,13 +11422,16 @@ class FlowVisionApp:
 
     def _refresh_worker_compact_identity(self):
         if hasattr(self, "lbl_worker_compact_subtitle"):
-            self.lbl_worker_compact_subtitle.config(text="이 창에서 바로 작업봇 창을 열고 자동화를 시작하면 됩니다.")
+            self.lbl_worker_compact_subtitle.config(text="미니 워커 창에서 바로 작업봇 창을 열고 시작할 수 있습니다.")
+        worker_display_name = self.worker_name or self._worker_mode_meta(self.worker_mode).get('default_name', '워커1')
         if hasattr(self, "lbl_worker_compact_identity"):
             self.lbl_worker_compact_identity.config(
-                text=f"설정: {self._current_config_display_name()} | 워커: {self.worker_name or self._worker_mode_meta(self.worker_mode).get('default_name', '워커1')}"
+                text=f"설정: {self._current_config_display_name()} | 워커: {worker_display_name}"
             )
         if hasattr(self, "lbl_worker_compact_profile_state"):
             self.lbl_worker_compact_profile_state.config(text=f"현재 프로필: {self._browser_profile_dir_name()}")
+        if hasattr(self, "lbl_worker_compact_name_badge"):
+            self.lbl_worker_compact_name_badge.config(text=worker_display_name)
 
     def _refresh_prompt_worker_compact_summary(self, *_args):
         if not hasattr(self, "worker_prompt_summary_var"):
