@@ -4439,46 +4439,87 @@ class FlowVisionApp:
         source_steps = self._get_pipeline_steps_source()
         if not results or not source_steps:
             return []
-        retry_steps = []
-        for idx, item in enumerate(results):
-            step_type = str(item.get("run_mode", "") or "").strip().lower()
-            if step_type not in {"asset", "download"}:
-                continue
-            failed_tags = self._pipeline_unique_tags(item.get("failed_tags", []) or [])
-            if not failed_tags:
-                continue
-            if not (0 <= idx < len(source_steps)):
-                continue
-            cloned = self._clone_pipeline_steps([source_steps[idx]])[0]
+        retry_source = self._pick_pipeline_retry_source_result(results)
+        retry_numbers = self._pipeline_retry_numbers_from_result(retry_source)
+        if not retry_numbers:
+            return []
+        retry_steps = self._clone_pipeline_steps(source_steps)
+        prompt_spec = self._compress_numbers_to_spec(retry_numbers, pad_width=0)
+        tagged_spec = self._tagged_number_spec(
+            retry_numbers,
+            prefix=(self.cfg.get("asset_loop_prefix") or "S").strip() or "S",
+            pad_width=self._asset_pad_width(),
+        )
+        for idx, cloned in enumerate(retry_steps):
+            step_type = str(cloned.get("type", "prompt") or "prompt").strip().lower()
             cloned["number_mode"] = "manual"
-            prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
-            failed_numbers = []
-            seen_numbers = set()
-            for tag in failed_tags:
-                text = str(tag or "").strip()
-                if not text:
-                    continue
-                m = re.match(rf"^\s*{re.escape(prefix)}\s*0*([0-9]+)\s*$", text, re.IGNORECASE)
-                if not m:
-                    m = re.match(r"^\s*0*([0-9]+)\s*$", text)
-                if not m:
-                    continue
-                value = int(m.group(1))
-                if value < 1 or value in seen_numbers:
-                    continue
-                seen_numbers.add(value)
-                failed_numbers.append(value)
-            cloned["manual_selection"] = (
-                self._compress_numbers_to_spec(failed_numbers, pad_width=self._asset_pad_width())
-                if failed_numbers
-                else ",".join(failed_tags)
-            )
             cloned["start"] = 1
             cloned["end"] = 1
+            cloned["manual_selection"] = prompt_spec if step_type == "prompt" else tagged_spec
             base_name = str(cloned.get("name", "") or f"{idx+1}번 작업").strip()
             cloned["name"] = f"{base_name} (자동 재시도 1회)"
-            retry_steps.append(cloned)
         return retry_steps
+
+    def _pick_pipeline_retry_source_result(self, results):
+        items = list(results or [])
+        if not items:
+            return {}
+        for mode in ("download", "asset", "prompt"):
+            for item in reversed(items):
+                if str(item.get("run_mode", "") or "").strip().lower() != mode:
+                    continue
+                numbers = self._pipeline_retry_numbers_from_result(item)
+                if numbers:
+                    return item
+        return {}
+
+    def _pipeline_retry_numbers_from_result(self, item):
+        if not isinstance(item, dict):
+            return []
+        mode = str(item.get("run_mode", "") or "").strip().lower()
+        prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
+        raw_tags = list(item.get("failed_tags", []) or [])
+        numbers = []
+        seen = set()
+        for raw in raw_tags:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            if mode in {"asset", "download"}:
+                match = re.match(rf"^\s*(?:{re.escape(prefix)}|S)?\s*0*([0-9]+)\s*$", text, re.IGNORECASE)
+            else:
+                match = re.match(r"^\s*0*([0-9]+)\s*$", text)
+            if not match:
+                continue
+            value = int(match.group(1))
+            if value < 1 or value in seen:
+                continue
+            seen.add(value)
+            numbers.append(value)
+        if numbers:
+            numbers.sort()
+            return numbers
+        retry_errors = list(item.get("retry_errors", []) or [])
+        extracted = self._extract_numbers_from_retry_errors(
+            retry_errors,
+            expect_prefix=prefix if mode in {"asset", "download"} else None,
+        )
+        extracted = sorted({int(value) for value in extracted if int(value) > 0})
+        return extracted
+
+    def _tagged_number_spec(self, numbers, prefix="S", pad_width=3):
+        spec = self._compress_numbers_to_spec(numbers, pad_width=pad_width)
+        prefix = str(prefix or "").strip()
+        if not spec or not prefix:
+            return spec
+        tagged_parts = []
+        for part in spec.split(","):
+            if "-" in part:
+                start_text, end_text = [x.strip() for x in part.split("-", 1)]
+                tagged_parts.append(f"{prefix}{start_text}-{prefix}{end_text}")
+            else:
+                tagged_parts.append(f"{prefix}{part}")
+        return ",".join(tagged_parts)
 
     def _focus_work_target(self, target):
         try:
