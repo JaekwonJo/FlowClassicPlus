@@ -526,6 +526,8 @@ class FlowVisionApp:
         self.pending_generation_watches = []
         self.observed_failure_card_signatures = {}
         self.pending_periodic_refresh = None
+        self.section_wrappers = {}
+        self.section_open_setters = {}
         self.current_selection_summary = ""
         self.current_selection_input = ""
         self.current_expected_mode = None
@@ -8913,6 +8915,8 @@ class FlowVisionApp:
 
         btn.config(command=lambda: _set_open(not state["open"]))
         _refresh()
+        self.section_wrappers[title_key] = wrap
+        self.section_open_setters[title_key] = _set_open
         return body, _set_open
 
     def _set_mini_hud_collapsed(self, collapsed):
@@ -9019,8 +9023,10 @@ class FlowVisionApp:
         
         title_f = tk.Frame(header, bg=self.color_header)
         title_f.pack(side="left", padx=16, pady=8)
-        tk.Label(title_f, text="Flow Classic Plus", font=self.font_title, bg=self.color_header, fg=self.color_text).pack(anchor="w")
-        tk.Label(title_f, text="클래식 개선판", font=self.font_subtitle, bg=self.color_header, fg=self.color_text_sec).pack(anchor="w")
+        self.lbl_app_title = tk.Label(title_f, text="Flow Classic Plus", font=self.font_title, bg=self.color_header, fg=self.color_text)
+        self.lbl_app_title.pack(anchor="w")
+        self.lbl_app_subtitle = tk.Label(title_f, text="클래식 개선판", font=self.font_subtitle, bg=self.color_header, fg=self.color_text_sec)
+        self.lbl_app_subtitle.pack(anchor="w")
 
         center_f = tk.Frame(header, bg=self.color_header)
         center_f.pack(side="left", fill="both", expand=True, padx=12, pady=8)
@@ -10938,12 +10944,59 @@ class FlowVisionApp:
             self.root.focus_force()
         except Exception:
             pass
+        self._apply_worker_layout()
         self.root.title(self._root_window_title())
         self._focus_work_target(target)
         self.log(
             f"🧩 워커 모드 실행: {self._worker_mode_meta(self.worker_mode).get('title', '워커')} | "
             f"이름={self.worker_name or '-'} | 설정={self._current_config_display_name()} | 프로필={self._browser_profile_dir_name()}"
         )
+
+    def _apply_worker_layout(self):
+        meta = self._worker_mode_meta(self.worker_mode)
+        title = meta.get("title", "워커")
+        worker_name = self.worker_name or meta.get("default_name", "워커1")
+        if hasattr(self, "lbl_app_title"):
+            self.lbl_app_title.config(text=title)
+        if hasattr(self, "lbl_app_subtitle"):
+            self.lbl_app_subtitle.config(text=f"{worker_name} | 설정 {self._current_config_display_name()} | 프로필 {self._browser_profile_dir_name()}")
+        if hasattr(self, "btn_go_pipeline"):
+            self.btn_go_pipeline.pack_forget()
+        if hasattr(self, "btn_go_home"):
+            self.btn_go_home.config(text="✖ 워커 닫기", command=self.on_exit)
+
+        hidden_sections = {
+            "prompt": ("S001~S### 에셋 자동 반복", "다운로드 자동화"),
+            "asset": ("프롬프트 자동화 전용 생성 옵션", "다운로드 자동화"),
+            "download": ("프롬프트 자동화 전용 생성 옵션", "S001~S### 에셋 자동 반복"),
+        }.get(self.worker_mode, ())
+        shown_sections = {
+            "prompt": ("프롬프트 자동화 전용 생성 옵션",),
+            "asset": ("S001~S### 에셋 자동 반복",),
+            "download": ("다운로드 자동화",),
+        }.get(self.worker_mode, ())
+        for title_key in hidden_sections:
+            wrap = self.section_wrappers.get(title_key)
+            if wrap:
+                wrap.pack_forget()
+        for title_key in shown_sections:
+            setter = self.section_open_setters.get(title_key)
+            if setter:
+                setter(True)
+
+        button_visibility = {
+            "prompt": {"btn_start_prompt": True, "btn_start_asset": False, "btn_start_download": False},
+            "asset": {"btn_start_prompt": False, "btn_start_asset": True, "btn_start_download": False},
+            "download": {"btn_start_prompt": False, "btn_start_asset": False, "btn_start_download": True},
+        }.get(self.worker_mode, {})
+        for btn_name, visible in button_visibility.items():
+            widget = getattr(self, btn_name, None)
+            if not widget:
+                continue
+            if visible:
+                widget.pack_configure(fill="x")
+            else:
+                widget.pack_forget()
 
     def _worker_mode_meta(self, kind):
         kind = str(kind or "").strip().lower()
