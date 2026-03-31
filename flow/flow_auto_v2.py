@@ -73,6 +73,16 @@ ES_DISPLAY_REQUIRED = 0x00000002
 APP_VERSION = "2026-03-18 Ver.01"
 APP_NAME = f"Flow Classic Plus - {APP_VERSION}"
 CONFIG_FILE = "flow_config.json"
+SHARED_SETTINGS_FILE = "flow_shared_settings.json"
+SHARED_SETTING_KEYS = (
+    "work_break_every_count",
+    "work_break_minutes",
+    "work_break_random_ratio",
+    "periodic_refresh_enabled",
+    "periodic_refresh_every_count",
+    "periodic_refresh_wait_min_seconds",
+    "periodic_refresh_wait_max_seconds",
+)
 DEFAULT_CONFIG = {
     "prompts_file": "flow_prompts.txt",
     "prompts_separator": "|||",
@@ -355,13 +365,17 @@ class CaptureOverlay:
         self.callback(min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
 
 def load_config_from_file(path):
-    if not path.exists(): return DEFAULT_CONFIG.copy()
+    if not path.exists():
+        data = copy.deepcopy(DEFAULT_CONFIG)
+        return apply_shared_settings_to_cfg(data, Path(path).parent if path else None)
     try:
         data = json.loads(path.read_text(encoding='utf-8'))
         for k, v in DEFAULT_CONFIG.items():
             if k not in data: data[k] = v
-        return data
-    except: return DEFAULT_CONFIG.copy()
+        return apply_shared_settings_to_cfg(data, path.parent)
+    except:
+        data = copy.deepcopy(DEFAULT_CONFIG)
+        return apply_shared_settings_to_cfg(data, Path(path).parent if path else None)
 
 def sanitize_named_token(text, fallback="worker"):
     text = str(text or "").strip()
@@ -387,6 +401,41 @@ def config_display_name_from_path(path):
     if name.startswith("flow_config_") and name.endswith(".json"):
         return name[len("flow_config_"):-5] or "이름 없음"
     return path.stem
+
+def shared_settings_path(base_dir=None):
+    try:
+        base = Path(base_dir) if base_dir else Path(__file__).resolve().parent
+    except Exception:
+        base = Path(__file__).resolve().parent
+    return base / SHARED_SETTINGS_FILE
+
+def extract_shared_settings(cfg):
+    payload = {}
+    source = cfg or {}
+    for key in SHARED_SETTING_KEYS:
+        payload[key] = copy.deepcopy(source.get(key, DEFAULT_CONFIG.get(key)))
+    return payload
+
+def apply_shared_settings_to_cfg(cfg, base_dir=None):
+    target = cfg if isinstance(cfg, dict) else {}
+    path = shared_settings_path(base_dir)
+    if not path.exists():
+        return target
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return target
+    if not isinstance(raw, dict):
+        return target
+    for key in SHARED_SETTING_KEYS:
+        if key in raw:
+            target[key] = raw[key]
+    return target
+
+def save_shared_settings_from_cfg(cfg, base_dir=None):
+    path = shared_settings_path(base_dir)
+    payload = extract_shared_settings(cfg)
+    path.write_text(json.dumps(payload, indent=4, ensure_ascii=False), encoding="utf-8")
 
 class LogWindow:
     def __init__(self, master, app=None):
@@ -1364,8 +1413,14 @@ class FlowVisionApp:
         except: pass
 
     def save_config(self):
-        try: self.cfg_path.write_text(json.dumps(self.cfg, indent=4, ensure_ascii=False), encoding='utf-8')
-        except: pass
+        try:
+            self.cfg_path.write_text(json.dumps(self.cfg, indent=4, ensure_ascii=False), encoding='utf-8')
+        except:
+            pass
+        try:
+            save_shared_settings_from_cfg(self.cfg, self.cfg_path.parent)
+        except:
+            pass
 
     def _root_window_title(self):
         base = APP_NAME
@@ -11006,6 +11061,56 @@ class FlowVisionApp:
             "download": {"title": "다운로드 워커", "target": "download", "default_name": "다운로드_워커1"},
         }.get(kind, {"title": "워커", "target": "all", "default_name": "워커1"})
 
+    def _prompt_slot_numbers_for_index(self, slot_idx):
+        slots = self.cfg.get("prompt_slots", []) or []
+        if not slots:
+            return []
+        slot_idx = self._clamp_slot_index(slot_idx, default=0)
+        file_name = str(slots[slot_idx].get("file", "") or "").strip()
+        path = self._resolve_prompt_source_path(file_name)
+        if path is None or not path.exists():
+            return []
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            return []
+        entries = self._parse_prompt_source_entries(raw)
+        numbers = []
+        seen = set()
+        for entry in entries:
+            try:
+                value = int(entry.get("source_no", 0) or 0)
+            except Exception:
+                continue
+            if value < 1 or value in seen:
+                continue
+            seen.add(value)
+            numbers.append(value)
+        return numbers
+
+    def _prompt_worker_selection_defaults(self, slot_idx):
+        numbers = self._prompt_slot_numbers_for_index(slot_idx)
+        start_value = str(numbers[0] if numbers else 1)
+        end_value = str(numbers[-1] if numbers else 1)
+        raw = str(self.cfg.get("prompt_manual_selection", "") or "").strip()
+        enabled = bool(self.cfg.get("prompt_manual_selection_enabled", bool(raw)))
+        mode = "all"
+        if enabled and raw:
+            range_match = re.match(r"^\s*0*([1-9][0-9]*)\s*-\s*0*([1-9][0-9]*)\s*$", raw)
+            if range_match:
+                mode = "range"
+                start_value = str(int(range_match.group(1)))
+                end_value = str(int(range_match.group(2)))
+            else:
+                mode = "manual"
+        return {
+            "mode": mode,
+            "start": start_value,
+            "end": end_value,
+            "manual": raw,
+            "numbers": numbers,
+        }
+
     def _suggest_worker_bundle_name(self, kind):
         meta = self._worker_mode_meta(kind)
         default_name = str(meta.get("default_name", "워커1") or "워커1").strip()
@@ -11032,7 +11137,7 @@ class FlowVisionApp:
                 return candidate
             idx += 1
 
-    def _launch_worker_process(self, kind, worker_name, config_name, browser_profile_name, project_index=0):
+    def _launch_worker_process(self, kind, worker_name, config_name, browser_profile_name, project_index=0, extra_cfg=None):
         meta = self._worker_mode_meta(kind)
         worker_name = str(worker_name or "").strip() or meta["default_name"]
         config_name = sanitize_named_token(config_name or worker_name, fallback=meta["default_name"])
@@ -11051,6 +11156,8 @@ class FlowVisionApp:
             project = profiles[active_idx]
             if project.get("url"):
                 worker_cfg["start_url"] = str(project.get("url") or "").strip()
+        if isinstance(extra_cfg, dict):
+            worker_cfg.update(extra_cfg)
         config_path.write_text(json.dumps(worker_cfg, indent=4, ensure_ascii=False), encoding="utf-8")
 
         cmd = [
@@ -11076,7 +11183,8 @@ class FlowVisionApp:
         win.configure(bg=self.color_bg)
         win.transient(self.home_window or self.root)
         win.grab_set()
-        win.geometry("590x395")
+        launcher_height = 565 if kind == "prompt" else 395
+        win.geometry(f"590x{launcher_height}")
         win.resizable(False, False)
 
         outer = tk.Frame(win, bg=self.color_bg)
@@ -11120,6 +11228,157 @@ class FlowVisionApp:
         project_combo = ttk.Combobox(form, textvariable=project_var, state="readonly", values=project_values, font=self.font_body)
         project_combo.grid(row=3, column=1, sticky="ew", pady=(0, 8))
 
+        prompt_launch_vars = {}
+        if kind == "prompt":
+            detail_box = tk.LabelFrame(
+                outer,
+                text="이미지 워커 빠른 설정",
+                bg=self.color_bg,
+                fg=self.color_text,
+                font=self.font_body_bold,
+                padx=10,
+                pady=8,
+            )
+            detail_box.pack(fill="x", pady=(4, 0))
+            detail_box.grid_columnconfigure(1, weight=1)
+            detail_box.grid_columnconfigure(3, weight=1)
+
+            slot_names = self._prompt_slot_names()
+            active_slot_idx = self._clamp_slot_index(self.cfg.get("active_prompt_slot", 0), default=0)
+            slot_var = tk.StringVar(value=slot_names[active_slot_idx] if slot_names else "")
+            count_var = tk.StringVar(value=str(self.cfg.get("prompt_variant_count", "x1") or "x1").strip().lower() or "x1")
+            interval_var = tk.StringVar(value=str(int(self.cfg.get("interval_seconds", 180) or 180)))
+            defaults = self._prompt_worker_selection_defaults(active_slot_idx)
+            number_mode_var = tk.StringVar(value=defaults["mode"])
+            range_start_var = tk.StringVar(value=defaults["start"])
+            range_end_var = tk.StringVar(value=defaults["end"])
+            manual_var = tk.StringVar(value=defaults["manual"])
+            summary_var = tk.StringVar()
+
+            tk.Label(detail_box, text="프롬프트 파일", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=0, column=0, sticky="w")
+            combo_prompt_slot = ttk.Combobox(detail_box, textvariable=slot_var, state="readonly", values=slot_names, font=self.font_small)
+            combo_prompt_slot.grid(row=0, column=1, sticky="ew", padx=(6, 12), pady=(0, 8))
+
+            tk.Label(detail_box, text="생성 개수", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=0, column=2, sticky="w")
+            combo_prompt_count = ttk.Combobox(detail_box, textvariable=count_var, state="readonly", values=("x1", "x2", "x3", "x4"), width=8, font=self.font_small)
+            combo_prompt_count.grid(row=0, column=3, sticky="w", pady=(0, 8))
+
+            tk.Label(detail_box, text="작업 간격(초)", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=1, column=0, sticky="w")
+            entry_interval = tk.Entry(
+                detail_box,
+                textvariable=interval_var,
+                bg=self.color_input_bg,
+                fg=self.color_input_fg,
+                insertbackground=self.color_input_fg,
+                font=self.font_mono_small,
+            )
+            entry_interval.grid(row=1, column=1, sticky="ew", padx=(6, 12), pady=(0, 8), ipady=2)
+
+            tk.Label(detail_box, text="번호 방식", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=1, column=2, sticky="w")
+            mode_wrap = tk.Frame(detail_box, bg=self.color_bg)
+            mode_wrap.grid(row=1, column=3, sticky="w", pady=(0, 8))
+            ttk.Radiobutton(mode_wrap, text="전체", value="all", variable=number_mode_var).pack(side="left")
+            ttk.Radiobutton(mode_wrap, text="연속", value="range", variable=number_mode_var).pack(side="left", padx=(8, 0))
+            ttk.Radiobutton(mode_wrap, text="개별", value="manual", variable=number_mode_var).pack(side="left", padx=(8, 0))
+
+            tk.Label(detail_box, text="연속 범위", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=2, column=0, sticky="w")
+            range_wrap = tk.Frame(detail_box, bg=self.color_bg)
+            range_wrap.grid(row=2, column=1, sticky="w", padx=(6, 12), pady=(0, 8))
+            entry_range_start = tk.Entry(
+                range_wrap,
+                textvariable=range_start_var,
+                width=7,
+                bg=self.color_input_bg,
+                fg=self.color_input_fg,
+                insertbackground=self.color_input_fg,
+                font=self.font_mono_small,
+                justify="center",
+            )
+            entry_range_start.pack(side="left", ipady=2)
+            tk.Label(range_wrap, text="~", bg=self.color_bg, fg=self.color_text, font=self.font_small).pack(side="left", padx=6)
+            entry_range_end = tk.Entry(
+                range_wrap,
+                textvariable=range_end_var,
+                width=7,
+                bg=self.color_input_bg,
+                fg=self.color_input_fg,
+                insertbackground=self.color_input_fg,
+                font=self.font_mono_small,
+                justify="center",
+            )
+            entry_range_end.pack(side="left", ipady=2)
+
+            tk.Label(detail_box, text="개별 번호", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=2, column=2, sticky="w")
+            entry_manual = tk.Entry(
+                detail_box,
+                textvariable=manual_var,
+                bg=self.color_input_bg,
+                fg=self.color_input_fg,
+                insertbackground=self.color_input_fg,
+                font=self.font_mono_small,
+            )
+            entry_manual.grid(row=2, column=3, sticky="ew", pady=(0, 8), ipady=2)
+
+            lbl_summary = tk.Label(detail_box, textvariable=summary_var, font=self.font_small, bg=self.color_bg, fg=self.color_info, anchor="w", justify="left")
+            lbl_summary.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(0, 4))
+            tk.Label(
+                detail_box,
+                text="※ 휴식 / 주기적 새로고침은 메인 작업창 공통 설정을 같이 사용합니다. 작업 간격만 이 워커 전용입니다.",
+                font=self.font_small,
+                bg=self.color_bg,
+                fg=self.color_text_sec,
+                anchor="w",
+                justify="left",
+                wraplength=540,
+            ).grid(row=4, column=0, columnspan=4, sticky="ew")
+
+            def _refresh_prompt_summary(*_args):
+                try:
+                    selected_idx = slot_names.index(slot_var.get()) if slot_var.get() in slot_names else active_slot_idx
+                except Exception:
+                    selected_idx = active_slot_idx
+                numbers = self._prompt_slot_numbers_for_index(selected_idx)
+                if numbers:
+                    base = f"이 파일 번호: {numbers[0]} ~ {numbers[-1]} | 총 {len(numbers)}개"
+                else:
+                    base = "이 파일 번호: 아직 읽지 못했음"
+                mode = number_mode_var.get()
+                if mode == "range":
+                    base += f" | 실행: {range_start_var.get().strip() or '-'} ~ {range_end_var.get().strip() or '-'}"
+                elif mode == "manual":
+                    base += f" | 실행: {manual_var.get().strip() or '(비어 있음)'}"
+                else:
+                    base += " | 실행: 전체"
+                summary_var.set(base)
+
+            def _sync_prompt_defaults(*_args):
+                if slot_var.get() not in slot_names:
+                    return
+                slot_idx = slot_names.index(slot_var.get())
+                slot_defaults = self._prompt_worker_selection_defaults(slot_idx)
+                if number_mode_var.get() == "all":
+                    range_start_var.set(slot_defaults["start"])
+                    range_end_var.set(slot_defaults["end"])
+                _refresh_prompt_summary()
+
+            slot_var.trace_add("write", _sync_prompt_defaults)
+            number_mode_var.trace_add("write", _refresh_prompt_summary)
+            range_start_var.trace_add("write", _refresh_prompt_summary)
+            range_end_var.trace_add("write", _refresh_prompt_summary)
+            manual_var.trace_add("write", _refresh_prompt_summary)
+            _refresh_prompt_summary()
+
+            prompt_launch_vars = {
+                "slot_names": slot_names,
+                "slot_var": slot_var,
+                "count_var": count_var,
+                "interval_var": interval_var,
+                "number_mode_var": number_mode_var,
+                "range_start_var": range_start_var,
+                "range_end_var": range_end_var,
+                "manual_var": manual_var,
+            }
+
         def _sync_names(*_args):
             raw = worker_name_var.get().strip()
             if raw:
@@ -11143,7 +11402,46 @@ class FlowVisionApp:
 
         def _launch():
             project_idx = project_values.index(project_var.get()) if project_var.get() in project_values else 0
-            self._launch_worker_process(kind, worker_name_var.get(), config_name_var.get(), profile_name_var.get(), project_idx)
+            extra_cfg = {}
+            if kind == "prompt":
+                try:
+                    interval_seconds = max(1, int(str(prompt_launch_vars["interval_var"].get() or "180").strip()))
+                except Exception:
+                    messagebox.showwarning("안내", "작업 간격은 1초 이상 숫자로 적어주세요.", parent=win)
+                    return
+                slot_names = prompt_launch_vars.get("slot_names", [])
+                slot_name = prompt_launch_vars["slot_var"].get()
+                slot_idx = slot_names.index(slot_name) if slot_name in slot_names else self._clamp_slot_index(self.cfg.get("active_prompt_slot", 0), default=0)
+                slot_idx = self._clamp_slot_index(slot_idx, default=0)
+                slot_info = (self.cfg.get("prompt_slots", []) or [{}])[slot_idx]
+                number_mode = str(prompt_launch_vars["number_mode_var"].get() or "all").strip().lower()
+                selection_spec = ""
+                if number_mode == "range":
+                    try:
+                        start_no = int(str(prompt_launch_vars["range_start_var"].get() or "1").strip())
+                        end_no = int(str(prompt_launch_vars["range_end_var"].get() or "1").strip())
+                    except Exception:
+                        messagebox.showwarning("안내", "연속 범위는 숫자로 적어주세요.", parent=win)
+                        return
+                    if start_no > end_no:
+                        start_no, end_no = end_no, start_no
+                    selection_spec = f"{start_no}-{end_no}"
+                elif number_mode == "manual":
+                    selection_spec = str(prompt_launch_vars["manual_var"].get() or "").strip()
+                    if not selection_spec:
+                        messagebox.showwarning("안내", "개별 번호 방식이면 번호를 적어주세요.", parent=win)
+                        return
+                extra_cfg = {
+                    "active_prompt_slot": slot_idx,
+                    "prompts_file": str(slot_info.get("file", self.cfg.get("prompts_file", "flow_prompts.txt")) or self.cfg.get("prompts_file", "flow_prompts.txt")),
+                    "interval_seconds": interval_seconds,
+                    "prompt_manual_selection_enabled": bool(selection_spec),
+                    "prompt_manual_selection": selection_spec,
+                    "prompt_variant_count": str(prompt_launch_vars["count_var"].get() or "x1").strip().lower() or "x1",
+                    "prompt_media_mode": "image",
+                    "current_media_state": "image",
+                }
+            self._launch_worker_process(kind, worker_name_var.get(), config_name_var.get(), profile_name_var.get(), project_idx, extra_cfg=extra_cfg)
             win.destroy()
 
         ttk.Button(bottom, text="취소", command=win.destroy).pack(side="right")
