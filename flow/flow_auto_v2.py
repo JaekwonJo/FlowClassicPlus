@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import time
 import random
 import threading
@@ -8,6 +9,8 @@ import re
 import calendar
 import traceback 
 import copy
+import subprocess
+import argparse
 from pathlib import Path
 from datetime import datetime, timedelta
 import importlib 
@@ -107,6 +110,9 @@ DEFAULT_CONFIG = {
     "language_mode": "en",
     "input_mode": "typing", # typing, paste, mixed
     "typing_speed_profile": "x5",
+    "config_label": "",
+    "worker_mode": "",
+    "worker_name": "",
     "prompt_mode_preset_enabled": True,
     "prompt_media_mode": "image",
     "prompt_orientation": "landscape",
@@ -357,6 +363,31 @@ def load_config_from_file(path):
         return data
     except: return DEFAULT_CONFIG.copy()
 
+def sanitize_named_token(text, fallback="worker"):
+    text = str(text or "").strip()
+    if not text:
+        text = fallback
+    text = re.sub(r"\s+", "_", text)
+    text = re.sub(r"[^0-9A-Za-z가-힣._-]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("._")
+    return text or fallback
+
+def build_named_config_filename(name):
+    token = sanitize_named_token(name, fallback="worker")
+    return f"flow_config_{token}.json"
+
+def config_display_name_from_path(path):
+    try:
+        path = Path(path)
+    except Exception:
+        return "기본 설정"
+    name = path.name
+    if name == CONFIG_FILE:
+        return "기본 설정"
+    if name.startswith("flow_config_") and name.endswith(".json"):
+        return name[len("flow_config_"):-5] or "이름 없음"
+    return path.stem
+
 class LogWindow:
     def __init__(self, master, app=None):
         self.root = tk.Toplevel(master)
@@ -433,10 +464,19 @@ class LogWindow:
 
 class FlowVisionApp:
 
-    def __init__(self):
+    def __init__(self, cfg_path=None, worker_mode="", worker_name="", initial_target=""):
         self.base = Path(__file__).resolve().parent
-        self.cfg_path = self.base / CONFIG_FILE
+        self.worker_mode = str(worker_mode or "").strip().lower()
+        self.worker_name = str(worker_name or "").strip()
+        self.initial_target = str(initial_target or "").strip().lower()
+        self.cfg_path = Path(cfg_path) if cfg_path else (self.base / CONFIG_FILE)
         self.cfg = load_config_from_file(self.cfg_path)
+        if not str(self.cfg.get("config_label", "") or "").strip():
+            self.cfg["config_label"] = config_display_name_from_path(self.cfg_path)
+        if self.worker_mode:
+            self.cfg["worker_mode"] = self.worker_mode
+        if self.worker_name:
+            self.cfg["worker_name"] = self.worker_name
         self._normalize_display_mode_config()
         self._normalize_generation_preset_config()
         self._normalize_media_panel_selector_cache()
@@ -519,7 +559,7 @@ class FlowVisionApp:
         self._apply_actor_break_settings(reset_batch=True)
         
         self.root = tk.Tk()
-        self.root.title(f"{APP_NAME} - 작업창")
+        self.root.title(self._root_window_title())
         self._set_initial_window_size()
         
         # [NEW] Responsive Grid Weight
@@ -623,6 +663,8 @@ class FlowVisionApp:
         self._ensure_pipeline_presets()
         self._build_ui()
         self.on_reload()
+        if self.worker_mode:
+            self.root.after(120, self._activate_worker_window_mode)
         self.root.after(1000, self._tick)
 
     def _set_initial_window_size(self):
@@ -1323,6 +1365,94 @@ class FlowVisionApp:
         try: self.cfg_path.write_text(json.dumps(self.cfg, indent=4, ensure_ascii=False), encoding='utf-8')
         except: pass
 
+    def _root_window_title(self):
+        base = APP_NAME
+        if self.worker_mode in ("prompt", "asset", "download"):
+            label = {
+                "prompt": "이미지 워커",
+                "asset": "S자동화 워커",
+                "download": "다운로드 워커",
+            }.get(self.worker_mode, "워커")
+            if self.worker_name:
+                return f"{base} - {label} - {self.worker_name}"
+            return f"{base} - {label}"
+        return f"{base} - 작업창"
+
+    def _current_config_display_name(self):
+        return str(self.cfg.get("config_label", "") or config_display_name_from_path(self.cfg_path)).strip() or "기본 설정"
+
+    def _named_config_path(self, name):
+        return self.base / build_named_config_filename(name)
+
+    def _suggest_new_config_name(self, base_name="워커설정"):
+        base_name = sanitize_named_token(base_name, fallback="worker")
+        candidate = base_name
+        suffix = 2
+        while self._named_config_path(candidate).exists():
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+        return candidate
+
+    def _refresh_config_file_ui(self):
+        if hasattr(self, "lbl_config_file_state"):
+            self.lbl_config_file_state.config(text=f"현재 설정 파일: {self._current_config_display_name()}")
+
+    def _set_current_config_path(self, path):
+        self.cfg_path = Path(path)
+        self.cfg["config_label"] = config_display_name_from_path(self.cfg_path)
+        self.save_config()
+        self._refresh_config_file_ui()
+
+    def on_save_named_config(self):
+        try:
+            default_name = self._suggest_new_config_name(self.worker_name or self._current_config_display_name() or "워커설정")
+            name = simpledialog.askstring("설정 파일 저장하기", "저장할 설정 파일 이름을 적어주세요.\n예: 이미지_워커1", initialvalue=default_name, parent=self.root)
+            if name is None:
+                return
+            target_name = sanitize_named_token(name, fallback=default_name)
+            target_path = self._named_config_path(target_name)
+            self.cfg["config_label"] = target_name
+            self.cfg_path = target_path
+            self.save_config()
+            self._refresh_config_file_ui()
+            self.log(f"💾 설정 파일 저장: {target_path.name}")
+            messagebox.showinfo("설정 파일 저장하기", f"설정 파일을 저장했습니다.\n\n- 이름: {target_name}\n- 파일: {target_path.name}", parent=self.root)
+        except Exception as e:
+            messagebox.showerror("설정 파일 저장 실패", f"설정 파일 저장 중 오류가 났습니다.\n{e}", parent=self.root)
+
+    def on_rename_current_config(self):
+        if getattr(self, "running", False) or getattr(self, "relay_running", False):
+            messagebox.showwarning("안내", "자동화 실행 중에는 설정 파일 이름을 바꿀 수 없습니다.\n먼저 중지 후 시도해주세요.", parent=self.root)
+            return
+        try:
+            current_name = self._current_config_display_name()
+            name = simpledialog.askstring("설정 파일 이름 변경", "새 설정 파일 이름을 적어주세요.", initialvalue=current_name, parent=self.root)
+            if name is None:
+                return
+            new_name = sanitize_named_token(name, fallback=current_name)
+            new_path = self._named_config_path(new_name)
+            if new_path == self.cfg_path:
+                self.cfg["config_label"] = new_name
+                self.save_config()
+                self._refresh_config_file_ui()
+                return
+            if new_path.exists():
+                messagebox.showwarning("안내", f"같은 이름의 설정 파일이 이미 있습니다.\n{new_path.name}", parent=self.root)
+                return
+            old_path = self.cfg_path
+            self.cfg["config_label"] = new_name
+            if old_path.exists() and old_path.name != CONFIG_FILE:
+                old_path.rename(new_path)
+            else:
+                new_path.write_text(json.dumps(self.cfg, indent=4, ensure_ascii=False), encoding="utf-8")
+            self.cfg_path = new_path
+            self.save_config()
+            self._refresh_config_file_ui()
+            self.log(f"✏️ 설정 파일 이름 변경: {current_name} -> {new_name}")
+            messagebox.showinfo("설정 파일 이름 변경", f"설정 파일 이름을 바꿨습니다.\n\n- 이전: {current_name}\n- 새 이름: {new_name}", parent=self.root)
+        except Exception as e:
+            messagebox.showerror("설정 파일 이름 변경 실패", f"설정 파일 이름 변경 중 오류가 났습니다.\n{e}", parent=self.root)
+
     def _actor_status(self, text):
         self.root.after(0, lambda: self.update_status_label(text, self.color_info))
 
@@ -1725,6 +1855,9 @@ class FlowVisionApp:
             current = self._browser_profile_dir_name()
             self.lbl_browser_profile_state.config(text=f"현재 프로필: {current}")
 
+    def _sanitize_browser_profile_name(self, name):
+        return sanitize_named_token(name, fallback="flow_human_profile_pw")
+
     def on_create_new_browser_profile(self):
         if getattr(self, "running", False) or getattr(self, "relay_running", False):
             messagebox.showwarning("안내", "자동화 실행 중에는 새 브라우저 프로필을 만들 수 없습니다.\n먼저 중지 후 시도해주세요.")
@@ -1752,6 +1885,36 @@ class FlowVisionApp:
             )
         except Exception as e:
             messagebox.showerror("새 브라우저 프로필 만들기 실패", f"프로필 생성 중 오류가 났습니다.\n{e}")
+
+    def on_rename_browser_profile(self):
+        if getattr(self, "running", False) or getattr(self, "relay_running", False):
+            messagebox.showwarning("안내", "자동화 실행 중에는 브라우저 프로필 이름을 바꿀 수 없습니다.\n먼저 중지 후 시도해주세요.", parent=self.root)
+            return
+        try:
+            current = self._browser_profile_dir_name()
+            new_name = simpledialog.askstring("브라우저 프로필 이름 변경", "새 브라우저 프로필 이름을 적어주세요.\n예: 이미지_워커1", initialvalue=current, parent=self.root)
+            if new_name is None:
+                return
+            new_name = self._sanitize_browser_profile_name(new_name)
+            if new_name == current:
+                return
+            new_path = self.base / new_name
+            if new_path.exists():
+                messagebox.showwarning("안내", f"같은 이름의 브라우저 프로필 폴더가 이미 있습니다.\n{new_name}", parent=self.root)
+                return
+            current_path = self.base / current
+            if current_path.exists():
+                current_path.rename(new_path)
+            else:
+                new_path.mkdir(parents=True, exist_ok=True)
+            self.cfg["browser_profile_dir"] = new_name
+            self.save_config()
+            self._refresh_browser_profile_ui()
+            self._shutdown_browser()
+            self.log(f"✏️ 브라우저 프로필 이름 변경: {current} -> {new_name}")
+            messagebox.showinfo("브라우저 프로필 이름 변경", f"브라우저 프로필 이름을 바꿨습니다.\n\n- 이전: {current}\n- 새 이름: {new_name}", parent=self.root)
+        except Exception as e:
+            messagebox.showerror("브라우저 프로필 이름 변경 실패", f"브라우저 프로필 이름 변경 중 오류가 났습니다.\n{e}", parent=self.root)
 
     def _pick_primary_browser_page(self):
         if not self.browser_context:
@@ -9043,6 +9206,7 @@ class FlowVisionApp:
         browser_profile_f = tk.Frame(left_card, bg=self.color_bg)
         browser_profile_f.pack(fill="x", pady=(0, 8))
         ttk.Button(browser_profile_f, text="🆕 새 브라우저 프로필 만들기", command=self.on_create_new_browser_profile).pack(side="left")
+        ttk.Button(browser_profile_f, text="✏ 프로필 이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         self.lbl_browser_profile_state = tk.Label(
             browser_profile_f,
             text=f"현재 프로필: {self._browser_profile_dir_name()}",
@@ -9051,6 +9215,19 @@ class FlowVisionApp:
             font=self.font_small,
         )
         self.lbl_browser_profile_state.pack(side="left", padx=(10, 0))
+
+        config_file_f = tk.Frame(left_card, bg=self.color_bg)
+        config_file_f.pack(fill="x", pady=(0, 8))
+        ttk.Button(config_file_f, text="💾 설정 파일 저장하기", command=self.on_save_named_config).pack(side="left")
+        ttk.Button(config_file_f, text="✏ 설정 파일 이름 변경", command=self.on_rename_current_config).pack(side="left", padx=(6, 0))
+        self.lbl_config_file_state = tk.Label(
+            config_file_f,
+            text=f"현재 설정 파일: {self._current_config_display_name()}",
+            bg=self.color_bg,
+            fg=self.color_info,
+            font=self.font_small,
+        )
+        self.lbl_config_file_state.pack(side="left", padx=(10, 0))
 
         new_project_f = tk.Frame(left_card, bg=self.color_bg)
         self.auto_new_project_var = tk.BooleanVar(value=self.cfg.get("auto_open_new_project", True))
@@ -10167,7 +10344,8 @@ class FlowVisionApp:
         self.btn_refresh_big = btn_refresh_big
         btn_refresh_big.pack(side="left", fill="x", expand=True, padx=(5, 0), ipady=6)
 
-        self._build_home_menu()
+        if not self.worker_mode:
+            self._build_home_menu()
         self.root.after(80, self._refresh_responsive_layout)
 
     def _build_home_menu(self):
@@ -10213,9 +10391,9 @@ class FlowVisionApp:
 
         self._make_home_card(grid, 0, 0, "🛠 작업창 열기", "기존 자동화 기능 전체가 들어 있는 작업창을 엽니다.", lambda: self.open_home_target("all"))
         self._make_home_card(grid, 0, 1, "🏃 이어달리기", "새 이어달리기 전용 창으로 들어갑니다.", lambda: self.open_home_target("relay"))
-        self._make_home_card(grid, 1, 0, "📝 프롬프트 자동화", "작업창을 열고 프롬프트 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("prompt"))
-        self._make_home_card(grid, 1, 1, "🔁 S001 자동화", "작업창을 열고 S001 반복 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("asset"))
-        self._make_home_card(grid, 2, 0, "⬇ 다운로드 자동화", "작업창을 열고 다운로드 자동화 위치로 바로 이동합니다.", lambda: self.open_home_target("download"))
+        self._make_home_card(grid, 1, 0, "📝 프롬프트 자동화", "이미지 워커 전용 창을 새로 엽니다.", lambda: self.open_home_target("prompt_worker"))
+        self._make_home_card(grid, 1, 1, "🔁 S001 자동화", "S자동화 워커 전용 창을 새로 엽니다.", lambda: self.open_home_target("asset_worker"))
+        self._make_home_card(grid, 2, 0, "⬇ 다운로드 자동화", "다운로드 워커 전용 창을 새로 엽니다.", lambda: self.open_home_target("download_worker"))
         self._make_home_card(grid, 2, 1, "⚡ 원터치 실행", "프리셋 하나를 골라 START / STOP만으로 바로 실행합니다.", lambda: self.open_home_target("onetouch"))
         self.root.withdraw()
         self.home_window.deiconify()
@@ -10752,7 +10930,156 @@ class FlowVisionApp:
             except Exception:
                 pass
 
+    def _activate_worker_window_mode(self):
+        target = self.initial_target or self._worker_mode_meta(self.worker_mode).get("target", "all")
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        except Exception:
+            pass
+        self.root.title(self._root_window_title())
+        self._focus_work_target(target)
+        self.log(
+            f"🧩 워커 모드 실행: {self._worker_mode_meta(self.worker_mode).get('title', '워커')} | "
+            f"이름={self.worker_name or '-'} | 설정={self._current_config_display_name()} | 프로필={self._browser_profile_dir_name()}"
+        )
+
+    def _worker_mode_meta(self, kind):
+        kind = str(kind or "").strip().lower()
+        return {
+            "prompt": {"title": "이미지 워커", "target": "prompt", "default_name": "이미지_워커1"},
+            "asset": {"title": "S자동화 워커", "target": "asset", "default_name": "S자동화_워커1"},
+            "download": {"title": "다운로드 워커", "target": "download", "default_name": "다운로드_워커1"},
+        }.get(kind, {"title": "워커", "target": "all", "default_name": "워커1"})
+
+    def _launch_worker_process(self, kind, worker_name, config_name, browser_profile_name, project_index=0):
+        meta = self._worker_mode_meta(kind)
+        worker_name = str(worker_name or "").strip() or meta["default_name"]
+        config_name = sanitize_named_token(config_name or worker_name, fallback=meta["default_name"])
+        browser_profile_name = self._sanitize_browser_profile_name(browser_profile_name or worker_name)
+        config_path = self._named_config_path(config_name)
+
+        worker_cfg = load_config_from_file(config_path) if config_path.exists() else copy.deepcopy(self.cfg)
+        worker_cfg["config_label"] = config_name
+        worker_cfg["worker_mode"] = kind
+        worker_cfg["worker_name"] = worker_name
+        worker_cfg["browser_profile_dir"] = browser_profile_name
+        worker_cfg["active_project_profile"] = self._clamp_project_profile_index(project_index, default=0)
+        profiles = worker_cfg.get("project_profiles", [])
+        if profiles:
+            active_idx = self._clamp_project_profile_index(worker_cfg.get("active_project_profile", 0), default=0)
+            project = profiles[active_idx]
+            if project.get("url"):
+                worker_cfg["start_url"] = str(project.get("url") or "").strip()
+        config_path.write_text(json.dumps(worker_cfg, indent=4, ensure_ascii=False), encoding="utf-8")
+
+        cmd = [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--worker",
+            kind,
+            "--worker-name",
+            worker_name,
+            "--config",
+            str(config_path),
+            "--target",
+            meta["target"],
+        ]
+        subprocess.Popen(cmd, cwd=str(self.base.parent))
+        self.log(f"🚀 워커 실행: {meta['title']} | 이름={worker_name} | 설정={config_name} | 프로필={browser_profile_name}")
+
+    def _open_worker_launcher(self, kind):
+        meta = self._worker_mode_meta(kind)
+        win = tk.Toplevel(self.home_window or self.root)
+        win.title(f"{meta['title']} 실행")
+        win.configure(bg=self.color_bg)
+        win.transient(self.home_window or self.root)
+        win.grab_set()
+        win.geometry("560x340")
+        win.resizable(False, False)
+
+        outer = tk.Frame(win, bg=self.color_bg)
+        outer.pack(fill="both", expand=True, padx=18, pady=18)
+
+        tk.Label(outer, text=meta["title"], font=self.font_title, bg=self.color_bg, fg=self.color_text).pack(anchor="w")
+        tk.Label(
+            outer,
+            text="이 워커는 새 창으로 따로 열립니다. 설정 파일과 브라우저 프로필 이름을 따로 써두면 나중에 안 헷갈립니다.",
+            font=self.font_small,
+            bg=self.color_bg,
+            fg=self.color_text_sec,
+            justify="left",
+            wraplength=500,
+        ).pack(anchor="w", pady=(6, 14))
+
+        form = tk.Frame(outer, bg=self.color_bg)
+        form.pack(fill="x")
+        form.grid_columnconfigure(1, weight=1)
+
+        worker_name_var = tk.StringVar(value=meta["default_name"])
+        config_name_var = tk.StringVar(value=sanitize_named_token(meta["default_name"], fallback="worker"))
+        profile_name_var = tk.StringVar(value=sanitize_named_token(meta["default_name"], fallback="flow_human_profile_pw"))
+
+        tk.Label(form, text="워커 이름", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=0, column=0, sticky="w", pady=(0, 8))
+        worker_name_entry = tk.Entry(form, textvariable=worker_name_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
+        worker_name_entry.grid(row=0, column=1, sticky="ew", pady=(0, 8), ipady=3)
+
+        tk.Label(form, text="설정 파일 이름", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=1, column=0, sticky="w", pady=(0, 8))
+        config_name_entry = tk.Entry(form, textvariable=config_name_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
+        config_name_entry.grid(row=1, column=1, sticky="ew", pady=(0, 8), ipady=3)
+
+        tk.Label(form, text="브라우저 프로필 이름", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=2, column=0, sticky="w", pady=(0, 8))
+        profile_name_entry = tk.Entry(form, textvariable=profile_name_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
+        profile_name_entry.grid(row=2, column=1, sticky="ew", pady=(0, 8), ipady=3)
+
+        profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
+        project_values = [str(item.get("project_name", "") or f"프로젝트 {idx+1}") for idx, item in enumerate(profiles)]
+        tk.Label(form, text="프로젝트 선택", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=3, column=0, sticky="w", pady=(0, 8))
+        project_var = tk.StringVar(value=project_values[self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0)])
+        project_combo = ttk.Combobox(form, textvariable=project_var, state="readonly", values=project_values, font=self.font_body)
+        project_combo.grid(row=3, column=1, sticky="ew", pady=(0, 8))
+
+        def _sync_names(*_args):
+            raw = worker_name_var.get().strip()
+            if raw:
+                config_name_var.set(sanitize_named_token(raw, fallback="worker"))
+                profile_name_var.set(self._sanitize_browser_profile_name(raw))
+
+        worker_name_var.trace_add("write", _sync_names)
+
+        hint = tk.Label(
+            outer,
+            text="예: 이미지_워커1 / S자동화_워커1 / 다운로드_워커1\n설정 파일과 프로필 이름을 같이 맞춰두면 나중에 바로 구분됩니다.",
+            font=self.font_small,
+            bg=self.color_bg,
+            fg=self.color_info,
+            justify="left",
+        )
+        hint.pack(anchor="w", pady=(10, 0))
+
+        bottom = tk.Frame(outer, bg=self.color_bg)
+        bottom.pack(fill="x", pady=(18, 0))
+
+        def _launch():
+            project_idx = project_values.index(project_var.get()) if project_var.get() in project_values else 0
+            self._launch_worker_process(kind, worker_name_var.get(), config_name_var.get(), profile_name_var.get(), project_idx)
+            win.destroy()
+
+        ttk.Button(bottom, text="취소", command=win.destroy).pack(side="right")
+        ttk.Button(bottom, text=f"{meta['title']} 열기", command=_launch).pack(side="right", padx=(0, 8))
+        worker_name_entry.focus_force()
+
     def open_home_target(self, target):
+        if target == "prompt_worker":
+            self._open_worker_launcher("prompt")
+            return
+        if target == "asset_worker":
+            self._open_worker_launcher("asset")
+            return
+        if target == "download_worker":
+            self._open_worker_launcher("download")
+            return
         self.hide_home_menu()
         if target == "relay":
             self.show_pipeline_window()
@@ -15327,7 +15654,25 @@ class FlowVisionApp:
         except Exception as e:
             self.log(f"⚠️ 다운로드 리포트 저장 실패: {e}")
 
+def parse_runtime_args(argv=None):
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--config", default="", help="사용할 설정 파일 경로")
+    parser.add_argument("--worker", default="", choices=["", "prompt", "asset", "download"], help="워커 모드")
+    parser.add_argument("--worker-name", default="", help="워커 표시 이름")
+    parser.add_argument("--target", default="", help="시작할 작업 위치")
+    args, _unknown = parser.parse_known_args(argv)
+    return args
+
+
 if __name__ == "__main__":
-    try: FlowVisionApp().root.mainloop()
+    try:
+        runtime_args = parse_runtime_args(sys.argv[1:])
+        app = FlowVisionApp(
+            cfg_path=runtime_args.config or None,
+            worker_mode=runtime_args.worker or "",
+            worker_name=runtime_args.worker_name or "",
+            initial_target=runtime_args.target or "",
+        )
+        app.root.mainloop()
     except Exception as e:
         with open("CRASH_LOG.txt", "w") as f: f.write(traceback.format_exc())
