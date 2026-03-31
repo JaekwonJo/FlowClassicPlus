@@ -2825,7 +2825,7 @@ class FlowVisionApp:
 
     def _resolve_prompt_number_plan(self):
         raw = str(self.cfg.get("prompt_manual_selection", "") or "").strip()
-        enabled = bool(self.cfg.get("prompt_manual_selection_enabled", bool(raw)))
+        enabled = bool(raw)
         prefix = self._prompt_source_prefix()
         available = set(self._available_prompt_source_numbers())
         info = self._parse_manual_number_spec(raw, upper_bound=None, allowed_prefixes=[prefix, "S"])
@@ -4549,8 +4549,6 @@ class FlowVisionApp:
             self.cfg["prompt_manual_selection_enabled"] = bool(prompt_selection)
             if hasattr(self, "prompt_manual_selection_var"):
                 self.prompt_manual_selection_var.set(prompt_selection)
-            if hasattr(self, "prompt_manual_selection_enabled_var"):
-                self.prompt_manual_selection_enabled_var.set(bool(prompt_selection))
             prompt_slot_idx = self._clamp_slot_index(step.get("prompt_slot", self.cfg.get("active_prompt_slot", 0)))
             self.cfg["active_prompt_slot"] = prompt_slot_idx
             prompt_slots = self.cfg.get("prompt_slots", []) or []
@@ -5309,7 +5307,6 @@ class FlowVisionApp:
         prompt_info = self._resolve_prompt_number_plan()
         if hasattr(self, "lbl_prompt_manual_status"):
             enabled = bool(prompt_info.get("enabled", False))
-            saved_raw = str(prompt_info.get("saved_raw", "") or "").strip()
             if enabled and prompt_info.get("invalid_tokens"):
                 self.lbl_prompt_manual_status.config(
                     text=f"형식 확인: {', '.join(prompt_info['invalid_tokens'][:3])}",
@@ -5325,11 +5322,6 @@ class FlowVisionApp:
                 self.lbl_prompt_manual_status.config(
                     text=self._format_manual_selection_preview(prompt_info.get("numbers", []), prefix="", pad_width=3),
                     fg=self.color_info,
-                )
-            elif saved_raw:
-                self.lbl_prompt_manual_status.config(
-                    text=f"개별 실행 대기: {saved_raw}",
-                    fg=self.color_text_sec,
                 )
             else:
                 self.lbl_prompt_manual_status.config(text="전체 프롬프트 실행", fg=self.color_text_sec)
@@ -10496,19 +10488,7 @@ class FlowVisionApp:
 
         prompt_manual_f = tk.Frame(file_nav, bg=self.color_bg)
         prompt_manual_f.pack(side="right")
-        tk.Label(prompt_manual_f, text="개별 실행:", font=self.font_small, bg=self.color_bg).pack(side="left", padx=(8, 4))
-        self.prompt_manual_selection_enabled_var = tk.BooleanVar(
-            value=bool(self.cfg.get("prompt_manual_selection_enabled", bool(self.cfg.get("prompt_manual_selection", ""))))
-        )
-        tk.Checkbutton(
-            prompt_manual_f,
-            text="사용",
-            variable=self.prompt_manual_selection_enabled_var,
-            command=self.on_option_toggle,
-            bg=self.color_bg,
-            font=self.font_small,
-            activebackground=self.color_bg,
-        ).pack(side="left", padx=(0, 6))
+        tk.Label(prompt_manual_f, text="개별 번호:", font=self.font_small, bg=self.color_bg).pack(side="left", padx=(8, 4))
         self.prompt_manual_selection_var = tk.StringVar(value=str(self.cfg.get("prompt_manual_selection", "") or ""))
         self.entry_prompt_manual_selection = tk.Entry(
             prompt_manual_f,
@@ -11659,7 +11639,7 @@ class FlowVisionApp:
         start_value = str(numbers[0] if numbers else 1)
         end_value = str(numbers[-1] if numbers else 1)
         raw = str(self.cfg.get("prompt_manual_selection", "") or "").strip()
-        enabled = bool(self.cfg.get("prompt_manual_selection_enabled", bool(raw)))
+        enabled = bool(raw)
         mode = "all"
         if enabled and raw:
             range_match = re.match(r"^\s*0*([1-9][0-9]*)\s*-\s*0*([1-9][0-9]*)\s*$", raw)
@@ -12781,8 +12761,6 @@ class FlowVisionApp:
             return
         spec = self._compress_numbers_to_spec(numbers, pad_width=0)
         self.prompt_manual_selection_var.set(spec)
-        if hasattr(self, "prompt_manual_selection_enabled_var"):
-            self.prompt_manual_selection_enabled_var.set(True)
         self.on_option_toggle()
         source_text = source_name or "최근 로그"
         self.log(f"🧩 프롬프트 개별 실행 자동채움: {spec} ({source_text})")
@@ -12971,7 +12949,7 @@ class FlowVisionApp:
         self.cfg["asset_search_button_selector"] = self.asset_search_btn_selector_var.get().strip() if hasattr(self, "asset_search_btn_selector_var") else self.cfg.get("asset_search_button_selector", "")
         self.cfg["asset_search_input_selector"] = self.asset_search_input_selector_var.get().strip() if hasattr(self, "asset_search_input_selector_var") else self.cfg.get("asset_search_input_selector", "")
         self.cfg["prompt_manual_selection"] = self.prompt_manual_selection_var.get().strip() if hasattr(self, "prompt_manual_selection_var") else str(self.cfg.get("prompt_manual_selection", "") or "").strip()
-        self.cfg["prompt_manual_selection_enabled"] = self.prompt_manual_selection_enabled_var.get() if hasattr(self, "prompt_manual_selection_enabled_var") else bool(self.cfg.get("prompt_manual_selection_enabled", bool(self.cfg.get("prompt_manual_selection", ""))))
+        self.cfg["prompt_manual_selection_enabled"] = bool(self.cfg.get("prompt_manual_selection", ""))
         self.cfg["prompt_reference_test_tag"] = self._normalized_prompt_reference_test_tag()
         self.cfg["prompt_reference_enabled"] = self.prompt_reference_enabled_var.get() if hasattr(self, "prompt_reference_enabled_var") else bool(self.cfg.get("prompt_reference_enabled", False))
         if hasattr(self, "prompt_reference_row_vars"):
