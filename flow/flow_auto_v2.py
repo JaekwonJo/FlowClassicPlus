@@ -741,9 +741,9 @@ class FlowVisionApp:
         except Exception:
             saved_w = 0
             saved_h = 0
-        if self.worker_mode == "prompt":
-            w = min(940, max(760, int(sw * 0.48)))
-            h = min(640, max(520, int(sh * 0.62)))
+        if self.worker_mode in ("prompt", "asset"):
+            w = min(960, max(780, int(sw * 0.50)))
+            h = min(680, max(540, int(sh * 0.66)))
         elif saved_w > 0 and saved_h > 0:
             w = min(sw - 40, max(860, saved_w))
             h = min(sh - 60, max(620, saved_h))
@@ -759,8 +759,8 @@ class FlowVisionApp:
             x = max((sw - w) // 2, 0)
             y = max((sh - h) // 2, 0)
         self.root.geometry(f"{w}x{h}+{x}+{y}")
-        if self.worker_mode == "prompt":
-            self.root.minsize(720, 500)
+        if self.worker_mode in ("prompt", "asset"):
+            self.root.minsize(740, 520)
         else:
             self.root.minsize(860, 620)
 
@@ -11426,6 +11426,160 @@ class FlowVisionApp:
         )
         self.lbl_worker_prompt_help.pack(fill="x", pady=(0, 6))
 
+        self.asset_worker_simple = tk.Frame(card, bg=self.color_card)
+
+        asset_defaults = self._asset_worker_selection_defaults()
+        self.worker_asset_project_var = tk.StringVar(value=project_values[active_project_idx] if project_values else "기본 프로젝트")
+        self.worker_asset_count_var = tk.StringVar(value=str(self.cfg.get("asset_prompt_variant_count", "x1") or "x1").strip().lower() or "x1")
+        self.worker_asset_interval_var = tk.StringVar(value=str(int(self.cfg.get("interval_seconds", 180) or 180)))
+        self.worker_asset_number_mode_var = tk.StringVar(value=asset_defaults["mode"])
+        self.worker_asset_range_start_var = tk.StringVar(value=asset_defaults["start"])
+        self.worker_asset_range_end_var = tk.StringVar(value=asset_defaults["end"])
+        self.worker_asset_manual_var = tk.StringVar(value=asset_defaults["manual"])
+        self.worker_asset_use_prompt_file_var = tk.BooleanVar(value=bool(self.cfg.get("asset_use_prompt_slot", False)))
+        self.worker_asset_prompt_file_var = tk.StringVar(value=str(self.cfg.get("asset_prompt_file", "") or "").strip())
+        self.worker_asset_summary_var = tk.StringVar()
+
+        asset_content = tk.Frame(self.asset_worker_simple, bg=self.color_card)
+        asset_content.pack(fill="x")
+        asset_content.grid_columnconfigure(0, weight=1, uniform="asset_block")
+        asset_content.grid_columnconfigure(1, weight=1, uniform="asset_block")
+
+        asset_basic_box = tk.Frame(asset_content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
+        asset_basic_box.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        tk.Label(asset_basic_box, text="기본 설정", font=self.font_body_bold, bg=self.color_panel_soft, fg=self.color_info).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 8))
+        asset_basic_box.grid_columnconfigure(1, weight=1)
+
+        tk.Label(asset_basic_box, text="프로젝트", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
+        self.combo_worker_asset_project = ttk.Combobox(asset_basic_box, textvariable=self.worker_asset_project_var, state="readonly", values=project_values, font=self.font_body)
+        self.combo_worker_asset_project.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(0, 8))
+
+        tk.Label(asset_basic_box, text="생성 개수", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=2, column=0, sticky="w", padx=12, pady=(0, 8))
+        self.combo_worker_asset_count = ttk.Combobox(
+            asset_basic_box,
+            textvariable=self.worker_asset_count_var,
+            state="readonly",
+            values=("x1", "x2", "x3", "x4"),
+            font=self.font_body,
+            width=8,
+        )
+        self.combo_worker_asset_count.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
+
+        tk.Label(asset_basic_box, text="작업 간격(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=12, pady=(0, 8))
+        tk.Entry(
+            asset_basic_box,
+            textvariable=self.worker_asset_interval_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        ).grid(row=3, column=1, sticky="ew", padx=(0, 12), pady=(0, 8), ipady=2)
+
+        asset_prompt_wrap = tk.Frame(asset_basic_box, bg=self.color_panel_soft)
+        asset_prompt_wrap.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
+        asset_prompt_wrap.grid_columnconfigure(1, weight=1)
+        tk.Checkbutton(
+            asset_prompt_wrap,
+            text="개별 프롬프트 파일 사용",
+            variable=self.worker_asset_use_prompt_file_var,
+            command=self._refresh_asset_worker_compact_summary,
+            bg=self.color_panel_soft,
+            fg=self.color_text,
+            activebackground=self.color_panel_soft,
+            activeforeground=self.color_text,
+            selectcolor=self.color_panel_soft,
+            font=self.font_small,
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
+        tk.Entry(
+            asset_prompt_wrap,
+            textvariable=self.worker_asset_prompt_file_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=(0, 6), ipady=2)
+        ttk.Button(asset_prompt_wrap, text="파일 선택", command=self._pick_asset_prompt_file_for_compact).grid(row=1, column=2, sticky="e")
+
+        asset_number_box = tk.Frame(asset_content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
+        asset_number_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        tk.Label(asset_number_box, text="번호 설정", font=self.font_body_bold, bg=self.color_panel_soft, fg=self.color_info).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 8))
+        asset_number_box.grid_columnconfigure(1, weight=1)
+
+        tk.Label(asset_number_box, text="번호 방식", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
+        asset_mode_wrap = tk.Frame(asset_number_box, bg=self.color_panel_soft)
+        asset_mode_wrap.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
+        ttk.Radiobutton(asset_mode_wrap, text="연속", value="range", variable=self.worker_asset_number_mode_var, command=self._refresh_asset_worker_compact_summary).pack(side="left")
+        ttk.Radiobutton(asset_mode_wrap, text="개별", value="manual", variable=self.worker_asset_number_mode_var, command=self._refresh_asset_worker_compact_summary).pack(side="left", padx=(8, 0))
+
+        tk.Label(asset_number_box, text="연속 범위", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=2, column=0, sticky="w", padx=12, pady=(0, 8))
+        asset_range_wrap = tk.Frame(asset_number_box, bg=self.color_panel_soft)
+        asset_range_wrap.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
+        tk.Entry(
+            asset_range_wrap,
+            textvariable=self.worker_asset_range_start_var,
+            width=7,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+            justify="center",
+        ).pack(side="left", ipady=2)
+        tk.Label(asset_range_wrap, text="~", bg=self.color_panel_soft, fg=self.color_text, font=self.font_small).pack(side="left", padx=6)
+        tk.Entry(
+            asset_range_wrap,
+            textvariable=self.worker_asset_range_end_var,
+            width=7,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+            justify="center",
+        ).pack(side="left", ipady=2)
+
+        tk.Label(asset_number_box, text="개별 번호", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=12, pady=(0, 12))
+        tk.Entry(
+            asset_number_box,
+            textvariable=self.worker_asset_manual_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        ).grid(row=3, column=1, sticky="ew", padx=(0, 12), pady=(0, 12), ipady=2)
+
+        asset_summary_box = tk.Frame(self.asset_worker_simple, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
+        asset_summary_box.pack(fill="x", pady=(6, 10))
+        self.lbl_worker_asset_summary = tk.Label(
+            asset_summary_box,
+            textvariable=self.worker_asset_summary_var,
+            font=self.font_small,
+            bg=self.color_panel_soft,
+            fg=self.color_info,
+            anchor="w",
+            justify="left",
+            padx=10,
+            pady=8,
+        )
+        self.lbl_worker_asset_summary.pack(fill="x")
+
+        asset_action_row = tk.Frame(self.asset_worker_simple, bg=self.color_card)
+        asset_action_row.pack(fill="x", pady=(2, 8))
+        ttk.Button(asset_action_row, text="■ 중지", command=self.on_stop).pack(side="left")
+        ttk.Button(asset_action_row, text="🤖 작업봇 창 열기", command=self._open_asset_worker_bot_from_compact).pack(side="right")
+        self.btn_worker_asset_start = ttk.Button(asset_action_row, text="▶ S자동화 시작", command=self._start_asset_worker_from_compact)
+        self.btn_worker_asset_start.pack(side="right", padx=(0, 8))
+
+        self.lbl_worker_asset_help = tk.Label(
+            self.asset_worker_simple,
+            text="S자동화 워커는 프로젝트와 번호만 맞춘 뒤 바로 시작하면 됩니다. 개별 프롬프트 파일은 필요할 때만 켜세요.",
+            font=self.font_small,
+            bg=self.color_card,
+            fg=self.color_text_sec,
+            anchor="w",
+            justify="left",
+            wraplength=760,
+        )
+        self.lbl_worker_asset_help.pack(fill="x", pady=(0, 6))
+
         for var in (
             self.worker_project_var,
             self.worker_prompt_slot_var,
@@ -11438,8 +11592,22 @@ class FlowVisionApp:
         ):
             var.trace_add("write", self._refresh_prompt_worker_compact_summary)
 
+        for var in (
+            self.worker_asset_project_var,
+            self.worker_asset_count_var,
+            self.worker_asset_interval_var,
+            self.worker_asset_number_mode_var,
+            self.worker_asset_range_start_var,
+            self.worker_asset_range_end_var,
+            self.worker_asset_manual_var,
+            self.worker_asset_prompt_file_var,
+        ):
+            var.trace_add("write", self._refresh_asset_worker_compact_summary)
+        self.worker_asset_use_prompt_file_var.trace_add("write", self._refresh_asset_worker_compact_summary)
+
         self._refresh_worker_compact_identity()
         self._refresh_prompt_worker_compact_summary()
+        self._refresh_asset_worker_compact_summary()
 
     def _refresh_worker_compact_identity(self):
         if hasattr(self, "lbl_worker_compact_subtitle"):
@@ -11543,6 +11711,130 @@ class FlowVisionApp:
             return
         self.on_start_prompt()
 
+    def _refresh_asset_worker_compact_summary(self, *_args):
+        if not hasattr(self, "worker_asset_summary_var"):
+            return
+        mode = str(self.worker_asset_number_mode_var.get() or "range").strip().lower() if hasattr(self, "worker_asset_number_mode_var") else "range"
+        if mode == "manual":
+            target = self.worker_asset_manual_var.get().strip() or "(비어 있음)"
+        else:
+            target = f"S{self.worker_asset_range_start_var.get().strip() or '-'} ~ S{self.worker_asset_range_end_var.get().strip() or '-'}"
+        prompt_file_text = "공통 프롬프트 사용"
+        if bool(self.worker_asset_use_prompt_file_var.get()) if hasattr(self, "worker_asset_use_prompt_file_var") else False:
+            prompt_file_text = self.worker_asset_prompt_file_var.get().strip() or "(파일 선택 필요)"
+        self.worker_asset_summary_var.set(
+            f"프로젝트: {self.worker_asset_project_var.get().strip() or '-'} | 생성: {self.worker_asset_count_var.get().strip() or 'x1'} | 대상: {target} | 프롬프트: {prompt_file_text}"
+        )
+
+    def _pick_asset_prompt_file_for_compact(self):
+        initial = str(self.worker_asset_prompt_file_var.get() or self.cfg.get("asset_prompt_file", "") or "").strip()
+        initial_path = self._resolve_prompt_source_path(initial)
+        initialdir = str(initial_path.parent) if initial_path and initial_path.parent.exists() else str(self.base)
+        picked = filedialog.askopenfilename(
+            initialdir=initialdir,
+            title="S자동화 개별 프롬프트 파일 선택",
+            filetypes=[("텍스트 파일", "*.txt"), ("모든 파일", "*.*")],
+        )
+        if not picked:
+            return
+        picked_path = Path(picked)
+        try:
+            rel = picked_path.relative_to(self.base)
+            stored = str(rel).replace("\\", "/")
+        except Exception:
+            stored = str(picked_path)
+        self.worker_asset_prompt_file_var.set(stored)
+
+    def _apply_asset_worker_compact_to_cfg(self, show_errors=True):
+        try:
+            interval_seconds = max(1, int(str(self.worker_asset_interval_var.get() or "180").strip()))
+        except Exception:
+            if show_errors:
+                messagebox.showwarning("안내", "작업 간격은 1초 이상 숫자로 적어주세요.", parent=self.root)
+            return False
+
+        profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
+        project_values = [str(item.get("project_name", "") or f"프로젝트 {idx+1}") for idx, item in enumerate(profiles)]
+        project_name = str(self.worker_asset_project_var.get() or "").strip()
+        project_idx = project_values.index(project_name) if project_name in project_values else self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0)
+        project_idx = self._clamp_project_profile_index(project_idx, default=0)
+        self.cfg["active_project_profile"] = project_idx
+        if profiles:
+            project = profiles[project_idx]
+            self.cfg["start_url"] = str(project.get("url", "") or self.cfg.get("start_url", "")).strip()
+
+        number_mode = str(self.worker_asset_number_mode_var.get() or "range").strip().lower()
+        manual_spec = ""
+        start_no = max(1, int(self.cfg.get("asset_loop_start", 1) or 1))
+        end_no = max(1, int(self.cfg.get("asset_loop_end", start_no) or start_no))
+        if number_mode == "manual":
+            manual_spec = str(self.worker_asset_manual_var.get() or "").strip()
+            if not manual_spec:
+                if show_errors:
+                    messagebox.showwarning("안내", "개별 번호 방식이면 번호를 적어주세요.", parent=self.root)
+                return False
+        else:
+            try:
+                start_no = int(str(self.worker_asset_range_start_var.get() or "1").strip())
+                end_no = int(str(self.worker_asset_range_end_var.get() or "1").strip())
+            except Exception:
+                if show_errors:
+                    messagebox.showwarning("안내", "연속 범위는 숫자로 적어주세요.", parent=self.root)
+                return False
+            if start_no > end_no:
+                start_no, end_no = end_no, start_no
+
+        use_prompt_file = bool(self.worker_asset_use_prompt_file_var.get()) if hasattr(self, "worker_asset_use_prompt_file_var") else False
+        prompt_file = str(self.worker_asset_prompt_file_var.get() or "").strip()
+        if use_prompt_file and not prompt_file:
+            if show_errors:
+                messagebox.showwarning("안내", "개별 프롬프트 파일을 사용하려면 파일을 선택해주세요.", parent=self.root)
+            return False
+
+        self.cfg["interval_seconds"] = interval_seconds
+        self.cfg["asset_loop_enabled"] = True
+        self.cfg["asset_loop_start"] = max(1, min(MAX_SCENE_NUMBER, start_no))
+        self.cfg["asset_loop_end"] = max(1, min(MAX_SCENE_NUMBER, end_no))
+        self.cfg["asset_manual_selection"] = manual_spec
+        self.cfg["asset_use_prompt_slot"] = use_prompt_file
+        self.cfg["asset_prompt_file"] = prompt_file if use_prompt_file else ""
+        self.cfg["asset_prompt_variant_count"] = str(self.worker_asset_count_var.get() or "x1").strip().lower() or "x1"
+        self.cfg["asset_prompt_media_mode"] = "video"
+        self.cfg["current_media_state"] = "video"
+        if hasattr(self, "entry_interval"):
+            try:
+                self.entry_interval.delete(0, "end")
+                self.entry_interval.insert(0, str(interval_seconds))
+            except Exception:
+                pass
+        if hasattr(self, "asset_loop_var"):
+            self.asset_loop_var.set(True)
+        if hasattr(self, "asset_loop_start_var"):
+            self.asset_loop_start_var.set(self._format_asset_number_text(self.cfg["asset_loop_start"]))
+        if hasattr(self, "asset_loop_end_var"):
+            self.asset_loop_end_var.set(self._format_asset_number_text(self.cfg["asset_loop_end"]))
+        if hasattr(self, "asset_manual_selection_var"):
+            self.asset_manual_selection_var.set(manual_spec)
+        if hasattr(self, "asset_use_prompt_slot_var"):
+            self.asset_use_prompt_slot_var.set(use_prompt_file)
+        if hasattr(self, "asset_prompt_file_display_var"):
+            self.asset_prompt_file_display_var.set(self.cfg["asset_prompt_file"])
+        self.save_config()
+        self._refresh_asset_prompt_slot_controls()
+        self.on_reload()
+        self._refresh_worker_quick_hud()
+        return True
+
+    def _open_asset_worker_bot_from_compact(self):
+        if not self._apply_asset_worker_compact_to_cfg(show_errors=True):
+            return
+        self.on_open_bot_work_window()
+
+    def _start_asset_worker_from_compact(self):
+        if not self._apply_asset_worker_compact_to_cfg(show_errors=True):
+            return
+        self.on_start_asset()
+
     def _refresh_worker_quick_hud(self):
         if not hasattr(self, "worker_quick_hud"):
             return
@@ -11623,14 +11915,27 @@ class FlowVisionApp:
                 widget.pack_configure(fill="x")
             else:
                 widget.pack_forget()
-        if self.worker_mode == "prompt":
+        if self.worker_mode in ("prompt", "asset"):
             if hasattr(self, "body_pane") and self.body_pane.winfo_ismapped():
                 self.body_pane.pack_forget()
             if hasattr(self, "bottom_frame") and self.bottom_frame.winfo_ismapped():
                 self.bottom_frame.grid_remove()
             if hasattr(self, "worker_compact_panel") and (not self.worker_compact_panel.winfo_ismapped()):
                 self.worker_compact_panel.pack(fill="both", expand=True)
-            self._refresh_prompt_worker_compact_summary()
+            if hasattr(self, "prompt_worker_simple"):
+                if self.worker_mode == "prompt":
+                    self.prompt_worker_simple.pack(fill="both", expand=True, padx=16, pady=(0, 14))
+                else:
+                    self.prompt_worker_simple.pack_forget()
+            if hasattr(self, "asset_worker_simple"):
+                if self.worker_mode == "asset":
+                    self.asset_worker_simple.pack(fill="both", expand=True, padx=16, pady=(0, 14))
+                else:
+                    self.asset_worker_simple.pack_forget()
+            if self.worker_mode == "prompt":
+                self._refresh_prompt_worker_compact_summary()
+            else:
+                self._refresh_asset_worker_compact_summary()
         else:
             if hasattr(self, "worker_compact_panel") and self.worker_compact_panel.winfo_ismapped():
                 self.worker_compact_panel.pack_forget()
