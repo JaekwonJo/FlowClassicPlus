@@ -743,10 +743,42 @@ class FlowVisionApp:
         else:
             w = min(1220, max(980, int(sw * 0.74)))
             h = min(900, max(720, int(sh * 0.80)))
-        x = max((sw - w) // 2, 0)
-        y = max((sh - h) // 2, 0)
+        if self.worker_mode in ("prompt", "asset", "download"):
+            x, y = self._worker_window_origin(w, h, kind="app")
+        else:
+            x = max((sw - w) // 2, 0)
+            y = max((sh - h) // 2, 0)
         self.root.geometry(f"{w}x{h}+{x}+{y}")
         self.root.minsize(860, 620)
+
+    def _worker_window_origin(self, width, height, kind="app"):
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        cols = 3 if sw >= 2100 else 2 if sw >= 1400 else 1
+        rows = 2 if sh >= 960 else 1
+        slot_total = max(1, cols * rows)
+        slot_idx = self._worker_palette_index() % slot_total
+        col = slot_idx % cols
+        row = slot_idx // cols
+
+        pad_x = 26
+        pad_top = 34
+        pad_bottom = 78
+        span_x = max(sw - width - (pad_x * 2), 0)
+        span_y = max(sh - height - pad_top - pad_bottom, 0)
+
+        x = pad_x
+        y = pad_top
+        if cols > 1:
+            x = pad_x + int(round(span_x * (col / max(1, cols - 1))))
+        if rows > 1:
+            y = pad_top + int(round(span_y * (row / max(1, rows - 1))))
+
+        if kind == "browser":
+            x = min(max(pad_x, x + 42), max(pad_x, sw - width - pad_x))
+            y = min(max(pad_top, y + 54), max(pad_top, sh - height - pad_bottom))
+
+        return max(x, 0), max(y, 0)
 
     def _clamp_percent(self, value, default=100, minimum=50, maximum=150):
         try:
@@ -1026,6 +1058,7 @@ class FlowVisionApp:
             return
         try:
             win_w, win_h, viewport_w, viewport_h = self._compute_browser_window_size()
+            pos_x, pos_y = self._worker_window_origin(win_w, win_h, kind="browser") if self.worker_mode in ("prompt", "asset", "download") else (24, 24)
             cdp_owner = getattr(self.page, "context", None) or self.browser_context
             if cdp_owner and hasattr(cdp_owner, "new_cdp_session"):
                 session = cdp_owner.new_cdp_session(self.page)
@@ -1037,8 +1070,8 @@ class FlowVisionApp:
                         {
                             "windowId": window_id,
                             "bounds": {
-                                "left": 24,
-                                "top": 24,
+                                "left": pos_x,
+                                "top": pos_y,
                                 "width": win_w,
                                 "height": win_h,
                             },
@@ -2094,6 +2127,7 @@ class FlowVisionApp:
         channel = (self.cfg.get("browser_channel") or "chrome").strip() or None
         headless = bool(self.cfg.get("browser_headless", False))
         win_w, win_h, viewport_w, viewport_h = self._compute_browser_window_size()
+        browser_pos_x, browser_pos_y = self._worker_window_origin(win_w, win_h, kind="browser") if self.worker_mode in ("prompt", "asset", "download") else (24, 24)
 
         def _launch_with(_profile_path, _channel):
             return self.playwright.chromium.launch_persistent_context(
@@ -2104,7 +2138,7 @@ class FlowVisionApp:
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",
-                    "--window-position=24,24",
+                    f"--window-position={browser_pos_x},{browser_pos_y}",
                     f"--window-size={win_w},{win_h}",
                 ],
             )
@@ -9175,14 +9209,14 @@ class FlowVisionApp:
         mid_frame.grid(row=1, column=0, sticky="nsew", padx=6, pady=(6, 2))
         self.mid_frame = mid_frame
 
-        self.worker_quick_hud = tk.Frame(mid_frame, bg="#13233A", highlightbackground="#355273", highlightthickness=1)
-        hud_top = tk.Frame(self.worker_quick_hud, bg="#13233A")
+        self.worker_quick_hud = tk.Frame(mid_frame, bg=self.color_header, highlightbackground=self.color_accent, highlightthickness=1)
+        hud_top = tk.Frame(self.worker_quick_hud, bg=self.color_header)
         hud_top.pack(fill="x", padx=10, pady=(8, 2))
         self.lbl_worker_hud_title = tk.Label(
             hud_top,
             text="워커 HUD",
             font=self.font_body_bold,
-            bg="#13233A",
+            bg=self.color_header,
             fg=self.color_info,
         )
         self.lbl_worker_hud_title.pack(side="left")
@@ -9190,21 +9224,21 @@ class FlowVisionApp:
             hud_top,
             text="프로젝트: -",
             font=self.font_small,
-            bg="#13233A",
+            bg=self.color_header,
             fg=self.color_text,
         )
         self.lbl_worker_hud_project.pack(side="right")
-        hud_mid = tk.Frame(self.worker_quick_hud, bg="#13233A")
+        hud_mid = tk.Frame(self.worker_quick_hud, bg=self.color_header)
         hud_mid.pack(fill="x", padx=10, pady=(0, 4))
         self.lbl_worker_hud_progress = tk.Label(
             hud_mid,
             text="진행률: 0 / 0 (0.0%)",
             font=self.font_mono_small,
-            bg="#13233A",
+            bg=self.color_header,
             fg=self.color_accent,
         )
         self.lbl_worker_hud_progress.pack(side="left")
-        hud_actions = tk.Frame(hud_mid, bg="#13233A")
+        hud_actions = tk.Frame(hud_mid, bg=self.color_header)
         hud_actions.pack(side="right")
         self.btn_worker_open_bot = ttk.Button(
             hud_actions,
@@ -9220,16 +9254,24 @@ class FlowVisionApp:
             command=self._on_worker_quick_start,
         )
         self.btn_worker_quick_start.pack(side="left", padx=(6, 0))
-        hud_bottom = tk.Frame(self.worker_quick_hud, bg="#13233A")
+        hud_bottom = tk.Frame(self.worker_quick_hud, bg=self.color_header)
         hud_bottom.pack(fill="x", padx=10, pady=(0, 8))
         self.lbl_worker_hud_status = tk.Label(
             hud_bottom,
             text="상태: 준비 완료",
             font=self.font_small,
-            bg="#13233A",
+            bg=self.color_header,
             fg=self.color_success,
         )
         self.lbl_worker_hud_status.pack(side="left")
+        self.lbl_worker_hud_meta = tk.Label(
+            hud_bottom,
+            text="설정: - | 프로필: -",
+            font=self.font_small,
+            bg=self.color_header,
+            fg=self.color_text_sec,
+        )
+        self.lbl_worker_hud_meta.pack(side="right")
 
         self.body_pane = ttk.Panedwindow(mid_frame, orient="horizontal")
         self.body_pane.pack(fill="both", expand=True)
@@ -11154,6 +11196,10 @@ class FlowVisionApp:
             self.lbl_worker_hud_project.config(text=f"프로젝트: {project_name}")
             self.lbl_worker_hud_status.config(text=f"상태: {status_text}", fg=status_color)
             self.lbl_worker_hud_progress.config(text=f"진행률: {progress_text}")
+            if hasattr(self, "lbl_worker_hud_meta"):
+                self.lbl_worker_hud_meta.config(
+                    text=f"설정: {self._current_config_display_name()} | 프로필: {self._browser_profile_dir_name()}"
+                )
             quick_start_text = {
                 "prompt": "▶ 이미지 시작",
                 "asset": "▶ S자동화 시작",
