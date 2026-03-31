@@ -11006,6 +11006,32 @@ class FlowVisionApp:
             "download": {"title": "다운로드 워커", "target": "download", "default_name": "다운로드_워커1"},
         }.get(kind, {"title": "워커", "target": "all", "default_name": "워커1"})
 
+    def _suggest_worker_bundle_name(self, kind):
+        meta = self._worker_mode_meta(kind)
+        default_name = str(meta.get("default_name", "워커1") or "워커1").strip()
+        base_name = re.sub(r"\d+$", "", default_name).rstrip("_") or default_name
+        existing = set()
+        try:
+            existing.add(self._browser_profile_dir_name())
+        except Exception:
+            pass
+        try:
+            existing.add(self._current_config_display_name())
+        except Exception:
+            pass
+        for path in self.base.glob("flow_config_*.json"):
+            existing.add(config_display_name_from_path(path))
+        for path in self.base.iterdir():
+            if path.is_dir():
+                existing.add(path.name)
+
+        idx = 1
+        while True:
+            candidate = f"{base_name}{idx}"
+            if candidate not in existing and sanitize_named_token(candidate, fallback="worker") not in existing:
+                return candidate
+            idx += 1
+
     def _launch_worker_process(self, kind, worker_name, config_name, browser_profile_name, project_index=0):
         meta = self._worker_mode_meta(kind)
         worker_name = str(worker_name or "").strip() or meta["default_name"]
@@ -11044,12 +11070,13 @@ class FlowVisionApp:
 
     def _open_worker_launcher(self, kind):
         meta = self._worker_mode_meta(kind)
+        suggested_name = self._suggest_worker_bundle_name(kind)
         win = tk.Toplevel(self.home_window or self.root)
         win.title(f"{meta['title']} 실행")
         win.configure(bg=self.color_bg)
         win.transient(self.home_window or self.root)
         win.grab_set()
-        win.geometry("560x340")
+        win.geometry("590x395")
         win.resizable(False, False)
 
         outer = tk.Frame(win, bg=self.color_bg)
@@ -11063,16 +11090,16 @@ class FlowVisionApp:
             bg=self.color_bg,
             fg=self.color_text_sec,
             justify="left",
-            wraplength=500,
+            wraplength=540,
         ).pack(anchor="w", pady=(6, 14))
 
         form = tk.Frame(outer, bg=self.color_bg)
         form.pack(fill="x")
         form.grid_columnconfigure(1, weight=1)
 
-        worker_name_var = tk.StringVar(value=meta["default_name"])
-        config_name_var = tk.StringVar(value=sanitize_named_token(meta["default_name"], fallback="worker"))
-        profile_name_var = tk.StringVar(value=sanitize_named_token(meta["default_name"], fallback="flow_human_profile_pw"))
+        worker_name_var = tk.StringVar(value=suggested_name)
+        config_name_var = tk.StringVar(value=sanitize_named_token(suggested_name, fallback="worker"))
+        profile_name_var = tk.StringVar(value=sanitize_named_token(suggested_name, fallback="flow_human_profile_pw"))
 
         tk.Label(form, text="워커 이름", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=0, column=0, sticky="w", pady=(0, 8))
         worker_name_entry = tk.Entry(form, textvariable=worker_name_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
@@ -11109,10 +11136,10 @@ class FlowVisionApp:
             fg=self.color_info,
             justify="left",
         )
-        hint.pack(anchor="w", pady=(10, 0))
+        hint.pack(anchor="w", pady=(10, 8))
 
         bottom = tk.Frame(outer, bg=self.color_bg)
-        bottom.pack(fill="x", pady=(18, 0))
+        bottom.pack(fill="x", pady=(18, 6))
 
         def _launch():
             project_idx = project_values.index(project_var.get()) if project_var.get() in project_values else 0
