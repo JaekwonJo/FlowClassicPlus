@@ -11244,8 +11244,19 @@ class FlowVisionApp:
             "--target",
             meta["target"],
         ]
-        subprocess.Popen(cmd, cwd=str(self.base.parent))
+        popen_kwargs = {
+            "cwd": str(self.base.parent),
+            "close_fds": True,
+        }
+        if os.name == "nt":
+            creationflags = 0
+            for flag_name in ("CREATE_NEW_PROCESS_GROUP", "DETACHED_PROCESS"):
+                creationflags |= int(getattr(subprocess, flag_name, 0) or 0)
+            if creationflags:
+                popen_kwargs["creationflags"] = creationflags
+        proc = subprocess.Popen(cmd, **popen_kwargs)
         self.log(f"🚀 워커 실행: {meta['title']} | 이름={worker_name} | 설정={config_name} | 프로필={browser_profile_name}")
+        return proc
 
     def _open_worker_launcher(self, kind):
         meta = self._worker_mode_meta(kind)
@@ -11254,10 +11265,20 @@ class FlowVisionApp:
         win.title(f"{meta['title']} 실행")
         win.configure(bg=self.color_bg)
         win.transient(self.home_window or self.root)
-        win.grab_set()
-        launcher_height = 565 if kind == "prompt" else 395
-        win.geometry(f"590x{launcher_height}")
-        win.resizable(False, False)
+        launcher_size = {
+            "prompt": (740, 590),
+            "asset": (820, 540),
+            "download": (640, 420),
+        }.get(kind, (640, 420))
+        launcher_width, launcher_height = launcher_size
+        win.geometry(f"{launcher_width}x{launcher_height}")
+        win.minsize(max(launcher_width - 40, 620), max(launcher_height - 20, 400))
+        win.resizable(True, True)
+        try:
+            win.lift()
+            win.focus_force()
+        except Exception:
+            pass
 
         outer = tk.Frame(win, bg=self.color_bg)
         outer.pack(fill="both", expand=True, padx=18, pady=18)
@@ -11270,7 +11291,7 @@ class FlowVisionApp:
             bg=self.color_bg,
             fg=self.color_text_sec,
             justify="left",
-            wraplength=540,
+            wraplength=max(launcher_width - 50, 560),
         ).pack(anchor="w", pady=(6, 14))
 
         form = tk.Frame(outer, bg=self.color_bg)
@@ -11385,6 +11406,7 @@ class FlowVisionApp:
             entry_manual = tk.Entry(
                 detail_box,
                 textvariable=manual_var,
+                width=36,
                 bg=self.color_input_bg,
                 fg=self.color_input_fg,
                 insertbackground=self.color_input_fg,
@@ -11402,7 +11424,7 @@ class FlowVisionApp:
                 fg=self.color_text_sec,
                 anchor="w",
                 justify="left",
-                wraplength=540,
+                wraplength=max(launcher_width - 60, 600),
             ).grid(row=4, column=0, columnspan=4, sticky="ew")
 
             def _refresh_prompt_summary(*_args):
@@ -11528,6 +11550,7 @@ class FlowVisionApp:
             entry_manual = tk.Entry(
                 detail_box,
                 textvariable=manual_var,
+                width=44,
                 bg=self.color_input_bg,
                 fg=self.color_input_fg,
                 insertbackground=self.color_input_fg,
@@ -11596,7 +11619,7 @@ class FlowVisionApp:
                 fg=self.color_text_sec,
                 anchor="w",
                 justify="left",
-                wraplength=540,
+                wraplength=max(launcher_width - 60, 620),
             ).grid(row=5, column=0, columnspan=4, sticky="ew")
 
             def _refresh_asset_summary(*_args):
@@ -11649,8 +11672,28 @@ class FlowVisionApp:
         )
         hint.pack(anchor="w", pady=(10, 8))
 
+        launch_status_var = tk.StringVar(value="")
+        lbl_launch_status = tk.Label(
+            outer,
+            textvariable=launch_status_var,
+            font=self.font_small,
+            bg=self.color_bg,
+            fg=self.color_success,
+            anchor="w",
+            justify="left",
+        )
+        lbl_launch_status.pack(fill="x", pady=(0, 4))
+
         bottom = tk.Frame(outer, bg=self.color_bg)
         bottom.pack(fill="x", pady=(18, 6))
+
+        def _prepare_next_worker_names():
+            next_name = self._suggest_worker_bundle_name(kind)
+            worker_name_var.set(next_name)
+            config_name_var.set(sanitize_named_token(next_name, fallback="worker"))
+            profile_name_var.set(self._sanitize_browser_profile_name(next_name))
+            worker_name_entry.focus_force()
+            worker_name_entry.selection_range(0, "end")
 
         def _launch():
             project_idx = project_values.index(project_var.get()) if project_var.get() in project_values else 0
@@ -11734,8 +11777,35 @@ class FlowVisionApp:
                     "asset_prompt_media_mode": "video",
                     "current_media_state": "video",
                 }
-            self._launch_worker_process(kind, worker_name_var.get(), config_name_var.get(), profile_name_var.get(), project_idx, extra_cfg=extra_cfg)
-            win.destroy()
+            try:
+                proc = self._launch_worker_process(
+                    kind,
+                    worker_name_var.get(),
+                    config_name_var.get(),
+                    profile_name_var.get(),
+                    project_idx,
+                    extra_cfg=extra_cfg,
+                )
+            except Exception as e:
+                messagebox.showerror("워커 실행 실패", f"{meta['title']} 실행 실패:\n{e}", parent=win)
+                return
+            requested_name = worker_name_var.get().strip() or meta["default_name"]
+            launch_status_var.set(f"{requested_name} 실행 요청 중... 잠깐만 기다려주세요.")
+
+            def _confirm_worker_launch():
+                if proc.poll() is not None:
+                    launch_status_var.set("")
+                    messagebox.showwarning(
+                        "워커 실행 확인 필요",
+                        f"{requested_name} 창이 바로 열리지 않았습니다.\n"
+                        "실행 직후 종료된 것 같으니, 지금 설정으로 다시 시도하거나 메인 작업창 로그를 확인해주세요.",
+                        parent=win,
+                    )
+                    return
+                launch_status_var.set(f"{requested_name} 실행 요청 완료. 같은 창에서 다음 워커도 계속 만들 수 있습니다.")
+                _prepare_next_worker_names()
+
+            win.after(700, _confirm_worker_launch)
 
         ttk.Button(bottom, text="취소", command=win.destroy).pack(side="right")
         ttk.Button(bottom, text=f"{meta['title']} 열기", command=_launch).pack(side="right", padx=(0, 8))
