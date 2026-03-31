@@ -99,6 +99,7 @@ DEFAULT_CONFIG = {
     "submit_area": None,  # 구버전 호환용(미사용)
     "afk_area": None,  # 구버전 호환용(미사용)
     "afk_mode": False,
+    "countdown_alert_enabled": True,
     "prompt_slots": [],
     "active_prompt_slot": 0,
     "sound_enabled": True,
@@ -735,7 +736,10 @@ class FlowVisionApp:
         except Exception:
             saved_w = 0
             saved_h = 0
-        if saved_w > 0 and saved_h > 0:
+        if self.worker_mode == "prompt":
+            w = min(940, max(760, int(sw * 0.48)))
+            h = min(640, max(520, int(sh * 0.62)))
+        elif saved_w > 0 and saved_h > 0:
             w = min(sw - 40, max(860, saved_w))
             h = min(sh - 60, max(620, saved_h))
         elif sw <= 1600 or sh <= 900:
@@ -750,7 +754,10 @@ class FlowVisionApp:
             x = max((sw - w) // 2, 0)
             y = max((sh - h) // 2, 0)
         self.root.geometry(f"{w}x{h}+{x}+{y}")
-        self.root.minsize(860, 620)
+        if self.worker_mode == "prompt":
+            self.root.minsize(720, 500)
+        else:
+            self.root.minsize(860, 620)
 
     def _worker_window_origin(self, width, height, kind="app"):
         sw = self.root.winfo_screenwidth()
@@ -2012,6 +2019,8 @@ class FlowVisionApp:
             self.cfg["browser_profile_dir"] = new_name
             self.save_config()
             self._refresh_browser_profile_ui()
+            self._refresh_worker_compact_identity()
+            self._refresh_worker_quick_hud()
             self._shutdown_browser()
             self.log(f"🆕 새 브라우저 프로필 준비 완료: {current} -> {new_name}")
             messagebox.showinfo(
@@ -2052,6 +2061,8 @@ class FlowVisionApp:
             self.cfg["browser_profile_dir"] = new_name
             self.save_config()
             self._refresh_browser_profile_ui()
+            self._refresh_worker_compact_identity()
+            self._refresh_worker_quick_hud()
             self._shutdown_browser()
             self.log(f"✏️ 브라우저 프로필 이름 변경: {current} -> {new_name}")
             messagebox.showinfo("브라우저 프로필 이름 변경", f"브라우저 프로필 이름을 바꿨습니다.\n\n- 이전: {current}\n- 새 이름: {new_name}", parent=self.root)
@@ -9274,6 +9285,9 @@ class FlowVisionApp:
         )
         self.lbl_worker_hud_meta.pack(side="right")
 
+        self.worker_compact_panel = tk.Frame(mid_frame, bg=self.color_bg)
+        self._build_worker_compact_panel()
+
         self.body_pane = ttk.Panedwindow(mid_frame, orient="horizontal")
         self.body_pane.pack(fill="both", expand=True)
 
@@ -9491,6 +9505,19 @@ class FlowVisionApp:
         self.lang_var = tk.BooleanVar(value=(self.cfg.get("language_mode", "en") == "ko_en"))
         c_lang.config(variable=self.lang_var)
         c_lang.grid(row=1, column=0, columnspan=2, sticky="w", padx=5)
+
+        c_alert = tk.Checkbutton(
+            op_f,
+            text="봇 출동 준비 팝업",
+            variable=tk.BooleanVar(),
+            command=self.on_option_toggle,
+            bg=self.color_bg,
+            font=self.font_body,
+            activebackground=self.color_bg,
+        )
+        self.countdown_alert_var = tk.BooleanVar(value=bool(self.cfg.get("countdown_alert_enabled", True)))
+        c_alert.config(variable=self.countdown_alert_var)
+        c_alert.grid(row=2, column=0, columnspan=2, sticky="w", padx=5)
         
         # [NEW] Input Mode Selection
         tk.Label(left_card, text="⌨️ 입력 방식 선택", font=self.font_body_bold, bg=self.color_bg).pack(anchor="w", pady=(15, 0))
@@ -11183,6 +11210,298 @@ class FlowVisionApp:
             return
         self.on_start()
 
+    def _build_worker_compact_panel(self):
+        card = tk.Frame(self.worker_compact_panel, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
+        card.pack(fill="both", expand=True, padx=2, pady=(0, 2))
+        self.worker_compact_card = card
+
+        head = tk.Frame(card, bg=self.color_card)
+        head.pack(fill="x", padx=16, pady=(14, 8))
+        self.lbl_worker_compact_title = tk.Label(
+            head,
+            text="워커",
+            font=self.font_section,
+            bg=self.color_card,
+            fg=self.color_text,
+        )
+        self.lbl_worker_compact_title.pack(anchor="w")
+        self.lbl_worker_compact_subtitle = tk.Label(
+            head,
+            text="",
+            font=self.font_small,
+            bg=self.color_card,
+            fg=self.color_text_sec,
+            justify="left",
+        )
+        self.lbl_worker_compact_subtitle.pack(anchor="w", pady=(4, 0))
+
+        meta_strip = tk.Frame(card, bg="#1B2D49", highlightbackground="#355273", highlightthickness=1)
+        meta_strip.pack(fill="x", padx=16, pady=(0, 12))
+        meta_left = tk.Frame(meta_strip, bg="#1B2D49")
+        meta_left.pack(side="left", fill="x", expand=True, padx=10, pady=8)
+        self.lbl_worker_compact_identity = tk.Label(
+            meta_left,
+            text="설정: -",
+            font=self.font_small,
+            bg="#1B2D49",
+            fg=self.color_text,
+            justify="left",
+        )
+        self.lbl_worker_compact_identity.pack(anchor="w")
+        self.lbl_worker_compact_profile_state = tk.Label(
+            meta_left,
+            text="현재 프로필: -",
+            font=self.font_small,
+            bg="#1B2D49",
+            fg=self.color_info,
+            justify="left",
+        )
+        self.lbl_worker_compact_profile_state.pack(anchor="w", pady=(4, 0))
+        meta_right = tk.Frame(meta_strip, bg="#1B2D49")
+        meta_right.pack(side="right", padx=10, pady=8)
+        ttk.Button(meta_right, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left")
+        ttk.Button(meta_right, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
+
+        self.prompt_worker_simple = tk.Frame(card, bg=self.color_card)
+        self.prompt_worker_simple.pack(fill="both", expand=True, padx=16, pady=(0, 14))
+
+        profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
+        project_values = [str(item.get("project_name", "") or f"프로젝트 {idx+1}") for idx, item in enumerate(profiles)]
+        active_project_idx = self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0)
+        slot_names = self._prompt_slot_names()
+        active_slot_idx = self._clamp_slot_index(self.cfg.get("active_prompt_slot", 0), default=0)
+        defaults = self._prompt_worker_selection_defaults(active_slot_idx)
+
+        self.worker_project_var = tk.StringVar(value=project_values[active_project_idx] if project_values else "기본 프로젝트")
+        self.worker_prompt_slot_var = tk.StringVar(value=slot_names[active_slot_idx] if slot_names else "")
+        self.worker_prompt_count_var = tk.StringVar(value=str(self.cfg.get("prompt_variant_count", "x1") or "x1").strip().lower() or "x1")
+        self.worker_prompt_interval_var = tk.StringVar(value=str(int(self.cfg.get("interval_seconds", 180) or 180)))
+        self.worker_prompt_number_mode_var = tk.StringVar(value=defaults["mode"])
+        self.worker_prompt_range_start_var = tk.StringVar(value=defaults["start"])
+        self.worker_prompt_range_end_var = tk.StringVar(value=defaults["end"])
+        self.worker_prompt_manual_var = tk.StringVar(value=defaults["manual"])
+        self.worker_prompt_summary_var = tk.StringVar()
+
+        form = tk.Frame(self.prompt_worker_simple, bg=self.color_card)
+        form.pack(fill="x")
+        form.grid_columnconfigure(1, weight=1)
+        form.grid_columnconfigure(3, weight=1)
+
+        tk.Label(form, text="프로젝트", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=0, column=0, sticky="w", pady=(0, 8))
+        self.combo_worker_project = ttk.Combobox(form, textvariable=self.worker_project_var, state="readonly", values=project_values, font=self.font_body)
+        self.combo_worker_project.grid(row=0, column=1, sticky="ew", padx=(8, 14), pady=(0, 8))
+
+        tk.Label(form, text="프롬프트 파일", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=0, column=2, sticky="w", pady=(0, 8))
+        self.combo_worker_prompt_slot = ttk.Combobox(form, textvariable=self.worker_prompt_slot_var, state="readonly", values=slot_names, font=self.font_body)
+        self.combo_worker_prompt_slot.grid(row=0, column=3, sticky="ew", pady=(0, 8))
+
+        tk.Label(form, text="생성 개수", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=1, column=0, sticky="w", pady=(0, 8))
+        self.combo_worker_prompt_count = ttk.Combobox(
+            form,
+            textvariable=self.worker_prompt_count_var,
+            state="readonly",
+            values=("x1", "x2", "x3", "x4"),
+            font=self.font_body,
+            width=8,
+        )
+        self.combo_worker_prompt_count.grid(row=1, column=1, sticky="w", padx=(8, 14), pady=(0, 8))
+
+        tk.Label(form, text="작업 간격(초)", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=1, column=2, sticky="w", pady=(0, 8))
+        tk.Entry(
+            form,
+            textvariable=self.worker_prompt_interval_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        ).grid(row=1, column=3, sticky="ew", pady=(0, 8), ipady=2)
+
+        tk.Label(form, text="번호 방식", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=2, column=0, sticky="w", pady=(0, 8))
+        mode_wrap = tk.Frame(form, bg=self.color_card)
+        mode_wrap.grid(row=2, column=1, columnspan=3, sticky="w", pady=(0, 8))
+        ttk.Radiobutton(mode_wrap, text="전체", value="all", variable=self.worker_prompt_number_mode_var, command=self._refresh_prompt_worker_compact_summary).pack(side="left")
+        ttk.Radiobutton(mode_wrap, text="연속", value="range", variable=self.worker_prompt_number_mode_var, command=self._refresh_prompt_worker_compact_summary).pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(mode_wrap, text="개별", value="manual", variable=self.worker_prompt_number_mode_var, command=self._refresh_prompt_worker_compact_summary).pack(side="left", padx=(8, 0))
+
+        tk.Label(form, text="연속 범위", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=3, column=0, sticky="w", pady=(0, 8))
+        range_wrap = tk.Frame(form, bg=self.color_card)
+        range_wrap.grid(row=3, column=1, sticky="w", padx=(8, 14), pady=(0, 8))
+        tk.Entry(
+            range_wrap,
+            textvariable=self.worker_prompt_range_start_var,
+            width=7,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+            justify="center",
+        ).pack(side="left", ipady=2)
+        tk.Label(range_wrap, text="~", bg=self.color_card, fg=self.color_text, font=self.font_small).pack(side="left", padx=6)
+        tk.Entry(
+            range_wrap,
+            textvariable=self.worker_prompt_range_end_var,
+            width=7,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+            justify="center",
+        ).pack(side="left", ipady=2)
+
+        tk.Label(form, text="개별 번호", font=self.font_small, bg=self.color_card, fg=self.color_text).grid(row=3, column=2, sticky="w", pady=(0, 8))
+        tk.Entry(
+            form,
+            textvariable=self.worker_prompt_manual_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        ).grid(row=3, column=3, sticky="ew", pady=(0, 8), ipady=2)
+
+        self.lbl_worker_prompt_summary = tk.Label(
+            self.prompt_worker_simple,
+            textvariable=self.worker_prompt_summary_var,
+            font=self.font_small,
+            bg=self.color_card,
+            fg=self.color_info,
+            anchor="w",
+            justify="left",
+        )
+        self.lbl_worker_prompt_summary.pack(fill="x", pady=(4, 8))
+
+        action_row = tk.Frame(self.prompt_worker_simple, bg=self.color_card)
+        action_row.pack(fill="x", pady=(8, 8))
+        ttk.Button(action_row, text="🤖 작업봇 창 열기", command=self._open_prompt_worker_bot_from_compact).pack(side="left")
+        self.btn_worker_prompt_start = ttk.Button(action_row, text="▶ 이미지 자동화 시작", command=self._start_prompt_worker_from_compact)
+        self.btn_worker_prompt_start.pack(side="left", padx=(8, 0))
+        ttk.Button(action_row, text="■ 중지", command=self.on_stop).pack(side="left", padx=(8, 0))
+
+        self.lbl_worker_prompt_help = tk.Label(
+            self.prompt_worker_simple,
+            text="이 창이 실제 이미지 워커입니다. 여기서 설정하고 바로 작업봇 창을 열거나 자동화를 시작하면 됩니다.",
+            font=self.font_small,
+            bg=self.color_card,
+            fg=self.color_text_sec,
+            anchor="w",
+            justify="left",
+            wraplength=760,
+        )
+        self.lbl_worker_prompt_help.pack(fill="x", pady=(0, 6))
+
+        for var in (
+            self.worker_project_var,
+            self.worker_prompt_slot_var,
+            self.worker_prompt_count_var,
+            self.worker_prompt_interval_var,
+            self.worker_prompt_number_mode_var,
+            self.worker_prompt_range_start_var,
+            self.worker_prompt_range_end_var,
+            self.worker_prompt_manual_var,
+        ):
+            var.trace_add("write", self._refresh_prompt_worker_compact_summary)
+
+        self._refresh_worker_compact_identity()
+        self._refresh_prompt_worker_compact_summary()
+
+    def _refresh_worker_compact_identity(self):
+        if hasattr(self, "lbl_worker_compact_subtitle"):
+            self.lbl_worker_compact_subtitle.config(text="이 창에서 바로 작업봇 창을 열고 자동화를 시작하면 됩니다.")
+        if hasattr(self, "lbl_worker_compact_identity"):
+            self.lbl_worker_compact_identity.config(
+                text=f"설정: {self._current_config_display_name()} | 워커: {self.worker_name or self._worker_mode_meta(self.worker_mode).get('default_name', '워커1')}"
+            )
+        if hasattr(self, "lbl_worker_compact_profile_state"):
+            self.lbl_worker_compact_profile_state.config(text=f"현재 프로필: {self._browser_profile_dir_name()}")
+
+    def _refresh_prompt_worker_compact_summary(self, *_args):
+        if not hasattr(self, "worker_prompt_summary_var"):
+            return
+        slot_text = str(self.worker_prompt_slot_var.get() or "-").strip() if hasattr(self, "worker_prompt_slot_var") else "-"
+        count_text = str(self.worker_prompt_count_var.get() or "x1").strip()
+        mode = str(self.worker_prompt_number_mode_var.get() or "all").strip().lower() if hasattr(self, "worker_prompt_number_mode_var") else "all"
+        if mode == "range":
+            target = f"{self.worker_prompt_range_start_var.get().strip() or '-'} ~ {self.worker_prompt_range_end_var.get().strip() or '-'}"
+        elif mode == "manual":
+            target = self.worker_prompt_manual_var.get().strip() or "(비어 있음)"
+        else:
+            target = "전체"
+        self.worker_prompt_summary_var.set(
+            f"프로젝트: {self.worker_project_var.get().strip() or '-'} | 파일: {slot_text} | 생성: {count_text} | 대상: {target}"
+        )
+
+    def _apply_prompt_worker_compact_to_cfg(self, show_errors=True):
+        try:
+            interval_seconds = max(1, int(str(self.worker_prompt_interval_var.get() or "180").strip()))
+        except Exception:
+            if show_errors:
+                messagebox.showwarning("안내", "작업 간격은 1초 이상 숫자로 적어주세요.", parent=self.root)
+            return False
+
+        profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
+        project_values = [str(item.get("project_name", "") or f"프로젝트 {idx+1}") for idx, item in enumerate(profiles)]
+        project_name = str(self.worker_project_var.get() or "").strip()
+        project_idx = project_values.index(project_name) if project_name in project_values else self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0)
+        project_idx = self._clamp_project_profile_index(project_idx, default=0)
+        self.cfg["active_project_profile"] = project_idx
+        if profiles:
+            project = profiles[project_idx]
+            self.cfg["start_url"] = str(project.get("url", "") or self.cfg.get("start_url", "")).strip()
+
+        slot_names = self._prompt_slot_names()
+        slot_name = str(self.worker_prompt_slot_var.get() or "").strip()
+        slot_idx = slot_names.index(slot_name) if slot_name in slot_names else self._clamp_slot_index(self.cfg.get("active_prompt_slot", 0), default=0)
+        slot_idx = self._clamp_slot_index(slot_idx, default=0)
+        slot_info = (self.cfg.get("prompt_slots", []) or [{}])[slot_idx]
+
+        number_mode = str(self.worker_prompt_number_mode_var.get() or "all").strip().lower()
+        selection_spec = ""
+        if number_mode == "range":
+            try:
+                start_no = int(str(self.worker_prompt_range_start_var.get() or "1").strip())
+                end_no = int(str(self.worker_prompt_range_end_var.get() or "1").strip())
+            except Exception:
+                if show_errors:
+                    messagebox.showwarning("안내", "연속 범위는 숫자로 적어주세요.", parent=self.root)
+                return False
+            if start_no > end_no:
+                start_no, end_no = end_no, start_no
+            selection_spec = f"{start_no}-{end_no}"
+        elif number_mode == "manual":
+            selection_spec = str(self.worker_prompt_manual_var.get() or "").strip()
+            if not selection_spec:
+                if show_errors:
+                    messagebox.showwarning("안내", "개별 번호 방식이면 번호를 적어주세요.", parent=self.root)
+                return False
+
+        self.cfg["active_prompt_slot"] = slot_idx
+        self.cfg["prompts_file"] = str(slot_info.get("file", self.cfg.get("prompts_file", "flow_prompts.txt")) or self.cfg.get("prompts_file", "flow_prompts.txt"))
+        self.cfg["interval_seconds"] = interval_seconds
+        self.cfg["prompt_manual_selection_enabled"] = bool(selection_spec)
+        self.cfg["prompt_manual_selection"] = selection_spec
+        self.cfg["prompt_variant_count"] = str(self.worker_prompt_count_var.get() or "x1").strip().lower() or "x1"
+        self.cfg["prompt_media_mode"] = "image"
+        self.cfg["current_media_state"] = "image"
+        if hasattr(self, "entry_interval"):
+            try:
+                self.entry_interval.delete(0, "end")
+                self.entry_interval.insert(0, str(interval_seconds))
+            except Exception:
+                pass
+        self.save_config()
+        self.on_reload()
+        self._refresh_worker_quick_hud()
+        return True
+
+    def _open_prompt_worker_bot_from_compact(self):
+        if not self._apply_prompt_worker_compact_to_cfg(show_errors=True):
+            return
+        self.on_open_bot_work_window()
+
+    def _start_prompt_worker_from_compact(self):
+        if not self._apply_prompt_worker_compact_to_cfg(show_errors=True):
+            return
+        self.on_start_prompt()
+
     def _refresh_worker_quick_hud(self):
         if not hasattr(self, "worker_quick_hud"):
             return
@@ -11227,6 +11546,10 @@ class FlowVisionApp:
         if hasattr(self, "btn_go_home"):
             self.btn_go_home.config(text="✖ 워커 닫기", command=self.on_exit)
 
+        if hasattr(self, "lbl_worker_compact_title"):
+            self.lbl_worker_compact_title.config(text=title)
+        self._refresh_worker_compact_identity()
+
         hidden_sections = {
             "prompt": ("S001~S### 에셋 자동 반복", "다운로드 자동화"),
             "asset": ("프롬프트 자동화 전용 생성 옵션", "다운로드 자동화"),
@@ -11259,6 +11582,21 @@ class FlowVisionApp:
                 widget.pack_configure(fill="x")
             else:
                 widget.pack_forget()
+        if self.worker_mode == "prompt":
+            if hasattr(self, "body_pane") and self.body_pane.winfo_ismapped():
+                self.body_pane.pack_forget()
+            if hasattr(self, "bottom_frame") and self.bottom_frame.winfo_ismapped():
+                self.bottom_frame.grid_remove()
+            if hasattr(self, "worker_compact_panel") and (not self.worker_compact_panel.winfo_ismapped()):
+                self.worker_compact_panel.pack(fill="both", expand=True)
+            self._refresh_prompt_worker_compact_summary()
+        else:
+            if hasattr(self, "worker_compact_panel") and self.worker_compact_panel.winfo_ismapped():
+                self.worker_compact_panel.pack_forget()
+            if hasattr(self, "body_pane") and (not self.body_pane.winfo_ismapped()):
+                self.body_pane.pack(fill="both", expand=True)
+            if hasattr(self, "bottom_frame") and (not self.bottom_frame.winfo_ismapped()):
+                self.bottom_frame.grid()
         self._refresh_worker_quick_hud()
 
     def _worker_mode_meta(self, kind):
@@ -12167,7 +12505,18 @@ class FlowVisionApp:
 
     def open_home_target(self, target):
         if target == "prompt_worker":
-            self._open_worker_launcher("prompt")
+            try:
+                suggested_name = self._suggest_worker_bundle_name("prompt")
+                self._launch_worker_process(
+                    "prompt",
+                    suggested_name,
+                    suggested_name,
+                    suggested_name,
+                    self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0),
+                )
+                self._advance_worker_bundle_name("prompt", suggested_name)
+            except Exception as e:
+                messagebox.showerror("이미지 워커 실행 실패", f"이미지 워커 실행 실패:\n{e}", parent=self.home_window or self.root)
             return
         if target == "asset_worker":
             self._open_worker_launcher("asset")
@@ -12523,6 +12872,7 @@ class FlowVisionApp:
         self.cfg["scale_lock_enabled"] = False
         self.cfg["afk_mode"] = self.afk_var.get()
         self.cfg["sound_enabled"] = self.sound_var.get()
+        self.cfg["countdown_alert_enabled"] = self.countdown_alert_var.get() if hasattr(self, "countdown_alert_var") else bool(self.cfg.get("countdown_alert_enabled", True))
         self.cfg["relay_mode"] = False
         self.cfg["scheduled_start_enabled"] = False
         self.cfg["scheduled_start_at"] = ""
@@ -12757,6 +13107,10 @@ class FlowVisionApp:
             self.last_startup_preflight_summary if self.last_startup_preflight_at else "",
             self.last_startup_preflight_at,
         )
+        if not self.cfg.get("countdown_alert_enabled", True):
+            if self.alert_window:
+                self.alert_window.close()
+                self.alert_window = None
         focus_widget = None
         try:
             focus_widget = self.root.focus_get()
@@ -16060,11 +16414,14 @@ class FlowVisionApp:
                 if self.alert_window:
                     self.alert_window.close()
                     self.alert_window = None
-            elif not self.is_processing and 0 < remain <= 30:
+            elif self.cfg.get("countdown_alert_enabled", True) and (not self.is_processing) and 0 < remain <= 30:
                 if self.alert_window is None:
                     self.alert_window = CountdownAlert(self.root, remain, self.cfg.get("sound_enabled"))
                 else:
                     self.alert_window.update_time(remain)
+            elif self.alert_window:
+                self.alert_window.close()
+                self.alert_window = None
             
             if remain <= 0:
                 if self.alert_window:
