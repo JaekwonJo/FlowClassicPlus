@@ -11268,7 +11268,7 @@ class FlowVisionApp:
         launcher_size = {
             "prompt": (740, 590),
             "asset": (820, 540),
-            "download": (640, 420),
+            "download": (840, 560),
         }.get(kind, (640, 420))
         launcher_width, launcher_height = launcher_size
         win.geometry(f"{launcher_width}x{launcher_height}")
@@ -11323,6 +11323,7 @@ class FlowVisionApp:
 
         prompt_launch_vars = {}
         asset_launch_vars = {}
+        download_launch_vars = {}
         if kind == "prompt":
             detail_box = tk.LabelFrame(
                 outer,
@@ -11653,6 +11654,178 @@ class FlowVisionApp:
                 "use_prompt_file_var": use_prompt_file_var,
                 "prompt_file_var": prompt_file_var,
             }
+        elif kind == "download":
+            detail_box = tk.LabelFrame(
+                outer,
+                text="다운로드 워커 빠른 설정",
+                bg=self.color_bg,
+                fg=self.color_text,
+                font=self.font_body_bold,
+                padx=10,
+                pady=8,
+            )
+            detail_box.pack(fill="x", pady=(4, 0))
+            detail_box.grid_columnconfigure(1, weight=1)
+            detail_box.grid_columnconfigure(3, weight=1)
+
+            defaults = self._asset_worker_selection_defaults()
+            interval_var = tk.StringVar(value=str(int(self.cfg.get("interval_seconds", 180) or 180)))
+            number_mode_var = tk.StringVar(value=defaults["mode"])
+            range_start_var = tk.StringVar(value=defaults["start"])
+            range_end_var = tk.StringVar(value=defaults["end"])
+            manual_var = tk.StringVar(value=defaults["manual"])
+            download_mode_var = tk.StringVar(value="이미지" if self._download_mode() == "image" else "동영상")
+            quality_var = tk.StringVar(value=self._download_quality(self._download_mode()))
+            output_dir_var = tk.StringVar(value=str(self.cfg.get("download_output_dir", "") or self._resolve_download_output_dir()))
+            summary_var = tk.StringVar()
+
+            tk.Label(detail_box, text="다운로드 모드", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=0, column=0, sticky="w")
+            combo_download_mode = ttk.Combobox(
+                detail_box,
+                textvariable=download_mode_var,
+                state="readonly",
+                values=tuple(self._pipeline_mode_labels().values()),
+                font=self.font_small,
+                width=10,
+            )
+            combo_download_mode.grid(row=0, column=1, sticky="w", padx=(6, 12), pady=(0, 8))
+
+            tk.Label(detail_box, text="품질", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=0, column=2, sticky="w")
+            combo_quality = ttk.Combobox(detail_box, textvariable=quality_var, state="readonly", font=self.font_small, width=10)
+            combo_quality.grid(row=0, column=3, sticky="w", pady=(0, 8))
+
+            tk.Label(detail_box, text="작업 간격(초)", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=1, column=0, sticky="w")
+            entry_interval = tk.Entry(
+                detail_box,
+                textvariable=interval_var,
+                bg=self.color_input_bg,
+                fg=self.color_input_fg,
+                insertbackground=self.color_input_fg,
+                font=self.font_mono_small,
+            )
+            entry_interval.grid(row=1, column=1, sticky="ew", padx=(6, 12), pady=(0, 8), ipady=2)
+
+            tk.Label(detail_box, text="번호 방식", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=1, column=2, sticky="w")
+            mode_wrap = tk.Frame(detail_box, bg=self.color_bg)
+            mode_wrap.grid(row=1, column=3, sticky="w", pady=(0, 8))
+            ttk.Radiobutton(mode_wrap, text="연속", value="range", variable=number_mode_var).pack(side="left")
+            ttk.Radiobutton(mode_wrap, text="개별", value="manual", variable=number_mode_var).pack(side="left", padx=(8, 0))
+
+            tk.Label(detail_box, text="연속 범위", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=2, column=0, sticky="w")
+            range_wrap = tk.Frame(detail_box, bg=self.color_bg)
+            range_wrap.grid(row=2, column=1, sticky="w", padx=(6, 12), pady=(0, 8))
+            entry_range_start = tk.Entry(
+                range_wrap,
+                textvariable=range_start_var,
+                width=7,
+                bg=self.color_input_bg,
+                fg=self.color_input_fg,
+                insertbackground=self.color_input_fg,
+                font=self.font_mono_small,
+                justify="center",
+            )
+            entry_range_start.pack(side="left", ipady=2)
+            tk.Label(range_wrap, text="~", bg=self.color_bg, fg=self.color_text, font=self.font_small).pack(side="left", padx=6)
+            entry_range_end = tk.Entry(
+                range_wrap,
+                textvariable=range_end_var,
+                width=7,
+                bg=self.color_input_bg,
+                fg=self.color_input_fg,
+                insertbackground=self.color_input_fg,
+                font=self.font_mono_small,
+                justify="center",
+            )
+            entry_range_end.pack(side="left", ipady=2)
+
+            tk.Label(detail_box, text="개별 번호", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=2, column=2, sticky="w")
+            entry_manual = tk.Entry(
+                detail_box,
+                textvariable=manual_var,
+                width=44,
+                bg=self.color_input_bg,
+                fg=self.color_input_fg,
+                insertbackground=self.color_input_fg,
+                font=self.font_mono_small,
+            )
+            entry_manual.grid(row=2, column=3, sticky="ew", pady=(0, 8), ipady=2)
+
+            tk.Label(detail_box, text="저장 폴더", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=3, column=0, sticky="w")
+            output_wrap = tk.Frame(detail_box, bg=self.color_bg)
+            output_wrap.grid(row=3, column=1, columnspan=3, sticky="ew", pady=(0, 8))
+            output_wrap.grid_columnconfigure(0, weight=1)
+            entry_output_dir = tk.Entry(
+                output_wrap,
+                textvariable=output_dir_var,
+                bg=self.color_input_bg,
+                fg=self.color_input_fg,
+                insertbackground=self.color_input_fg,
+                font=self.font_mono_small,
+            )
+            entry_output_dir.grid(row=0, column=0, sticky="ew", padx=(0, 6), ipady=2)
+
+            def _pick_worker_output_dir():
+                initial = str(output_dir_var.get() or "").strip() or str(self._resolve_download_output_dir())
+                picked = filedialog.askdirectory(parent=win, initialdir=initial, title="다운로드 저장 폴더 선택")
+                if picked:
+                    output_dir_var.set(picked)
+
+            ttk.Button(output_wrap, text="폴더 선택", command=_pick_worker_output_dir).grid(row=0, column=1, sticky="e")
+
+            lbl_summary = tk.Label(detail_box, textvariable=summary_var, font=self.font_small, bg=self.color_bg, fg=self.color_info, anchor="w", justify="left")
+            lbl_summary.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(0, 4))
+
+            def _refresh_download_quality(*_args):
+                mode_value = self._pipeline_mode_values().get(str(download_mode_var.get() or "").strip(), "video")
+                values = self._pipeline_download_quality_options(mode_value)
+                combo_quality.config(values=values)
+                normalized = self._normalize_pipeline_quality(quality_var.get(), mode_value)
+                if normalized not in values:
+                    normalized = values[0]
+                quality_var.set(normalized)
+
+            def _refresh_download_summary(*_args):
+                mode_value = self._pipeline_mode_values().get(str(download_mode_var.get() or "").strip(), "video")
+                mode_text = "이미지" if mode_value == "image" else "동영상"
+                if number_mode_var.get() == "manual":
+                    target_text = manual_var.get().strip() or "(비어 있음)"
+                else:
+                    target_text = f"{range_start_var.get().strip() or '-'} ~ {range_end_var.get().strip() or '-'}"
+                folder_text = output_dir_var.get().strip() or "(미지정)"
+                summary_var.set(f"{mode_text} / {quality_var.get().strip() or '-'} | 대상: {target_text} | 저장: {folder_text}")
+
+            tk.Label(
+                detail_box,
+                text="※ 휴식 / 주기적 새로고침 공통 설정은 다운로드 워커에는 적용하지 않습니다. 작업 간격만 이 워커 전용입니다.",
+                font=self.font_small,
+                bg=self.color_bg,
+                fg=self.color_text_sec,
+                anchor="w",
+                justify="left",
+                wraplength=max(launcher_width - 60, 620),
+            ).grid(row=5, column=0, columnspan=4, sticky="ew")
+
+            download_mode_var.trace_add("write", _refresh_download_quality)
+            download_mode_var.trace_add("write", _refresh_download_summary)
+            quality_var.trace_add("write", _refresh_download_summary)
+            number_mode_var.trace_add("write", _refresh_download_summary)
+            range_start_var.trace_add("write", _refresh_download_summary)
+            range_end_var.trace_add("write", _refresh_download_summary)
+            manual_var.trace_add("write", _refresh_download_summary)
+            output_dir_var.trace_add("write", _refresh_download_summary)
+            _refresh_download_quality()
+            _refresh_download_summary()
+
+            download_launch_vars = {
+                "interval_var": interval_var,
+                "number_mode_var": number_mode_var,
+                "range_start_var": range_start_var,
+                "range_end_var": range_end_var,
+                "manual_var": manual_var,
+                "download_mode_var": download_mode_var,
+                "quality_var": quality_var,
+                "output_dir_var": output_dir_var,
+            }
 
         def _sync_names(*_args):
             raw = worker_name_var.get().strip()
@@ -11777,8 +11950,48 @@ class FlowVisionApp:
                     "asset_prompt_media_mode": "video",
                     "current_media_state": "video",
                 }
+            elif kind == "download":
+                try:
+                    interval_seconds = max(1, int(str(download_launch_vars["interval_var"].get() or "180").strip()))
+                except Exception:
+                    messagebox.showwarning("안내", "작업 간격은 1초 이상 숫자로 적어주세요.", parent=win)
+                    return
+                number_mode = str(download_launch_vars["number_mode_var"].get() or "range").strip().lower()
+                manual_spec = ""
+                start_no = max(1, int(self.cfg.get("asset_loop_start", 1) or 1))
+                end_no = max(1, int(self.cfg.get("asset_loop_end", start_no) or start_no))
+                if number_mode == "manual":
+                    manual_spec = str(download_launch_vars["manual_var"].get() or "").strip()
+                    if not manual_spec:
+                        messagebox.showwarning("안내", "개별 번호 방식이면 번호를 적어주세요.", parent=win)
+                        return
+                else:
+                    try:
+                        start_no = int(str(download_launch_vars["range_start_var"].get() or "1").strip())
+                        end_no = int(str(download_launch_vars["range_end_var"].get() or "1").strip())
+                    except Exception:
+                        messagebox.showwarning("안내", "연속 범위는 숫자로 적어주세요.", parent=win)
+                        return
+                    if start_no > end_no:
+                        start_no, end_no = end_no, start_no
+                download_mode = self._pipeline_mode_values().get(str(download_launch_vars["download_mode_var"].get() or "").strip(), "video")
+                quality = self._normalize_pipeline_quality(download_launch_vars["quality_var"].get(), download_mode)
+                output_dir = str(download_launch_vars["output_dir_var"].get() or "").strip()
+                extra_cfg = {
+                    "interval_seconds": interval_seconds,
+                    "asset_loop_start": max(1, min(MAX_SCENE_NUMBER, start_no)),
+                    "asset_loop_end": max(1, min(MAX_SCENE_NUMBER, end_no)),
+                    "asset_manual_selection": manual_spec,
+                    "download_mode": download_mode,
+                    "download_output_dir": output_dir,
+                    "current_media_state": "image" if download_mode == "image" else "video",
+                }
+                if download_mode == "image":
+                    extra_cfg["download_image_quality"] = quality
+                else:
+                    extra_cfg["download_video_quality"] = quality
             try:
-                proc = self._launch_worker_process(
+                self._launch_worker_process(
                     kind,
                     worker_name_var.get(),
                     config_name_var.get(),
@@ -11790,22 +12003,8 @@ class FlowVisionApp:
                 messagebox.showerror("워커 실행 실패", f"{meta['title']} 실행 실패:\n{e}", parent=win)
                 return
             requested_name = worker_name_var.get().strip() or meta["default_name"]
-            launch_status_var.set(f"{requested_name} 실행 요청 중... 잠깐만 기다려주세요.")
-
-            def _confirm_worker_launch():
-                if proc.poll() is not None:
-                    launch_status_var.set("")
-                    messagebox.showwarning(
-                        "워커 실행 확인 필요",
-                        f"{requested_name} 창이 바로 열리지 않았습니다.\n"
-                        "실행 직후 종료된 것 같으니, 지금 설정으로 다시 시도하거나 메인 작업창 로그를 확인해주세요.",
-                        parent=win,
-                    )
-                    return
-                launch_status_var.set(f"{requested_name} 실행 요청 완료. 같은 창에서 다음 워커도 계속 만들 수 있습니다.")
-                _prepare_next_worker_names()
-
-            win.after(700, _confirm_worker_launch)
+            launch_status_var.set(f"{requested_name} 실행 요청 완료. 같은 창에서 다음 워커도 계속 만들 수 있습니다.")
+            _prepare_next_worker_names()
 
         ttk.Button(bottom, text="취소", command=win.destroy).pack(side="right")
         ttk.Button(bottom, text=f"{meta['title']} 열기", command=_launch).pack(side="right", padx=(0, 8))
