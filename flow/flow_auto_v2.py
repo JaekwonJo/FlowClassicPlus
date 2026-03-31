@@ -9194,6 +9194,32 @@ class FlowVisionApp:
             fg=self.color_text,
         )
         self.lbl_worker_hud_project.pack(side="right")
+        hud_mid = tk.Frame(self.worker_quick_hud, bg="#13233A")
+        hud_mid.pack(fill="x", padx=10, pady=(0, 4))
+        self.lbl_worker_hud_progress = tk.Label(
+            hud_mid,
+            text="진행률: 0 / 0 (0.0%)",
+            font=self.font_mono_small,
+            bg="#13233A",
+            fg=self.color_accent,
+        )
+        self.lbl_worker_hud_progress.pack(side="left")
+        hud_actions = tk.Frame(hud_mid, bg="#13233A")
+        hud_actions.pack(side="right")
+        self.btn_worker_open_bot = ttk.Button(
+            hud_actions,
+            text="🤖 작업봇 창 열기",
+            style="ControlCompact.TButton",
+            command=self.on_open_bot_work_window,
+        )
+        self.btn_worker_open_bot.pack(side="left")
+        self.btn_worker_quick_start = ttk.Button(
+            hud_actions,
+            text="▶ 시작",
+            style="ActionCompact.TButton",
+            command=self._on_worker_quick_start,
+        )
+        self.btn_worker_quick_start.pack(side="left", padx=(6, 0))
         hud_bottom = tk.Frame(self.worker_quick_hud, bg="#13233A")
         hud_bottom.pack(fill="x", padx=10, pady=(0, 8))
         self.lbl_worker_hud_status = tk.Label(
@@ -9204,14 +9230,6 @@ class FlowVisionApp:
             fg=self.color_success,
         )
         self.lbl_worker_hud_status.pack(side="left")
-        self.lbl_worker_hud_progress = tk.Label(
-            hud_bottom,
-            text="진행률: 0 / 0 (0.0%)",
-            font=self.font_mono_small,
-            bg="#13233A",
-            fg=self.color_accent,
-        )
-        self.lbl_worker_hud_progress.pack(side="right")
 
         self.body_pane = ttk.Panedwindow(mid_frame, orient="horizontal")
         self.body_pane.pack(fill="both", expand=True)
@@ -11110,6 +11128,18 @@ class FlowVisionApp:
             f"이름={self.worker_name or '-'} | 설정={self._current_config_display_name()} | 프로필={self._browser_profile_dir_name()}"
         )
 
+    def _on_worker_quick_start(self):
+        if self.worker_mode == "prompt":
+            self.on_start_prompt()
+            return
+        if self.worker_mode == "asset":
+            self.on_start_asset()
+            return
+        if self.worker_mode == "download":
+            self.on_start_download()
+            return
+        self.on_start()
+
     def _refresh_worker_quick_hud(self):
         if not hasattr(self, "worker_quick_hud"):
             return
@@ -11124,6 +11154,13 @@ class FlowVisionApp:
             self.lbl_worker_hud_project.config(text=f"프로젝트: {project_name}")
             self.lbl_worker_hud_status.config(text=f"상태: {status_text}", fg=status_color)
             self.lbl_worker_hud_progress.config(text=f"진행률: {progress_text}")
+            quick_start_text = {
+                "prompt": "▶ 이미지 시작",
+                "asset": "▶ S자동화 시작",
+                "download": "▶ 다운로드 시작",
+            }.get(self.worker_mode, "▶ 시작")
+            if hasattr(self, "btn_worker_quick_start"):
+                self.btn_worker_quick_start.config(text=quick_start_text)
             if not self.worker_quick_hud.winfo_ismapped():
                 self.worker_quick_hud.pack(fill="x", pady=(0, 6), before=self.body_pane)
         else:
