@@ -42,6 +42,9 @@ runtime/
 hailuo_state_*.json
 sora_state_*.json
 flow/flow_config.json
+flow/flow_config_*워커*.json
+flow/flow_shared_settings.json
+flow/*_워커*/
 
 # Optional: personal prompts (uncomment if you prefer not to publish prompts)
 #prompts.txt

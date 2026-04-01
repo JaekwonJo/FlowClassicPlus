@@ -3,17 +3,28 @@ setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
 cd /d "%~dp0"
 
-title Flow Veo - 원터치 설치+실행
+title Flow Classic Plus - 원터치 설치+실행
 
 echo ========================================================
-echo [Flow Veo] 원터치 설치+실행
+echo [Flow Classic Plus] 원터치 설치+실행
 echo ========================================================
 echo.
 
 set "ROOT=%cd%"
 for %%I in ("%LOCALAPPDATA%") do set "LOCALAPPDATA_NORM=%%~fI"
 if not defined LOCALAPPDATA_NORM set "LOCALAPPDATA_NORM=%ROOT%"
-set "RUNTIME_DIR=%LOCALAPPDATA_NORM%\Autoupload\runtime"
+set "APP_RUNTIME_NAME=FlowClassicPlus"
+set "LEGACY_RUNTIME_DIR=%LOCALAPPDATA_NORM%\Autoupload\runtime"
+set "RUNTIME_DIR=%LOCALAPPDATA_NORM%\%APP_RUNTIME_NAME%\runtime"
+if not exist "%RUNTIME_DIR%\python-embed\python.exe" if exist "%LEGACY_RUNTIME_DIR%\python-embed\python.exe" (
+    echo [INFO] 이전 Autoupload 런타임 감지. Flow Classic Plus 런타임으로 정리합니다...
+    if not exist "%LOCALAPPDATA_NORM%\%APP_RUNTIME_NAME%" mkdir "%LOCALAPPDATA_NORM%\%APP_RUNTIME_NAME%"
+    move "%LEGACY_RUNTIME_DIR%" "%RUNTIME_DIR%" >nul 2>&1
+    if errorlevel 1 (
+        echo [WARN] 런타임 폴더 이동에 실패해 이번 실행은 기존 폴더를 임시 사용합니다.
+        set "RUNTIME_DIR=%LEGACY_RUNTIME_DIR%"
+    )
+)
 set "PY_HOME=%RUNTIME_DIR%\python-embed"
 set "PY_EXE=%PY_HOME%\python.exe"
 set "PYW_EXE=%PY_HOME%\pythonw.exe"
@@ -183,13 +194,10 @@ for /f "delims=" %%f in ('dir /b /a:-d "%PY_HOME%\python*._pth" 2^>nul') do (
 )
 if not defined PTH_FILE exit /b 1
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$p='%PTH_FILE%'; $lines=Get-Content $p; " ^
-  "$root='%ROOT%'; " ^
-  "$hasSitePackages=($lines -match '^[ ]*Lib\\site-packages[ ]*$').Length -gt 0; " ^
-  "if(-not $hasSitePackages){$lines += 'Lib\\site-packages'}; " ^
-  "if(-not ($lines -contains $root)){$lines += $root}; " ^
-  "$lines=$lines | ForEach-Object { if($_ -match '^[ ]*#?[ ]*import site[ ]*$'){ 'import site' } else { $_ } }; " ^
-  "Set-Content -Path $p -Value $lines -Encoding ASCII"
+  "$p='%PTH_FILE%'; $root='%ROOT%'; $lines=@(); if(Test-Path $p){$lines=Get-Content $p}; $out=New-Object System.Collections.Generic.List[string]; " ^
+  "foreach($raw in $lines){ $trim=[string]($raw).Trim(); if(-not $trim){continue}; if($trim -match '^[ ]*#?[ ]*import site[ ]*$'){ $trim='import site' }; if($trim -match 'autoupload'){ continue }; if(-not $out.Contains($trim)){ [void]$out.Add($trim) } }; " ^
+  "foreach($need in @('python311.zip','.','import site','Lib\site-packages',$root)){ if(-not $out.Contains($need)){ [void]$out.Add($need) } }; " ^
+  "Set-Content -Path $p -Value $out -Encoding ASCII"
 if errorlevel 1 exit /b 1
 exit /b 0
 

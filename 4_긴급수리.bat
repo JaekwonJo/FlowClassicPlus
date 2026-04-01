@@ -3,7 +3,7 @@ chcp 65001 >nul
 cd /d %~dp0
 
 echo ========================================================
-echo [Flow Veo] Install 'pynput' for Hotkey Detection
+echo [Flow Classic Plus] 긴급 수리: pynput 설치
 echo ========================================================
 echo.
 echo Installing 'pynput' to allow detecting 'Enter' key
@@ -22,6 +22,6 @@ echo.
 echo.
 echo ========================================================
 echo [OK] Ready to capture coordinates with Enter key!
-echo Run '2_Auto_Program_Start.bat' now.
+echo Run '2_오토_프로그램_실행.bat' now.
 echo ========================================================
 pause

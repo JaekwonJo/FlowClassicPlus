@@ -403,9 +403,30 @@ def config_display_name_from_path(path):
         return name[len("flow_config_"):-5] or "이름 없음"
     return path.stem
 
+def active_flow_base_dir(base_dir=None):
+    try:
+        if base_dir:
+            base = Path(base_dir)
+            if base.is_file():
+                base = base.parent
+            return base.resolve()
+    except Exception:
+        pass
+    try:
+        cwd_flow = Path.cwd() / "flow"
+        if (cwd_flow / "flow_auto_v2.py").exists():
+            return cwd_flow.resolve()
+    except Exception:
+        pass
+    try:
+        return Path(__file__).resolve().parent
+    except Exception:
+        return Path("flow").resolve()
+
+
 def shared_settings_path(base_dir=None):
     try:
-        base = Path(base_dir) if base_dir else Path(__file__).resolve().parent
+        base = active_flow_base_dir(base_dir)
     except Exception:
         base = Path(__file__).resolve().parent
     return base / SHARED_SETTINGS_FILE
@@ -515,7 +536,7 @@ class LogWindow:
 class FlowVisionApp:
 
     def __init__(self, cfg_path=None, worker_mode="", worker_name="", initial_target=""):
-        self.base = Path(__file__).resolve().parent
+        self.base = active_flow_base_dir()
         self.worker_mode = str(worker_mode or "").strip().lower()
         self.worker_name = str(worker_name or "").strip()
         self.initial_target = str(initial_target or "").strip().lower()
@@ -9344,7 +9365,7 @@ class FlowVisionApp:
             hud_actions,
             text="🤖 작업봇 창 열기",
             style="ControlCompact.TButton",
-            command=self.on_open_bot_work_window,
+            command=self._on_worker_open_bot_from_hud,
         )
         self.btn_worker_open_bot.pack(side="left")
         self.btn_worker_quick_start = ttk.Button(
@@ -11275,6 +11296,8 @@ class FlowVisionApp:
         )
 
     def _on_worker_quick_start(self):
+        if not self._apply_active_worker_compact_to_cfg(show_errors=True):
+            return
         if self.worker_mode == "prompt":
             self.on_start_prompt()
             return
@@ -11285,6 +11308,20 @@ class FlowVisionApp:
             self.on_start_download()
             return
         self.on_start()
+
+    def _on_worker_open_bot_from_hud(self):
+        if not self._apply_active_worker_compact_to_cfg(show_errors=True):
+            return
+        self.on_open_bot_work_window()
+
+    def _apply_active_worker_compact_to_cfg(self, show_errors=True):
+        if self.worker_mode == "prompt":
+            return self._apply_prompt_worker_compact_to_cfg(show_errors=show_errors)
+        if self.worker_mode == "asset":
+            return self._apply_asset_worker_compact_to_cfg(show_errors=show_errors)
+        if self.worker_mode == "download":
+            return self._apply_download_worker_compact_to_cfg(show_errors=show_errors)
+        return True
 
     def _build_worker_compact_panel(self):
         card = tk.Frame(self.worker_compact_panel, bg=self.color_card, highlightbackground="#2A3A56", highlightthickness=1)
@@ -12035,6 +12072,7 @@ class FlowVisionApp:
             f"프로젝트: {self.worker_project_var.get().strip() or '-'} | 파일: {slot_text} | 생성: {count_text} | 대상: {target}"
         )
         self._refresh_worker_preview_progress()
+        self._refresh_worker_quick_hud()
 
     def _apply_prompt_worker_compact_to_cfg(self, show_errors=True):
         try:
@@ -12124,6 +12162,7 @@ class FlowVisionApp:
             f"프로젝트: {self.worker_asset_project_var.get().strip() or '-'} | 생성: {self.worker_asset_count_var.get().strip() or 'x1'} | 대상: {target} | 프롬프트: {prompt_file_text}"
         )
         self._refresh_worker_preview_progress()
+        self._refresh_worker_quick_hud()
 
     def _pick_asset_prompt_file_for_compact(self):
         initial = str(self.worker_asset_prompt_file_var.get() or self.cfg.get("asset_prompt_file", "") or "").strip()
@@ -12258,6 +12297,16 @@ class FlowVisionApp:
             f"프로젝트: {self.worker_download_project_var.get().strip() or '-'} | 모드: {mode_label} {self.worker_download_quality_var.get().strip() or '-'} | 대상: {target} | 저장: {folder_text}"
         )
         self._refresh_worker_preview_progress()
+        self._refresh_worker_quick_hud()
+
+    def _worker_selected_project_name(self):
+        if self.worker_mode == "prompt" and hasattr(self, "worker_project_var"):
+            return str(self.worker_project_var.get() or "").strip() or self._active_project_name()
+        if self.worker_mode == "asset" and hasattr(self, "worker_asset_project_var"):
+            return str(self.worker_asset_project_var.get() or "").strip() or self._active_project_name()
+        if self.worker_mode == "download" and hasattr(self, "worker_download_project_var"):
+            return str(self.worker_download_project_var.get() or "").strip() or self._active_project_name()
+        return self._active_project_name()
 
     def _pick_download_output_dir_for_compact(self):
         initial = str(self.worker_download_output_dir_var.get() or "").strip() or str(self._resolve_download_output_dir())
@@ -12360,7 +12409,7 @@ class FlowVisionApp:
         if self.worker_mode in ("prompt", "asset", "download"):
             title = self._worker_mode_meta(self.worker_mode).get("title", "워커")
             worker_name = self.worker_name or self._worker_mode_meta(self.worker_mode).get("default_name", "워커1")
-            project_name = self._active_project_name()
+            project_name = self._worker_selected_project_name()
             status_text = self.lbl_main_status.cget("text") if hasattr(self, "lbl_main_status") else "준비 완료"
             status_color = self.lbl_main_status.cget("fg") if hasattr(self, "lbl_main_status") else self.color_success
             progress_text = self.lbl_header_progress.cget("text") if hasattr(self, "lbl_header_progress") else "0 / 0 (0.0%)"
@@ -12379,8 +12428,9 @@ class FlowVisionApp:
             }.get(self.worker_mode, "▶ 시작")
             if hasattr(self, "btn_worker_quick_start"):
                 self.btn_worker_quick_start.config(text=quick_start_text)
-            if not self.worker_quick_hud.winfo_ismapped():
-                self.worker_quick_hud.pack(fill="x", pady=(0, 6), before=self.body_pane)
+            if hasattr(self, "body_pane"):
+                if not self.worker_quick_hud.winfo_ismapped():
+                    self.worker_quick_hud.pack(fill="x", pady=(0, 6), before=self.body_pane)
         else:
             if self.worker_quick_hud.winfo_ismapped():
                 self.worker_quick_hud.pack_forget()
@@ -12611,17 +12661,18 @@ class FlowVisionApp:
             worker_cfg.update(extra_cfg)
         config_path.write_text(json.dumps(worker_cfg, indent=4, ensure_ascii=False), encoding="utf-8")
 
-        crash_log = self.base.parent / "CRASH_LOG.txt"
+        launch_base = active_flow_base_dir(self.base)
+        crash_log = launch_base.parent / "CRASH_LOG.txt"
         try:
             crash_log.write_text("", encoding="utf-8")
         except Exception:
             pass
 
-        app_root = str(self.base.parent)
-        entry_script = str(self.base / "flow_auto_v2.py")
+        app_root = str(launch_base.parent)
         cmd = [
             sys.executable,
-            entry_script,
+            "-m",
+            "flow.flow_auto_v2",
             "--worker",
             kind,
             "--worker-name",
@@ -12632,7 +12683,7 @@ class FlowVisionApp:
             meta["target"],
         ]
         popen_kwargs = {
-            "cwd": str(self.base.parent),
+            "cwd": str(launch_base.parent),
             "close_fds": True,
             "env": {
                 **os.environ,
@@ -17300,6 +17351,23 @@ class FlowVisionApp:
         except Exception:
             pass
 
+    def _current_interval_delay(self):
+        try:
+            base = int(self.entry_interval.get())
+        except Exception:
+            try:
+                base = int(self.cfg.get("interval_seconds", 180) or 180)
+            except Exception:
+                base = 180
+        base = max(1, base)
+        if self.current_run_mode == "download":
+            return base
+        try:
+            speed = self.actor.cfg.get('speed_multiplier', 1.0)
+        except Exception:
+            speed = 1.0
+        return int(base + random.uniform(0, base * 0.3 * speed))
+
     def _tick(self):
         if self.running and self.current_run_mode in ("prompt", "asset") and self.pending_generation_watches:
             try:
@@ -17360,16 +17428,9 @@ class FlowVisionApp:
                         self.scheduled_start_ts = None
                         self.log("⏰ 예약 시각 도달! 자동화를 시작합니다.")
                     self.is_processing = True
+                    self.t_next = None
                     self._ensure_worker_thread()
                     self.task_queue.put("run")
-                if self.current_run_mode == "download":
-                    interval = max(1, int(base))
-                else:
-                    try:
-                        speed = self.actor.cfg.get('speed_multiplier', 1.0)
-                    except: speed = 1.0
-                    interval = int(base + random.uniform(0, base * 0.3 * speed))
-                self.t_next = time.time() + interval
         self.root.after(1000, self._tick)
 
     def _run_task(self):
@@ -17707,6 +17768,8 @@ class FlowVisionApp:
             # (중지/종료/치명 오류 시에만 세션 종료)
             self.root.after(0, self._update_progress_ui)
             self.is_processing = False
+            if self.running and (not self.paused) and self.t_next is None:
+                self.t_next = time.time() + self._current_interval_delay()
 
     def _run_download_task(self):
         print(f"[{datetime.now()}] Download task started")
@@ -17783,6 +17846,8 @@ class FlowVisionApp:
             self.is_processing = False
             if self.download_index >= len(self.download_items):
                 self._show_completion_popup()
+            elif self.running and (not self.paused) and self.t_next is None:
+                self.t_next = time.time() + self._current_interval_delay()
 
     def on_first(self): 
         self.index = 0
@@ -18052,5 +18117,9 @@ if __name__ == "__main__":
             initial_target=runtime_args.target or "",
         )
         app.root.mainloop()
-    except Exception as e:
-        with open("CRASH_LOG.txt", "w") as f: f.write(traceback.format_exc())
+    except Exception:
+        try:
+            Path("CRASH_LOG.txt").write_text(traceback.format_exc(), encoding="utf-8")
+        except Exception:
+            pass
+        raise
