@@ -12613,30 +12613,15 @@ class FlowVisionApp:
 
         crash_log = self.base.parent / "CRASH_LOG.txt"
         try:
-            if crash_log.exists():
-                crash_log.unlink()
+            crash_log.write_text("", encoding="utf-8")
         except Exception:
             pass
 
         app_root = str(self.base.parent)
-        bootstrap = (
-            "import os,sys,runpy,traceback;"
-            f"root={app_root!r};"
-            "os.chdir(root);"
-            "sys.path.insert(0, root) if root not in sys.path else None;"
-            "argv=sys.argv[1:];"
-            "sys.argv=['flow.flow_auto_v2']+argv;"
-            "try:\n"
-            "    runpy.run_module('flow.flow_auto_v2', run_name='__main__')\n"
-            "except Exception:\n"
-            "    fp=os.path.join(root,'CRASH_LOG.txt')\n"
-            "    open(fp,'w',encoding='utf-8').write(traceback.format_exc())\n"
-            "    raise\n"
-        )
+        entry_script = str(self.base / "flow_auto_v2.py")
         cmd = [
             sys.executable,
-            "-c",
-            bootstrap,
+            entry_script,
             "--worker",
             kind,
             "--worker-name",
@@ -12649,6 +12634,10 @@ class FlowVisionApp:
         popen_kwargs = {
             "cwd": str(self.base.parent),
             "close_fds": True,
+            "env": {
+                **os.environ,
+                "PYTHONPATH": app_root + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else ""),
+            },
         }
         if os.name == "nt":
             creationflags = 0
