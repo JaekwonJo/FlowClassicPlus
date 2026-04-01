@@ -16688,7 +16688,10 @@ class FlowVisionApp:
         is_download_mode = (run_mode == "download")
         # 시작 직전 UI 최신값을 cfg에 먼저 반영해야
         # 다운로드 개별 번호/시작끝 범위가 바로 실행 대상에 들어간다.
-        self.on_option_toggle()
+        if self.worker_mode in ("prompt", "asset", "download"):
+            self.save_config()
+        else:
+            self.on_option_toggle()
         if not is_download_mode:
             self.on_reload() # 시작 시 프롬프트 최신화
         try:
