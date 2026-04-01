@@ -11347,6 +11347,7 @@ class FlowVisionApp:
         self.lbl_worker_compact_profile_state.pack(anchor="w", pady=(4, 0))
         meta_right = tk.Frame(meta_strip, bg=self.color_header)
         meta_right.pack(side="right", padx=10, pady=8)
+        ttk.Button(meta_right, text="목록 새로고침", command=self._reload_worker_shared_lists).pack(side="left", padx=(0, 6))
         ttk.Button(meta_right, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left")
         ttk.Button(meta_right, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
 
@@ -11854,6 +11855,81 @@ class FlowVisionApp:
             self.lbl_worker_compact_profile_state.config(text=f"현재 프로필: {self._browser_profile_dir_name()}")
         if hasattr(self, "lbl_worker_compact_name_badge"):
             self.lbl_worker_compact_name_badge.config(text=worker_display_name)
+
+    def _reload_worker_shared_lists(self):
+        source_cfg_path = self.base / CONFIG_FILE
+        try:
+            latest_cfg = load_config_from_file(source_cfg_path)
+        except Exception as e:
+            messagebox.showerror("새로고침 실패", f"메인 설정을 다시 읽지 못했습니다.\n{e}", parent=self.root)
+            return
+
+        latest_profiles = copy.deepcopy(latest_cfg.get("project_profiles", []) or [])
+        if not latest_profiles:
+            latest_profiles = [self._default_project_profile()]
+        latest_slots = copy.deepcopy(latest_cfg.get("prompt_slots", []) or [])
+        if not latest_slots:
+            latest_slots = [{"name": "기본 슬롯", "file": "flow_prompts.txt"}]
+
+        self.cfg["project_profiles"] = latest_profiles
+        self.cfg["prompt_slots"] = latest_slots
+        self.cfg["active_project_profile"] = self._clamp_project_profile_index(
+            self.cfg.get("active_project_profile", latest_cfg.get("active_project_profile", 0)),
+            default=0,
+        )
+        self.cfg["active_prompt_slot"] = self._clamp_slot_index(
+            self.cfg.get("active_prompt_slot", latest_cfg.get("active_prompt_slot", 0)),
+            default=0,
+        )
+
+        project_values = [str(item.get("project_name", "") or f"프로젝트 {idx+1}") for idx, item in enumerate(self.cfg.get("project_profiles", []) or [])]
+        current_project_name = str(self.worker_project_var.get() or "").strip() if hasattr(self, "worker_project_var") else ""
+        if current_project_name not in project_values:
+            current_project_name = project_values[self.cfg["active_project_profile"]] if project_values else "기본 프로젝트"
+        if hasattr(self, "combo_worker_project"):
+            self.combo_worker_project.config(values=project_values)
+        if hasattr(self, "worker_project_var"):
+            self.worker_project_var.set(current_project_name)
+        if hasattr(self, "combo_worker_asset_project"):
+            self.combo_worker_asset_project.config(values=project_values)
+        if hasattr(self, "worker_asset_project_var"):
+            self.worker_asset_project_var.set(
+                self.worker_asset_project_var.get().strip() if str(self.worker_asset_project_var.get() or "").strip() in project_values else current_project_name
+            )
+        if hasattr(self, "combo_worker_download_project"):
+            self.combo_worker_download_project.config(values=project_values)
+        if hasattr(self, "worker_download_project_var"):
+            self.worker_download_project_var.set(
+                self.worker_download_project_var.get().strip() if str(self.worker_download_project_var.get() or "").strip() in project_values else current_project_name
+            )
+
+        slot_names = self._prompt_slot_names()
+        current_slot_name = str(self.worker_prompt_slot_var.get() or "").strip() if hasattr(self, "worker_prompt_slot_var") else ""
+        if current_slot_name not in slot_names:
+            slot_idx = self._clamp_slot_index(self.cfg.get("active_prompt_slot", 0), default=0)
+            current_slot_name = slot_names[slot_idx] if slot_names else ""
+            if hasattr(self, "worker_prompt_number_mode_var") and str(self.worker_prompt_number_mode_var.get() or "all").strip().lower() == "all":
+                defaults = self._prompt_worker_selection_defaults(slot_idx)
+                if hasattr(self, "worker_prompt_range_start_var"):
+                    self.worker_prompt_range_start_var.set(defaults["start"])
+                if hasattr(self, "worker_prompt_range_end_var"):
+                    self.worker_prompt_range_end_var.set(defaults["end"])
+        if hasattr(self, "combo_worker_prompt_slot"):
+            self.combo_worker_prompt_slot.config(values=slot_names)
+        if hasattr(self, "worker_prompt_slot_var"):
+            self.worker_prompt_slot_var.set(current_slot_name)
+
+        if slot_names:
+            active_slot_idx = slot_names.index(current_slot_name) if current_slot_name in slot_names else self._clamp_slot_index(self.cfg.get("active_prompt_slot", 0), default=0)
+            self.cfg["active_prompt_slot"] = active_slot_idx
+            self.cfg["prompts_file"] = str((self.cfg.get("prompt_slots", []) or [{}])[active_slot_idx].get("file", self.cfg.get("prompts_file", "flow_prompts.txt")) or self.cfg.get("prompts_file", "flow_prompts.txt"))
+
+        self.save_config()
+        self._refresh_prompt_worker_compact_summary()
+        self._refresh_asset_worker_compact_summary()
+        self._refresh_download_worker_compact_summary()
+        self._refresh_worker_quick_hud()
+        self.log(f"🔄 워커 목록 새로고침 | 프로젝트 {len(project_values)}개 | 프롬프트 파일 {len(slot_names)}개")
 
     def _refresh_prompt_worker_compact_summary(self, *_args):
         if not hasattr(self, "worker_prompt_summary_var"):
