@@ -12412,14 +12412,31 @@ class FlowVisionApp:
         config_path = self._named_config_path(config_name)
 
         worker_cfg = load_config_from_file(config_path) if config_path.exists() else copy.deepcopy(self.cfg)
+        # 프로젝트 목록은 메인 설정을 공용으로 쓰기 때문에, 오래된 워커 설정이 있어도
+        # 최신 메인 프로젝트 목록으로 다시 맞춘 뒤 인덱스를 안전하게 보정한다.
+        main_profiles = copy.deepcopy(self.cfg.get("project_profiles", []) or [])
+        if main_profiles:
+            worker_cfg["project_profiles"] = main_profiles
         worker_cfg["config_label"] = config_name
         worker_cfg["worker_mode"] = kind
         worker_cfg["worker_name"] = worker_name
         worker_cfg["browser_profile_dir"] = browser_profile_name
-        worker_cfg["active_project_profile"] = self._clamp_project_profile_index(project_index, default=0)
-        profiles = worker_cfg.get("project_profiles", [])
+        profiles = worker_cfg.get("project_profiles", []) or []
+        try:
+            project_index = int(project_index)
+        except (TypeError, ValueError):
+            project_index = 0
         if profiles:
-            active_idx = self._clamp_project_profile_index(worker_cfg.get("active_project_profile", 0), default=0)
+            project_index = max(0, min(len(profiles) - 1, project_index))
+        else:
+            project_index = 0
+        worker_cfg["active_project_profile"] = project_index
+        if profiles:
+            try:
+                active_idx = int(worker_cfg.get("active_project_profile", 0) or 0)
+            except (TypeError, ValueError):
+                active_idx = 0
+            active_idx = max(0, min(len(profiles) - 1, active_idx))
             project = profiles[active_idx]
             if project.get("url"):
                 worker_cfg["start_url"] = str(project.get("url") or "").strip()
