@@ -11856,6 +11856,89 @@ class FlowVisionApp:
         if hasattr(self, "lbl_worker_compact_name_badge"):
             self.lbl_worker_compact_name_badge.config(text=worker_display_name)
 
+    def _set_worker_preview_progress(self, total):
+        try:
+            total = max(0, int(total or 0))
+        except Exception:
+            total = 0
+        shown = 0 if total <= 0 else 1
+        if hasattr(self, "lbl_nav_status"):
+            self.lbl_nav_status.config(text=f"{shown} / {total}")
+        self.progress_var.set(0)
+        self.lbl_prog_text.config(text=f"0 / {total} (0.0%)" if total > 0 else "0 / 0 (0%)")
+        if hasattr(self, "lbl_header_progress"):
+            self.lbl_header_progress.config(text=f"0 / {total} (0.0%)" if total > 0 else "0 / 0 (0.0%)")
+        self._draw_header_progress_bar(0)
+        if hasattr(self, "lbl_worker_hud_progress"):
+            progress_text = self.lbl_header_progress.cget("text") if hasattr(self, "lbl_header_progress") else "0 / 0 (0.0%)"
+            self.lbl_worker_hud_progress.config(text=f"진행률: {progress_text}")
+
+    def _prompt_worker_preview_numbers(self):
+        slot_names = self._prompt_slot_names()
+        slot_name = str(self.worker_prompt_slot_var.get() or "").strip() if hasattr(self, "worker_prompt_slot_var") else ""
+        slot_idx = slot_names.index(slot_name) if slot_name in slot_names else self._clamp_slot_index(self.cfg.get("active_prompt_slot", 0), default=0)
+        available = self._prompt_slot_numbers_for_index(slot_idx)
+        if not available:
+            return []
+        mode = str(self.worker_prompt_number_mode_var.get() or "all").strip().lower() if hasattr(self, "worker_prompt_number_mode_var") else "all"
+        if mode == "all":
+            return available
+        if mode == "range":
+            try:
+                start_no = int(str(self.worker_prompt_range_start_var.get() or "").strip())
+                end_no = int(str(self.worker_prompt_range_end_var.get() or "").strip())
+            except Exception:
+                return []
+            if start_no > end_no:
+                start_no, end_no = end_no, start_no
+            return [n for n in available if start_no <= n <= end_no]
+        raw = str(self.worker_prompt_manual_var.get() or "").strip() if hasattr(self, "worker_prompt_manual_var") else ""
+        prefix = self._prompt_source_prefix()
+        info = self._parse_manual_number_spec(raw, upper_bound=None, allowed_prefixes=[prefix, "S"])
+        available_set = set(available)
+        return [n for n in info.get("numbers", []) if n in available_set]
+
+    def _asset_worker_preview_numbers(self, mode_var, start_var, end_var, manual_var):
+        mode = str(mode_var.get() or "range").strip().lower() if mode_var else "range"
+        if mode == "manual":
+            raw = str(manual_var.get() or "").strip() if manual_var else ""
+            prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
+            info = self._parse_manual_number_spec(raw, upper_bound=MAX_SCENE_NUMBER, allowed_prefixes=[prefix, "S"])
+            return list(info.get("numbers", []) or [])
+        try:
+            start_no = int(str(start_var.get() or "").strip()) if start_var else 1
+            end_no = int(str(end_var.get() or "").strip()) if end_var else start_no
+        except Exception:
+            return []
+        start_no = max(1, min(MAX_SCENE_NUMBER, start_no))
+        end_no = max(1, min(MAX_SCENE_NUMBER, end_no))
+        if start_no > end_no:
+            start_no, end_no = end_no, start_no
+        return list(range(start_no, end_no + 1))
+
+    def _refresh_worker_preview_progress(self):
+        if self.running:
+            return
+        if self.worker_mode == "prompt":
+            total = len(self._prompt_worker_preview_numbers())
+        elif self.worker_mode == "asset":
+            total = len(self._asset_worker_preview_numbers(
+                getattr(self, "worker_asset_number_mode_var", None),
+                getattr(self, "worker_asset_range_start_var", None),
+                getattr(self, "worker_asset_range_end_var", None),
+                getattr(self, "worker_asset_manual_var", None),
+            ))
+        elif self.worker_mode == "download":
+            total = len(self._asset_worker_preview_numbers(
+                getattr(self, "worker_download_number_mode_var", None),
+                getattr(self, "worker_download_range_start_var", None),
+                getattr(self, "worker_download_range_end_var", None),
+                getattr(self, "worker_download_manual_var", None),
+            ))
+        else:
+            return
+        self._set_worker_preview_progress(total)
+
     def _reload_worker_shared_lists(self):
         source_cfg_path = self.base / CONFIG_FILE
         try:
@@ -11928,6 +12011,7 @@ class FlowVisionApp:
         self._refresh_prompt_worker_compact_summary()
         self._refresh_asset_worker_compact_summary()
         self._refresh_download_worker_compact_summary()
+        self._refresh_worker_preview_progress()
         self._refresh_worker_quick_hud()
         self.log(f"🔄 워커 목록 새로고침 | 프로젝트 {len(project_values)}개 | 프롬프트 파일 {len(slot_names)}개")
 
@@ -11946,6 +12030,7 @@ class FlowVisionApp:
         self.worker_prompt_summary_var.set(
             f"프로젝트: {self.worker_project_var.get().strip() or '-'} | 파일: {slot_text} | 생성: {count_text} | 대상: {target}"
         )
+        self._refresh_worker_preview_progress()
 
     def _apply_prompt_worker_compact_to_cfg(self, show_errors=True):
         try:
@@ -12034,6 +12119,7 @@ class FlowVisionApp:
         self.worker_asset_summary_var.set(
             f"프로젝트: {self.worker_asset_project_var.get().strip() or '-'} | 생성: {self.worker_asset_count_var.get().strip() or 'x1'} | 대상: {target} | 프롬프트: {prompt_file_text}"
         )
+        self._refresh_worker_preview_progress()
 
     def _pick_asset_prompt_file_for_compact(self):
         initial = str(self.worker_asset_prompt_file_var.get() or self.cfg.get("asset_prompt_file", "") or "").strip()
@@ -12167,6 +12253,7 @@ class FlowVisionApp:
         self.worker_download_summary_var.set(
             f"프로젝트: {self.worker_download_project_var.get().strip() or '-'} | 모드: {mode_label} {self.worker_download_quality_var.get().strip() or '-'} | 대상: {target} | 저장: {folder_text}"
         )
+        self._refresh_worker_preview_progress()
 
     def _pick_download_output_dir_for_compact(self):
         initial = str(self.worker_download_output_dir_var.get() or "").strip() or str(self._resolve_download_output_dir())
