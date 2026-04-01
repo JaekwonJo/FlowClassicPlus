@@ -11861,14 +11861,18 @@ class FlowVisionApp:
             total = max(0, int(total or 0))
         except Exception:
             total = 0
+        if not hasattr(self, "progress_var"):
+            return
         shown = 0 if total <= 0 else 1
         if hasattr(self, "lbl_nav_status"):
             self.lbl_nav_status.config(text=f"{shown} / {total}")
         self.progress_var.set(0)
-        self.lbl_prog_text.config(text=f"0 / {total} (0.0%)" if total > 0 else "0 / 0 (0%)")
+        if hasattr(self, "lbl_prog_text"):
+            self.lbl_prog_text.config(text=f"0 / {total} (0.0%)" if total > 0 else "0 / 0 (0%)")
         if hasattr(self, "lbl_header_progress"):
             self.lbl_header_progress.config(text=f"0 / {total} (0.0%)" if total > 0 else "0 / 0 (0.0%)")
-        self._draw_header_progress_bar(0)
+        if hasattr(self, "canvas_header_progress"):
+            self._draw_header_progress_bar(0)
         if hasattr(self, "lbl_worker_hud_progress"):
             progress_text = self.lbl_header_progress.cget("text") if hasattr(self, "lbl_header_progress") else "0 / 0 (0.0%)"
             self.lbl_worker_hud_progress.config(text=f"진행률: {progress_text}")
@@ -12607,10 +12611,32 @@ class FlowVisionApp:
             worker_cfg.update(extra_cfg)
         config_path.write_text(json.dumps(worker_cfg, indent=4, ensure_ascii=False), encoding="utf-8")
 
+        crash_log = self.base.parent / "CRASH_LOG.txt"
+        try:
+            if crash_log.exists():
+                crash_log.unlink()
+        except Exception:
+            pass
+
+        app_root = str(self.base.parent)
+        bootstrap = (
+            "import os,sys,runpy,traceback;"
+            f"root={app_root!r};"
+            "os.chdir(root);"
+            "sys.path.insert(0, root) if root not in sys.path else None;"
+            "argv=sys.argv[1:];"
+            "sys.argv=['flow.flow_auto_v2']+argv;"
+            "try:\n"
+            "    runpy.run_module('flow.flow_auto_v2', run_name='__main__')\n"
+            "except Exception:\n"
+            "    fp=os.path.join(root,'CRASH_LOG.txt')\n"
+            "    open(fp,'w',encoding='utf-8').write(traceback.format_exc())\n"
+            "    raise\n"
+        )
         cmd = [
             sys.executable,
-            "-m",
-            "flow.flow_auto_v2",
+            "-c",
+            bootstrap,
             "--worker",
             kind,
             "--worker-name",
@@ -12635,7 +12661,6 @@ class FlowVisionApp:
         exit_code = proc.poll()
         if exit_code is not None:
             crash_hint = ""
-            crash_log = self.base.parent / "CRASH_LOG.txt"
             if crash_log.exists():
                 try:
                     preview = crash_log.read_text(encoding="utf-8", errors="ignore").strip()
