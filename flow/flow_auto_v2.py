@@ -2721,6 +2721,114 @@ class FlowVisionApp:
     def _project_profile_preview(self, item):
         return str(item.get("project_name", "") or "").strip() or "이름 없음"
 
+    def _worker_project_combo_vars(self):
+        pairs = []
+        if hasattr(self, "worker_project_var"):
+            pairs.append((getattr(self, "combo_worker_project", None), self.worker_project_var))
+        if hasattr(self, "worker_asset_project_var"):
+            pairs.append((getattr(self, "combo_worker_asset_project", None), self.worker_asset_project_var))
+        if hasattr(self, "worker_download_project_var"):
+            pairs.append((getattr(self, "combo_worker_download_project", None), self.worker_download_project_var))
+        return pairs
+
+    def _worker_project_values(self):
+        profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
+        return [str(item.get("project_name", "") or f"프로젝트 {idx+1}") for idx, item in enumerate(profiles)]
+
+    def _worker_current_project_index(self):
+        profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
+        values = self._worker_project_values()
+        active_name = self._worker_selected_project_name()
+        if active_name in values:
+            return max(0, values.index(active_name))
+        return self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0)
+
+    def _refresh_worker_project_controls(self, selected_index=None):
+        profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
+        values = self._worker_project_values()
+        if not values:
+            values = ["기본 프로젝트"]
+        if selected_index is None:
+            selected_index = self._worker_current_project_index()
+        selected_index = max(0, min(len(values) - 1, int(selected_index)))
+        selected_name = values[selected_index]
+        self.cfg["active_project_profile"] = selected_index
+        try:
+            project = profiles[selected_index]
+            self.cfg["start_url"] = str(project.get("url", "") or self.cfg.get("start_url", "")).strip()
+        except Exception:
+            pass
+        for combo, var in self._worker_project_combo_vars():
+            if combo is not None:
+                combo.config(values=values)
+            try:
+                var.set(selected_name)
+            except Exception:
+                pass
+        self.save_config()
+        self._refresh_prompt_worker_compact_summary()
+        self._refresh_asset_worker_compact_summary()
+        self._refresh_download_worker_compact_summary()
+        self._refresh_worker_quick_hud()
+
+    def _worker_add_project_profile(self):
+        name = simpledialog.askstring("프로젝트 추가", "새 프로젝트 이름을 입력하세요:", parent=self.root)
+        if name is None:
+            return
+        name = str(name or "").strip()
+        if not name:
+            return
+        url = simpledialog.askstring("프로젝트 URL", f"'{name}' 프로젝트 URL을 입력하세요:", initialvalue="https://labs.google/flow", parent=self.root)
+        if url is None:
+            return
+        profiles = self.cfg.get("project_profiles", [])
+        profiles.append({"project_name": name, "url": str(url or "").strip()})
+        self.cfg["project_profiles"] = profiles
+        self._refresh_worker_project_controls(len(profiles) - 1)
+        self.log(f"📁 워커 프로젝트 추가: {name}")
+
+    def _worker_rename_project_profile(self):
+        profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
+        active = self._worker_current_project_index()
+        current_name = str(profiles[active].get("project_name", "") or "").strip() or "프로젝트"
+        new_name = simpledialog.askstring("프로젝트 이름 변경", "새 프로젝트 이름을 입력하세요:", initialvalue=current_name, parent=self.root)
+        if new_name is None:
+            return
+        new_name = str(new_name or "").strip()
+        if not new_name:
+            return
+        profiles[active]["project_name"] = new_name
+        self.cfg["project_profiles"] = profiles
+        self._refresh_worker_project_controls(active)
+        self.log(f"✏️ 워커 프로젝트 이름 변경: {current_name} -> {new_name}")
+
+    def _worker_edit_project_profile_url(self):
+        profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
+        active = self._worker_current_project_index()
+        current_name = str(profiles[active].get("project_name", "") or "").strip() or "프로젝트"
+        current_url = str(profiles[active].get("url", "") or "").strip()
+        new_url = simpledialog.askstring("프로젝트 URL 편집", f"'{current_name}' 프로젝트 URL을 입력하세요:", initialvalue=current_url, parent=self.root)
+        if new_url is None:
+            return
+        profiles[active]["url"] = str(new_url or "").strip()
+        self.cfg["project_profiles"] = profiles
+        self._refresh_worker_project_controls(active)
+        self.log(f"🔗 워커 프로젝트 URL 변경: {current_name}")
+
+    def _worker_delete_project_profile(self):
+        profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
+        if len(profiles) <= 1:
+            messagebox.showwarning("삭제 불가", "프로젝트는 최소 1개 이상 있어야 합니다.", parent=self.root)
+            return
+        active = self._worker_current_project_index()
+        current_name = str(profiles[active].get("project_name", "") or "").strip() or "프로젝트"
+        if not messagebox.askyesno("프로젝트 삭제", f"'{current_name}' 프로젝트를 삭제할까요?", parent=self.root):
+            return
+        profiles.pop(active)
+        self.cfg["project_profiles"] = profiles
+        self._refresh_worker_project_controls(max(0, active - 1))
+        self.log(f"🗑 워커 프로젝트 삭제: {current_name}")
+
     def _active_project_profile_item(self):
         profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
         active = self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0)
@@ -11255,20 +11363,8 @@ class FlowVisionApp:
             justify="left",
         )
         self.lbl_worker_compact_profile_state.pack(anchor="w", pady=(4, 0))
-        meta_right = tk.Frame(meta_strip, bg=self.color_header)
-        meta_right.pack(side="right", padx=10, pady=8)
-        ttk.Button(meta_right, text="목록 새로고침", command=self._reload_worker_shared_lists).pack(side="left", padx=(0, 6))
-        ttk.Button(meta_right, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left")
-        ttk.Button(meta_right, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
-
         self.prompt_worker_simple = tk.Frame(card, bg=self.color_card)
         self.prompt_worker_simple.pack(fill="both", expand=True, padx=16, pady=(0, 14))
-
-        prompt_toolbar = tk.Frame(self.prompt_worker_simple, bg=self.color_card)
-        prompt_toolbar.pack(fill="x", pady=(0, 6))
-        ttk.Button(prompt_toolbar, text="목록 새로고침", command=self._reload_worker_shared_lists).pack(side="left")
-        ttk.Button(prompt_toolbar, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(6, 0))
-        ttk.Button(prompt_toolbar, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
 
         profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
         project_values = [str(item.get("project_name", "") or f"프로젝트 {idx+1}") for idx, item in enumerate(profiles)]
@@ -11294,19 +11390,32 @@ class FlowVisionApp:
 
         basic_box = tk.Frame(content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         basic_box.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        tk.Label(basic_box, text="기본 설정", font=self.font_body_bold, bg=self.color_panel_soft, fg=self.color_info).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 8))
+        tk.Label(basic_box, text="기본 설정", font=self.font_body_bold, bg=self.color_panel_soft, fg=self.color_info).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 8))
+        prompt_basic_actions = tk.Frame(basic_box, bg=self.color_panel_soft)
+        prompt_basic_actions.grid(row=0, column=1, sticky="e", padx=(0, 12), pady=(10, 8))
+        ttk.Button(prompt_basic_actions, text="새로고침", command=self._reload_worker_shared_lists).pack(side="left")
+        ttk.Button(prompt_basic_actions, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(6, 0))
+        ttk.Button(prompt_basic_actions, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         basic_box.grid_columnconfigure(1, weight=1)
 
         tk.Label(basic_box, text="프로젝트", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
         self.combo_worker_project = ttk.Combobox(basic_box, textvariable=self.worker_project_var, state="readonly", values=project_values, font=self.font_body)
         self.combo_worker_project.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(0, 8))
+        self.combo_worker_project.bind("<Double-Button-1>", lambda _e: self._worker_rename_project_profile())
 
-        tk.Label(basic_box, text="프롬프트 파일", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=2, column=0, sticky="w", padx=12, pady=(0, 8))
+        prompt_project_actions = tk.Frame(basic_box, bg=self.color_panel_soft)
+        prompt_project_actions.grid(row=2, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 8))
+        ttk.Button(prompt_project_actions, text="프로젝트 추가", command=self._worker_add_project_profile).pack(side="left")
+        ttk.Button(prompt_project_actions, text="이름 변경", command=self._worker_rename_project_profile).pack(side="left", padx=(6, 0))
+        ttk.Button(prompt_project_actions, text="URL 편집", command=self._worker_edit_project_profile_url).pack(side="left", padx=(6, 0))
+        ttk.Button(prompt_project_actions, text="삭제", command=self._worker_delete_project_profile).pack(side="left", padx=(6, 0))
+
+        tk.Label(basic_box, text="프롬프트 파일", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=12, pady=(0, 8))
         self.combo_worker_prompt_slot = ttk.Combobox(basic_box, textvariable=self.worker_prompt_slot_var, state="readonly", values=slot_names, font=self.font_body)
-        self.combo_worker_prompt_slot.grid(row=2, column=1, sticky="ew", padx=(0, 12), pady=(0, 8))
+        self.combo_worker_prompt_slot.grid(row=3, column=1, sticky="ew", padx=(0, 12), pady=(0, 8))
 
         prompt_slot_actions = tk.Frame(basic_box, bg=self.color_panel_soft)
-        prompt_slot_actions.grid(row=3, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 8))
+        prompt_slot_actions.grid(row=4, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 8))
         ttk.Button(prompt_slot_actions, text="파일 열기", command=self._worker_open_prompt_slot_file).pack(side="left")
         ttk.Button(prompt_slot_actions, text="이름수정", command=self._worker_rename_prompt_slot).pack(side="left", padx=(6, 0))
         ttk.Button(prompt_slot_actions, text="삭제", command=self._worker_delete_prompt_slot).pack(side="left", padx=(6, 0))
@@ -11321,28 +11430,7 @@ class FlowVisionApp:
             anchor="w",
             justify="left",
         )
-        self.lbl_worker_prompt_slot_info.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 8))
-
-        tk.Label(basic_box, text="생성 개수", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=5, column=0, sticky="w", padx=12, pady=(0, 8))
-        self.combo_worker_prompt_count = ttk.Combobox(
-            basic_box,
-            textvariable=self.worker_prompt_count_var,
-            state="readonly",
-            values=("x1", "x2", "x3", "x4"),
-            font=self.font_body,
-            width=8,
-        )
-        self.combo_worker_prompt_count.grid(row=5, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
-
-        tk.Label(basic_box, text="다운로드 전 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=6, column=0, sticky="w", padx=12, pady=(0, 12))
-        tk.Entry(
-            basic_box,
-            textvariable=self.worker_prompt_interval_var,
-            bg=self.color_input_bg,
-            fg=self.color_input_fg,
-            insertbackground=self.color_input_fg,
-            font=self.font_mono_small,
-        ).grid(row=6, column=1, sticky="ew", padx=(0, 12), pady=(0, 12), ipady=2)
+        self.lbl_worker_prompt_slot_info.grid(row=5, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
 
         number_box = tk.Frame(content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         number_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
@@ -11391,6 +11479,30 @@ class FlowVisionApp:
             font=self.font_mono_small,
         ).grid(row=3, column=1, sticky="ew", padx=(0, 12), pady=(0, 12), ipady=2)
 
+        prompt_extra_wrap = tk.Frame(number_box, bg=self.color_panel_soft)
+        prompt_extra_wrap.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
+        prompt_extra_wrap.grid_columnconfigure(1, weight=1)
+        prompt_extra_wrap.grid_columnconfigure(3, weight=1)
+        tk.Label(prompt_extra_wrap, text="생성 개수", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=0, column=0, sticky="w")
+        self.combo_worker_prompt_count = ttk.Combobox(
+            prompt_extra_wrap,
+            textvariable=self.worker_prompt_count_var,
+            state="readonly",
+            values=("x1", "x2", "x3", "x4"),
+            font=self.font_body,
+            width=8,
+        )
+        self.combo_worker_prompt_count.grid(row=0, column=1, sticky="w", padx=(6, 14))
+        tk.Label(prompt_extra_wrap, text="다운로드 전 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=0, column=2, sticky="w")
+        tk.Entry(
+            prompt_extra_wrap,
+            textvariable=self.worker_prompt_interval_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        ).grid(row=0, column=3, sticky="ew", padx=(6, 0), ipady=2)
+
         summary_box = tk.Frame(self.prompt_worker_simple, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         self.prompt_worker_summary_box = summary_box
         summary_box.pack(fill="x", pady=(6, 10))
@@ -11429,12 +11541,6 @@ class FlowVisionApp:
 
         self.asset_worker_simple = tk.Frame(card, bg=self.color_card)
 
-        asset_toolbar = tk.Frame(self.asset_worker_simple, bg=self.color_card)
-        asset_toolbar.pack(fill="x", pady=(0, 6))
-        ttk.Button(asset_toolbar, text="목록 새로고침", command=self._reload_worker_shared_lists).pack(side="left")
-        ttk.Button(asset_toolbar, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(6, 0))
-        ttk.Button(asset_toolbar, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
-
         asset_defaults = self._asset_worker_selection_defaults()
         self.worker_asset_project_var = tk.StringVar(value=project_values[active_project_idx] if project_values else "기본 프로젝트")
         self.worker_asset_count_var = tk.StringVar(value=str(self.cfg.get("asset_prompt_variant_count", "x1") or "x1").strip().lower() or "x1")
@@ -11454,36 +11560,28 @@ class FlowVisionApp:
 
         asset_basic_box = tk.Frame(asset_content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         asset_basic_box.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        tk.Label(asset_basic_box, text="기본 설정", font=self.font_body_bold, bg=self.color_panel_soft, fg=self.color_info).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 8))
+        tk.Label(asset_basic_box, text="기본 설정", font=self.font_body_bold, bg=self.color_panel_soft, fg=self.color_info).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 8))
+        asset_basic_actions = tk.Frame(asset_basic_box, bg=self.color_panel_soft)
+        asset_basic_actions.grid(row=0, column=1, sticky="e", padx=(0, 12), pady=(10, 8))
+        ttk.Button(asset_basic_actions, text="새로고침", command=self._reload_worker_shared_lists).pack(side="left")
+        ttk.Button(asset_basic_actions, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(6, 0))
+        ttk.Button(asset_basic_actions, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         asset_basic_box.grid_columnconfigure(1, weight=1)
 
         tk.Label(asset_basic_box, text="프로젝트", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
         self.combo_worker_asset_project = ttk.Combobox(asset_basic_box, textvariable=self.worker_asset_project_var, state="readonly", values=project_values, font=self.font_body)
         self.combo_worker_asset_project.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(0, 8))
+        self.combo_worker_asset_project.bind("<Double-Button-1>", lambda _e: self._worker_rename_project_profile())
 
-        tk.Label(asset_basic_box, text="생성 개수", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=2, column=0, sticky="w", padx=12, pady=(0, 8))
-        self.combo_worker_asset_count = ttk.Combobox(
-            asset_basic_box,
-            textvariable=self.worker_asset_count_var,
-            state="readonly",
-            values=("x1", "x2", "x3", "x4"),
-            font=self.font_body,
-            width=8,
-        )
-        self.combo_worker_asset_count.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
-
-        tk.Label(asset_basic_box, text="다운로드 전 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=12, pady=(0, 8))
-        tk.Entry(
-            asset_basic_box,
-            textvariable=self.worker_asset_interval_var,
-            bg=self.color_input_bg,
-            fg=self.color_input_fg,
-            insertbackground=self.color_input_fg,
-            font=self.font_mono_small,
-        ).grid(row=3, column=1, sticky="ew", padx=(0, 12), pady=(0, 8), ipady=2)
+        asset_project_actions = tk.Frame(asset_basic_box, bg=self.color_panel_soft)
+        asset_project_actions.grid(row=2, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 8))
+        ttk.Button(asset_project_actions, text="프로젝트 추가", command=self._worker_add_project_profile).pack(side="left")
+        ttk.Button(asset_project_actions, text="이름 변경", command=self._worker_rename_project_profile).pack(side="left", padx=(6, 0))
+        ttk.Button(asset_project_actions, text="URL 편집", command=self._worker_edit_project_profile_url).pack(side="left", padx=(6, 0))
+        ttk.Button(asset_project_actions, text="삭제", command=self._worker_delete_project_profile).pack(side="left", padx=(6, 0))
 
         asset_prompt_wrap = tk.Frame(asset_basic_box, bg=self.color_panel_soft)
-        asset_prompt_wrap.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
+        asset_prompt_wrap.grid(row=3, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
         asset_prompt_wrap.grid_columnconfigure(1, weight=1)
         tk.Checkbutton(
             asset_prompt_wrap,
@@ -11553,6 +11651,30 @@ class FlowVisionApp:
             font=self.font_mono_small,
         ).grid(row=3, column=1, sticky="ew", padx=(0, 12), pady=(0, 12), ipady=2)
 
+        asset_extra_wrap = tk.Frame(asset_number_box, bg=self.color_panel_soft)
+        asset_extra_wrap.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
+        asset_extra_wrap.grid_columnconfigure(1, weight=1)
+        asset_extra_wrap.grid_columnconfigure(3, weight=1)
+        tk.Label(asset_extra_wrap, text="생성 개수", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=0, column=0, sticky="w")
+        self.combo_worker_asset_count = ttk.Combobox(
+            asset_extra_wrap,
+            textvariable=self.worker_asset_count_var,
+            state="readonly",
+            values=("x1", "x2", "x3", "x4"),
+            font=self.font_body,
+            width=8,
+        )
+        self.combo_worker_asset_count.grid(row=0, column=1, sticky="w", padx=(6, 14))
+        tk.Label(asset_extra_wrap, text="다운로드 전 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=0, column=2, sticky="w")
+        tk.Entry(
+            asset_extra_wrap,
+            textvariable=self.worker_asset_interval_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        ).grid(row=0, column=3, sticky="ew", padx=(6, 0), ipady=2)
+
         asset_summary_box = tk.Frame(self.asset_worker_simple, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         self.asset_worker_summary_box = asset_summary_box
         asset_summary_box.pack(fill="x", pady=(6, 10))
@@ -11591,12 +11713,6 @@ class FlowVisionApp:
 
         self.download_worker_simple = tk.Frame(card, bg=self.color_card)
 
-        download_toolbar = tk.Frame(self.download_worker_simple, bg=self.color_card)
-        download_toolbar.pack(fill="x", pady=(0, 6))
-        ttk.Button(download_toolbar, text="목록 새로고침", command=self._reload_worker_shared_lists).pack(side="left")
-        ttk.Button(download_toolbar, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(6, 0))
-        ttk.Button(download_toolbar, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
-
         download_defaults = self._asset_worker_selection_defaults()
         self.worker_download_project_var = tk.StringVar(value=project_values[active_project_idx] if project_values else "기본 프로젝트")
         self.worker_download_mode_var = tk.StringVar(value=self._pipeline_mode_labels().get(self._download_mode(), "동영상"))
@@ -11616,14 +11732,27 @@ class FlowVisionApp:
 
         download_basic_box = tk.Frame(download_content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         download_basic_box.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        tk.Label(download_basic_box, text="기본 설정", font=self.font_body_bold, bg=self.color_panel_soft, fg=self.color_info).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 8))
+        tk.Label(download_basic_box, text="기본 설정", font=self.font_body_bold, bg=self.color_panel_soft, fg=self.color_info).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 8))
+        download_basic_actions = tk.Frame(download_basic_box, bg=self.color_panel_soft)
+        download_basic_actions.grid(row=0, column=1, sticky="e", padx=(0, 12), pady=(10, 8))
+        ttk.Button(download_basic_actions, text="새로고침", command=self._reload_worker_shared_lists).pack(side="left")
+        ttk.Button(download_basic_actions, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(6, 0))
+        ttk.Button(download_basic_actions, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         download_basic_box.grid_columnconfigure(1, weight=1)
 
         tk.Label(download_basic_box, text="프로젝트", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
         self.combo_worker_download_project = ttk.Combobox(download_basic_box, textvariable=self.worker_download_project_var, state="readonly", values=project_values, font=self.font_body)
         self.combo_worker_download_project.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(0, 8))
+        self.combo_worker_download_project.bind("<Double-Button-1>", lambda _e: self._worker_rename_project_profile())
 
-        tk.Label(download_basic_box, text="다운로드 모드", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=2, column=0, sticky="w", padx=12, pady=(0, 8))
+        download_project_actions = tk.Frame(download_basic_box, bg=self.color_panel_soft)
+        download_project_actions.grid(row=2, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 8))
+        ttk.Button(download_project_actions, text="프로젝트 추가", command=self._worker_add_project_profile).pack(side="left")
+        ttk.Button(download_project_actions, text="이름 변경", command=self._worker_rename_project_profile).pack(side="left", padx=(6, 0))
+        ttk.Button(download_project_actions, text="URL 편집", command=self._worker_edit_project_profile_url).pack(side="left", padx=(6, 0))
+        ttk.Button(download_project_actions, text="삭제", command=self._worker_delete_project_profile).pack(side="left", padx=(6, 0))
+
+        tk.Label(download_basic_box, text="다운로드 모드", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=12, pady=(0, 8))
         self.combo_worker_download_mode = ttk.Combobox(
             download_basic_box,
             textvariable=self.worker_download_mode_var,
@@ -11632,9 +11761,9 @@ class FlowVisionApp:
             font=self.font_body,
             width=10,
         )
-        self.combo_worker_download_mode.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
+        self.combo_worker_download_mode.grid(row=3, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
 
-        tk.Label(download_basic_box, text="품질", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=12, pady=(0, 8))
+        tk.Label(download_basic_box, text="품질", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=4, column=0, sticky="w", padx=12, pady=(0, 8))
         self.combo_worker_download_quality = ttk.Combobox(
             download_basic_box,
             textvariable=self.worker_download_quality_var,
@@ -11642,9 +11771,9 @@ class FlowVisionApp:
             font=self.font_body,
             width=10,
         )
-        self.combo_worker_download_quality.grid(row=3, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
+        self.combo_worker_download_quality.grid(row=4, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
 
-        tk.Label(download_basic_box, text="작업 간격(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=4, column=0, sticky="w", padx=12, pady=(0, 8))
+        tk.Label(download_basic_box, text="작업 간격(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=5, column=0, sticky="w", padx=12, pady=(0, 8))
         tk.Entry(
             download_basic_box,
             textvariable=self.worker_download_interval_var,
@@ -11652,11 +11781,11 @@ class FlowVisionApp:
             fg=self.color_input_fg,
             insertbackground=self.color_input_fg,
             font=self.font_mono_small,
-        ).grid(row=4, column=1, sticky="ew", padx=(0, 12), pady=(0, 8), ipady=2)
+        ).grid(row=5, column=1, sticky="ew", padx=(0, 12), pady=(0, 8), ipady=2)
 
-        tk.Label(download_basic_box, text="저장 폴더", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=5, column=0, sticky="w", padx=12, pady=(0, 12))
+        tk.Label(download_basic_box, text="저장 폴더", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=6, column=0, sticky="w", padx=12, pady=(0, 12))
         download_output_wrap = tk.Frame(download_basic_box, bg=self.color_panel_soft)
-        download_output_wrap.grid(row=5, column=1, sticky="ew", padx=(0, 12), pady=(0, 12))
+        download_output_wrap.grid(row=6, column=1, sticky="ew", padx=(0, 12), pady=(0, 12))
         download_output_wrap.grid_columnconfigure(0, weight=1)
         tk.Entry(
             download_output_wrap,
@@ -11794,6 +11923,15 @@ class FlowVisionApp:
         self._refresh_download_worker_quality_options()
         self._refresh_download_worker_compact_summary()
         self._refresh_worker_queue_panel()
+        if self.worker_mode in ("prompt", "asset", "download"):
+            try:
+                self.worker_compact_head.pack_forget()
+            except Exception:
+                pass
+            try:
+                self.worker_compact_meta_strip.pack_forget()
+            except Exception:
+                pass
 
     def _refresh_worker_compact_identity(self):
         if hasattr(self, "lbl_worker_compact_subtitle"):
@@ -11845,6 +11983,8 @@ class FlowVisionApp:
         setattr(self, f"{kind}_worker_queue_status_label", status_lbl)
         setattr(self, f"{kind}_worker_queue_canvas", canvas)
         setattr(self, f"{kind}_worker_queue_inner", inner)
+        setattr(self, f"{kind}_worker_queue_rows", [])
+        setattr(self, f"{kind}_worker_queue_empty_label", None)
 
     def _worker_queue_active_kind(self):
         if self.worker_mode in ("prompt", "asset"):
@@ -11874,6 +12014,70 @@ class FlowVisionApp:
             return token
         return prompt or f"{int(item.get('seq', 0) or 0)}번 작업"
 
+    def _clear_worker_queue_rows(self, kind):
+        rows = list(getattr(self, f"{kind}_worker_queue_rows", []) or [])
+        for row_info in rows:
+            try:
+                row_info.get("row").destroy()
+            except Exception:
+                pass
+        setattr(self, f"{kind}_worker_queue_rows", [])
+        empty_label = getattr(self, f"{kind}_worker_queue_empty_label", None)
+        if empty_label is not None:
+            try:
+                empty_label.destroy()
+            except Exception:
+                pass
+        setattr(self, f"{kind}_worker_queue_empty_label", None)
+
+    def _create_worker_queue_row(self, parent):
+        row = tk.Frame(parent, bg="#1A2536", highlightbackground="#31455F", highlightthickness=1)
+        row.pack(fill="x", pady=4)
+        top = tk.Frame(row, bg="#1A2536")
+        top.pack(fill="x", padx=10, pady=(8, 4))
+        title_label = tk.Label(
+            top,
+            text="",
+            font=self.font_small,
+            bg="#1A2536",
+            fg=self.color_text,
+            anchor="w",
+            justify="left",
+        )
+        title_label.pack(side="left", fill="x", expand=True)
+        status_label = tk.Label(
+            top,
+            text="",
+            font=(self.font_ui_family, max(10, self._font_px("small")), "bold"),
+            bg="#1A2536",
+            fg=self.color_text_sec,
+        )
+        status_label.pack(side="right")
+        detail_label = tk.Label(
+            row,
+            text="",
+            font=self.font_mono_small,
+            bg="#1A2536",
+            fg=self.color_text_sec,
+            anchor="w",
+            justify="left",
+        )
+        detail_label.pack(fill="x", padx=10, pady=(0, 4))
+        track = tk.Frame(row, bg="#0F1724", height=6)
+        track.pack(fill="x", padx=10, pady=(0, 8))
+        track.pack_propagate(False)
+        fill = tk.Frame(track, bg="#405066", height=6)
+        fill.place(relx=0.0, rely=0.0, relwidth=0.04, relheight=1.0)
+        return {
+            "row": row,
+            "top": top,
+            "title": title_label,
+            "status": status_label,
+            "detail": detail_label,
+            "track": track,
+            "fill": fill,
+        }
+
     def _refresh_worker_queue_panel(self):
         kind = self._worker_queue_active_kind()
         if not kind:
@@ -11882,8 +12086,6 @@ class FlowVisionApp:
         status_lbl = getattr(self, f"{kind}_worker_queue_status_label", None)
         if inner is None:
             return
-        for child in inner.winfo_children():
-            child.destroy()
 
         items = list(getattr(self, "worker_queue_items", []) or [])
         completed = sum(1 for item in items if str(item.get("status", "")).strip().lower() == "success")
@@ -11893,58 +12095,47 @@ class FlowVisionApp:
         if status_lbl is not None:
             status_lbl.config(text=f"활성 {running}개 | 완료 {completed} | 실패 {failed} | 대기 {pending}")
 
+        rows = list(getattr(self, f"{kind}_worker_queue_rows", []) or [])
+        empty_label = getattr(self, f"{kind}_worker_queue_empty_label", None)
         if not items:
-            tk.Label(
-                inner,
-                text="시작하면 여기에 작업 진행 상태가 순서대로 표시됩니다.",
-                font=self.font_small,
-                bg=self.color_panel_soft,
-                fg=self.color_text_sec,
-                anchor="w",
-                justify="left",
-            ).pack(fill="x", pady=6)
-            return
-
-        for item in items:
-            status_text, fg_color, row_bg, bar_color, pct = self._worker_queue_status_meta(item.get("status"))
-            row = tk.Frame(inner, bg=row_bg, highlightbackground="#31455F", highlightthickness=1)
-            row.pack(fill="x", pady=4)
-            top = tk.Frame(row, bg=row_bg)
-            top.pack(fill="x", padx=10, pady=(8, 4))
-            tk.Label(
-                top,
-                text=self._worker_queue_item_title(item),
-                font=self.font_small,
-                bg=row_bg,
-                fg=self.color_text,
-                anchor="w",
-                justify="left",
-            ).pack(side="left", fill="x", expand=True)
-            tk.Label(
-                top,
-                text=status_text,
-                font=(self.font_ui_family, max(10, self._font_px("small")), "bold"),
-                bg=row_bg,
-                fg=fg_color,
-            ).pack(side="right")
-
-            detail = str(item.get("detail", "") or "").strip()
-            if detail:
-                tk.Label(
-                    row,
-                    text=detail[:120],
-                    font=self.font_mono_small,
-                    bg=row_bg,
+            if rows:
+                self._clear_worker_queue_rows(kind)
+            if empty_label is None:
+                empty_label = tk.Label(
+                    inner,
+                    text="시작하면 여기에 작업 진행 상태가 순서대로 표시됩니다.",
+                    font=self.font_small,
+                    bg=self.color_panel_soft,
                     fg=self.color_text_sec,
                     anchor="w",
                     justify="left",
-                ).pack(fill="x", padx=10, pady=(0, 4))
+                )
+                empty_label.pack(fill="x", pady=6)
+                setattr(self, f"{kind}_worker_queue_empty_label", empty_label)
+            return
 
-            track = tk.Frame(row, bg="#0F1724", height=6)
-            track.pack(fill="x", padx=10, pady=(0, 8))
-            track.pack_propagate(False)
-            fill = tk.Frame(track, bg=bar_color, height=6)
-            fill.place(relx=0.0, rely=0.0, relwidth=max(0.04, min(1.0, float(pct))), relheight=1.0)
+        if empty_label is not None:
+            try:
+                empty_label.destroy()
+            except Exception:
+                pass
+            setattr(self, f"{kind}_worker_queue_empty_label", None)
+
+        if len(rows) != len(items):
+            self._clear_worker_queue_rows(kind)
+            rows = [self._create_worker_queue_row(inner) for _ in items]
+            setattr(self, f"{kind}_worker_queue_rows", rows)
+
+        for row_info, item in zip(rows, items):
+            status_text, fg_color, row_bg, bar_color, pct = self._worker_queue_status_meta(item.get("status"))
+            row_info["row"].config(bg=row_bg)
+            row_info["top"].config(bg=row_bg)
+            row_info["title"].config(text=self._worker_queue_item_title(item), bg=row_bg)
+            row_info["status"].config(text=status_text, bg=row_bg, fg=fg_color)
+            detail = str(item.get("detail", "") or "").strip()
+            row_info["detail"].config(text=detail[:120], bg=row_bg)
+            row_info["fill"].config(bg=bar_color)
+            row_info["fill"].place(relx=0.0, rely=0.0, relwidth=max(0.04, min(1.0, float(pct))), relheight=1.0)
 
     def _reset_worker_queue_items(self):
         self.worker_queue_items = []
