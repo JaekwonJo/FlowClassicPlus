@@ -8641,6 +8641,7 @@ class FlowVisionApp:
         empty_result_deadline = min(deadline, search_started_ts + 6.0)
         search_enter_sent = False
         tag_confirmed = False
+        failure_visible_reason = ""
         card_loc = None
         card_sel = None
         card_meta = ""
@@ -8653,8 +8654,7 @@ class FlowVisionApp:
             if result_state == "empty":
                 raise RuntimeError(f"검색 결과에 {tag} 항목이 없습니다.")
             if result_state == "failure":
-                short_reason = (result_reason or "실패").strip()
-                raise RuntimeError(f"{tag} 검색 결과가 실패 상태입니다. ({short_reason})")
+                failure_visible_reason = (result_reason or "실패").strip()
             card_loc, card_sel, card_meta = self._resolve_download_card_for_tag(mode, tag, timeout_sec=1.4)
             page_has_tag = False
             if card_loc is not None:
@@ -8714,7 +8714,7 @@ class FlowVisionApp:
                 tile_box = self._find_first_media_tile_box() or self._find_primary_media_tile_box()
                 page_has_tag_now = page_has_tag or self._download_page_contains_tag(tag)
                 search_matches_tag = self._download_search_input_matches_tag(search_loc, tag)
-                fallback_allowed = page_has_tag_now or (tile_count > 0 and search_matches_tag and result_state not in ("empty", "failure"))
+                fallback_allowed = page_has_tag_now or (tile_count > 0 and search_matches_tag and result_state != "empty")
                 if tile_box and fallback_allowed:
                     try:
                         self.page.mouse.move(
@@ -8763,6 +8763,8 @@ class FlowVisionApp:
             time.sleep(0.5)
 
         if more_loc is None:
+            if failure_visible_reason:
+                raise RuntimeError(f"{tag} 검색 결과가 실패 상태입니다. ({failure_visible_reason})")
             if tile_count > 0:
                 raise RuntimeError("검색 결과 타일은 보이지만 맨 왼쪽 위 카드의 더보기 버튼을 찾지 못했습니다.")
             if not tag_confirmed and not self._download_page_contains_tag(tag):
@@ -12321,13 +12323,13 @@ class FlowVisionApp:
 
     def _create_worker_queue_row(self, parent):
         row = tk.Frame(parent, bg="#1A2536", highlightbackground="#31455F", highlightthickness=1)
-        row.pack(fill="x", pady=4)
+        row.pack(fill="x", pady=2)
         top = tk.Frame(row, bg="#1A2536")
-        top.pack(fill="x", padx=10, pady=(8, 4))
+        top.pack(fill="x", padx=8, pady=(5, 2))
         title_label = tk.Label(
             top,
             text="",
-            font=self.font_small,
+            font=(self.font_ui_family, max(9, self._font_px("small") - 1)),
             bg="#1A2536",
             fg=self.color_text,
             anchor="w",
@@ -12345,17 +12347,17 @@ class FlowVisionApp:
         detail_label = tk.Label(
             row,
             text="",
-            font=self.font_mono_small,
+            font=(self.font_mono_family, max(9, self._font_px("mono_small") - 1)),
             bg="#1A2536",
             fg=self.color_text_sec,
             anchor="w",
             justify="left",
         )
-        detail_label.pack(fill="x", padx=10, pady=(0, 4))
-        track = tk.Frame(row, bg="#0F1724", height=6)
-        track.pack(fill="x", padx=10, pady=(0, 8))
+        detail_label.pack(fill="x", padx=8, pady=(0, 2))
+        track = tk.Frame(row, bg="#0F1724", height=4)
+        track.pack(fill="x", padx=8, pady=(0, 5))
         track.pack_propagate(False)
-        fill = tk.Frame(track, bg="#405066", height=6)
+        fill = tk.Frame(track, bg="#405066", height=4)
         fill.place(relx=0.0, rely=0.0, relwidth=0.04, relheight=1.0)
         return {
             "row": row,
