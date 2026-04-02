@@ -594,6 +594,7 @@ class FlowVisionApp:
         self.retry_error_log = []
         self.pending_periodic_refresh = None
         self.worker_queue_items = []
+        self.worker_runtime_slot_path = None
         self.section_wrappers = {}
         self.section_open_setters = {}
         self.current_selection_summary = ""
@@ -649,9 +650,11 @@ class FlowVisionApp:
         self.log_window.root.withdraw() # Start hidden
         
         try:
-            icon_path = self.base.parent / "icon.ico"
-            if icon_path.exists(): self.root.iconbitmap(str(icon_path))
-        except: pass
+            icon_path = self._resolve_window_icon_path()
+            if icon_path and icon_path.exists():
+                self.root.iconbitmap(str(icon_path))
+        except:
+            pass
         
         # [STYLE] Premium Cute + Readable Theme
         self.style = ttk.Style()
@@ -745,6 +748,9 @@ class FlowVisionApp:
         self._ensure_prompt_reference_items()
         self._ensure_pipeline_steps()
         self._ensure_pipeline_presets()
+        if self.worker_mode in ("prompt", "asset", "download"):
+            self.cfg["browser_channel"] = "chrome"
+            self._register_worker_runtime_slot()
         self._build_ui()
         self.on_reload()
         if self.worker_mode:
@@ -761,8 +767,8 @@ class FlowVisionApp:
             saved_w = 0
             saved_h = 0
         if self.worker_mode in ("prompt", "asset", "download"):
-            w = min(960, max(780, int(sw * 0.50)))
-            h = min(680, max(540, int(sh * 0.66)))
+            w = min(1120, max(920, int(sw * 0.58)))
+            h = min(860, max(760, int(sh * 0.80)))
         elif saved_w > 0 and saved_h > 0:
             w = min(sw - 40, max(860, saved_w))
             h = min(sh - 60, max(620, saved_h))
@@ -779,7 +785,7 @@ class FlowVisionApp:
             y = max((sh - h) // 2, 0)
         self.root.geometry(f"{w}x{h}+{x}+{y}")
         if self.worker_mode in ("prompt", "asset", "download"):
-            self.root.minsize(740, 520)
+            self.root.minsize(860, 700)
         else:
             self.root.minsize(860, 620)
 
@@ -1506,6 +1512,103 @@ class FlowVisionApp:
                 return f"{base} - {label} - {self.worker_name}"
             return f"{base} - {label}"
         return f"{base} - 작업창"
+
+    def _resolve_window_icon_path(self):
+        root_dir = self.base.parent
+        if self.worker_mode == "prompt":
+            candidate = root_dir / "icon_prompt.ico"
+            if candidate.exists():
+                return candidate
+        if self.worker_mode == "asset":
+            candidate = root_dir / "icon_asset.ico"
+            if candidate.exists():
+                return candidate
+        if self.worker_mode == "download":
+            candidate = root_dir / "icon_download.ico"
+            if candidate.exists():
+                return candidate
+        return root_dir / "icon.ico"
+
+    def _worker_runtime_dir(self):
+        path = self.base / "_worker_runtime"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _extract_worker_index(self, text, default=1):
+        m = re.search(r"(\d+)\s*$", str(text or "").strip())
+        if not m:
+            return int(default)
+        try:
+            return max(1, int(m.group(1)))
+        except Exception:
+            return int(default)
+
+    def _worker_slot_file(self, kind, index):
+        return self._worker_runtime_dir() / f"{str(kind or 'worker').strip().lower()}_{max(1, int(index))}.json"
+
+    def _is_pid_alive(self, pid):
+        try:
+            pid = int(pid)
+        except Exception:
+            return False
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        except Exception:
+            return False
+        return True
+
+    def _cleanup_worker_runtime_slots(self, kind=None):
+        runtime_dir = self._worker_runtime_dir()
+        prefix = f"{str(kind).strip().lower()}_" if kind else ""
+        for path in runtime_dir.glob("*.json"):
+            if prefix and not path.name.startswith(prefix):
+                continue
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                try:
+                    path.unlink()
+                except Exception:
+                    pass
+                continue
+            if self._is_pid_alive(raw.get("pid")):
+                continue
+            try:
+                path.unlink()
+            except Exception:
+                pass
+
+    def _register_worker_runtime_slot(self):
+        if self.worker_mode not in ("prompt", "asset", "download"):
+            return
+        self._cleanup_worker_runtime_slots(self.worker_mode)
+        worker_idx = self._extract_worker_index(self.worker_name or self._worker_mode_meta(self.worker_mode).get("default_name", "워커1"), default=1)
+        slot_path = self._worker_slot_file(self.worker_mode, worker_idx)
+        payload = {
+            "pid": os.getpid(),
+            "worker_mode": self.worker_mode,
+            "worker_name": self.worker_name,
+            "registered_at": datetime.now().isoformat(),
+        }
+        try:
+            slot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.worker_runtime_slot_path = slot_path
+        except Exception:
+            self.worker_runtime_slot_path = None
+
+    def _release_worker_runtime_slot(self):
+        path = getattr(self, "worker_runtime_slot_path", None)
+        self.worker_runtime_slot_path = None
+        if not path:
+            return
+        try:
+            Path(path).unlink()
+        except Exception:
+            pass
 
     def _worker_palette_index(self):
         seed = str(self.worker_name or self._current_config_display_name() or "").strip()
@@ -9100,6 +9203,8 @@ class FlowVisionApp:
         header_progress_card = tk.Frame(center_f, bg="#18283D", highlightbackground="#304663", highlightthickness=1)
         header_progress_card.pack(fill="x", expand=True, padx=(0, 8))
         tk.Label(header_progress_card, text="진행 상황", font=self.font_small, bg="#18283D", fg=self.color_text_sec).pack(anchor="center", pady=(6, 0))
+        self.lbl_header_project = tk.Label(header_progress_card, text="프로젝트: -", font=self.font_small, bg="#18283D", fg=self.color_info)
+        self.lbl_header_project.pack(anchor="center", pady=(0, 2))
         self.lbl_header_progress = tk.Label(header_progress_card, text="0 / 0 (0.0%)", font=(self.font_mono_family, 13, "bold"), bg="#18283D", fg=self.color_accent)
         self.lbl_header_progress.pack(anchor="center", pady=(0, 3))
         self.header_progress_canvas = tk.Canvas(header_progress_card, height=18, bg="#18283D", highlightthickness=0, bd=0)
@@ -11096,6 +11201,7 @@ class FlowVisionApp:
 
         head = tk.Frame(card, bg=self.color_card)
         head.pack(fill="x", padx=16, pady=(14, 8))
+        self.worker_compact_head = head
         head_left = tk.Frame(head, bg=self.color_card)
         head_left.pack(side="left", fill="x", expand=True)
         self.lbl_worker_compact_title = tk.Label(
@@ -11128,6 +11234,7 @@ class FlowVisionApp:
 
         meta_strip = tk.Frame(card, bg=self.color_header, highlightbackground=self.color_accent, highlightthickness=1)
         meta_strip.pack(fill="x", padx=16, pady=(0, 12))
+        self.worker_compact_meta_strip = meta_strip
         meta_left = tk.Frame(meta_strip, bg=self.color_header)
         meta_left.pack(side="left", fill="x", expand=True, padx=10, pady=8)
         self.lbl_worker_compact_identity = tk.Label(
@@ -11156,6 +11263,12 @@ class FlowVisionApp:
 
         self.prompt_worker_simple = tk.Frame(card, bg=self.color_card)
         self.prompt_worker_simple.pack(fill="both", expand=True, padx=16, pady=(0, 14))
+
+        prompt_toolbar = tk.Frame(self.prompt_worker_simple, bg=self.color_card)
+        prompt_toolbar.pack(fill="x", pady=(0, 6))
+        ttk.Button(prompt_toolbar, text="목록 새로고침", command=self._reload_worker_shared_lists).pack(side="left")
+        ttk.Button(prompt_toolbar, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(6, 0))
+        ttk.Button(prompt_toolbar, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
 
         profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
         project_values = [str(item.get("project_name", "") or f"프로젝트 {idx+1}") for idx, item in enumerate(profiles)]
@@ -11192,7 +11305,25 @@ class FlowVisionApp:
         self.combo_worker_prompt_slot = ttk.Combobox(basic_box, textvariable=self.worker_prompt_slot_var, state="readonly", values=slot_names, font=self.font_body)
         self.combo_worker_prompt_slot.grid(row=2, column=1, sticky="ew", padx=(0, 12), pady=(0, 8))
 
-        tk.Label(basic_box, text="생성 개수", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=12, pady=(0, 8))
+        prompt_slot_actions = tk.Frame(basic_box, bg=self.color_panel_soft)
+        prompt_slot_actions.grid(row=3, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 8))
+        ttk.Button(prompt_slot_actions, text="파일 열기", command=self._worker_open_prompt_slot_file).pack(side="left")
+        ttk.Button(prompt_slot_actions, text="이름수정", command=self._worker_rename_prompt_slot).pack(side="left", padx=(6, 0))
+        ttk.Button(prompt_slot_actions, text="삭제", command=self._worker_delete_prompt_slot).pack(side="left", padx=(6, 0))
+        ttk.Button(prompt_slot_actions, text="추가", command=self._worker_add_prompt_slot).pack(side="left", padx=(6, 0))
+        ttk.Button(prompt_slot_actions, text="새로고침", command=self._reload_worker_shared_lists).pack(side="left", padx=(6, 0))
+        self.lbl_worker_prompt_slot_info = tk.Label(
+            basic_box,
+            text="프롬프트 파일 정보 확인 중...",
+            font=self.font_small,
+            bg=self.color_panel_soft,
+            fg=self.color_text_sec,
+            anchor="w",
+            justify="left",
+        )
+        self.lbl_worker_prompt_slot_info.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 8))
+
+        tk.Label(basic_box, text="생성 개수", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=5, column=0, sticky="w", padx=12, pady=(0, 8))
         self.combo_worker_prompt_count = ttk.Combobox(
             basic_box,
             textvariable=self.worker_prompt_count_var,
@@ -11201,9 +11332,9 @@ class FlowVisionApp:
             font=self.font_body,
             width=8,
         )
-        self.combo_worker_prompt_count.grid(row=3, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
+        self.combo_worker_prompt_count.grid(row=5, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
 
-        tk.Label(basic_box, text="다운로드 전 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=4, column=0, sticky="w", padx=12, pady=(0, 12))
+        tk.Label(basic_box, text="다운로드 전 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=6, column=0, sticky="w", padx=12, pady=(0, 12))
         tk.Entry(
             basic_box,
             textvariable=self.worker_prompt_interval_var,
@@ -11211,7 +11342,7 @@ class FlowVisionApp:
             fg=self.color_input_fg,
             insertbackground=self.color_input_fg,
             font=self.font_mono_small,
-        ).grid(row=4, column=1, sticky="ew", padx=(0, 12), pady=(0, 12), ipady=2)
+        ).grid(row=6, column=1, sticky="ew", padx=(0, 12), pady=(0, 12), ipady=2)
 
         number_box = tk.Frame(content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         number_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
@@ -11261,6 +11392,7 @@ class FlowVisionApp:
         ).grid(row=3, column=1, sticky="ew", padx=(0, 12), pady=(0, 12), ipady=2)
 
         summary_box = tk.Frame(self.prompt_worker_simple, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
+        self.prompt_worker_summary_box = summary_box
         summary_box.pack(fill="x", pady=(6, 10))
         self.lbl_worker_prompt_summary = tk.Label(
             summary_box,
@@ -11296,6 +11428,12 @@ class FlowVisionApp:
         self._build_worker_queue_panel(self.prompt_worker_simple, "prompt")
 
         self.asset_worker_simple = tk.Frame(card, bg=self.color_card)
+
+        asset_toolbar = tk.Frame(self.asset_worker_simple, bg=self.color_card)
+        asset_toolbar.pack(fill="x", pady=(0, 6))
+        ttk.Button(asset_toolbar, text="목록 새로고침", command=self._reload_worker_shared_lists).pack(side="left")
+        ttk.Button(asset_toolbar, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(6, 0))
+        ttk.Button(asset_toolbar, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
 
         asset_defaults = self._asset_worker_selection_defaults()
         self.worker_asset_project_var = tk.StringVar(value=project_values[active_project_idx] if project_values else "기본 프로젝트")
@@ -11416,6 +11554,7 @@ class FlowVisionApp:
         ).grid(row=3, column=1, sticky="ew", padx=(0, 12), pady=(0, 12), ipady=2)
 
         asset_summary_box = tk.Frame(self.asset_worker_simple, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
+        self.asset_worker_summary_box = asset_summary_box
         asset_summary_box.pack(fill="x", pady=(6, 10))
         self.lbl_worker_asset_summary = tk.Label(
             asset_summary_box,
@@ -11451,6 +11590,12 @@ class FlowVisionApp:
         self._build_worker_queue_panel(self.asset_worker_simple, "asset")
 
         self.download_worker_simple = tk.Frame(card, bg=self.color_card)
+
+        download_toolbar = tk.Frame(self.download_worker_simple, bg=self.color_card)
+        download_toolbar.pack(fill="x", pady=(0, 6))
+        ttk.Button(download_toolbar, text="목록 새로고침", command=self._reload_worker_shared_lists).pack(side="left")
+        ttk.Button(download_toolbar, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(6, 0))
+        ttk.Button(download_toolbar, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
 
         download_defaults = self._asset_worker_selection_defaults()
         self.worker_download_project_var = tk.StringVar(value=project_values[active_project_idx] if project_values else "기본 프로젝트")
@@ -11570,6 +11715,7 @@ class FlowVisionApp:
         ).grid(row=3, column=1, sticky="ew", padx=(0, 12), pady=(0, 12), ipady=2)
 
         download_summary_box = tk.Frame(self.download_worker_simple, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
+        self.download_worker_summary_box = download_summary_box
         download_summary_box.pack(fill="x", pady=(6, 10))
         self.lbl_worker_download_summary = tk.Label(
             download_summary_box,
@@ -11682,11 +11828,12 @@ class FlowVisionApp:
             bg=self.color_panel_soft,
             fg=self.color_text_sec,
         )
-        status_lbl.pack(side="right")
+        status_lbl.pack(side="right", padx=(8, 0))
+        ttk.Button(head, text="지우기", command=self._reset_worker_queue_items, style="ControlCompact.TButton").pack(side="right")
 
         list_frame = tk.Frame(panel, bg=self.color_panel_soft)
         list_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        canvas = tk.Canvas(list_frame, bg=self.color_panel_soft, highlightthickness=0, bd=0, height=250)
+        canvas = tk.Canvas(list_frame, bg=self.color_panel_soft, highlightthickness=0, bd=0, height=320)
         scrolly = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
         inner = tk.Frame(canvas, bg=self.color_panel_soft)
         inner.bind("<Configure>", lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
@@ -11882,6 +12029,7 @@ class FlowVisionApp:
         for remain in range(wait_seconds, 0, -1):
             if (not self.running) or self.paused:
                 raise RuntimeError("사용자 중지로 통합 다운로드 대기가 취소되었습니다.")
+            self._set_worker_queue_item_state(self.index, "waiting", f"{tag} 생성 대기 {remain}초")
             self.update_status_label(f"⏳ 생성 대기 후 다운로드... {tag} | {remain}초", self.color_info)
             time.sleep(1.0)
 
@@ -12093,7 +12241,51 @@ class FlowVisionApp:
         self._refresh_download_worker_compact_summary()
         self._refresh_worker_preview_progress()
         self._refresh_worker_quick_hud()
+        self._refresh_worker_prompt_slot_info()
         self.log(f"🔄 워커 목록 새로고침 | 프로젝트 {len(project_values)}개 | 프롬프트 파일 {len(slot_names)}개")
+
+    def _sync_worker_prompt_slot_to_cfg(self):
+        slot_names = self._prompt_slot_names()
+        slot_name = str(self.worker_prompt_slot_var.get() or "").strip() if hasattr(self, "worker_prompt_slot_var") else ""
+        if slot_name not in slot_names:
+            return False
+        slot_idx = slot_names.index(slot_name)
+        slot_idx = self._clamp_slot_index(slot_idx, default=0)
+        self.cfg["active_prompt_slot"] = slot_idx
+        slot_info = (self.cfg.get("prompt_slots", []) or [{}])[slot_idx]
+        self.cfg["prompts_file"] = str(slot_info.get("file", self.cfg.get("prompts_file", "flow_prompts.txt")) or self.cfg.get("prompts_file", "flow_prompts.txt"))
+        self.save_config()
+        return True
+
+    def _refresh_worker_prompt_slot_info(self):
+        if not hasattr(self, "lbl_worker_prompt_slot_info"):
+            return
+        slot_names = self._prompt_slot_names()
+        slot_name = str(self.worker_prompt_slot_var.get() or "").strip() if hasattr(self, "worker_prompt_slot_var") else ""
+        if slot_name not in slot_names:
+            self.lbl_worker_prompt_slot_info.config(text="프롬프트 파일 정보 없음", fg=self.color_text_sec)
+            return
+        slot_idx = slot_names.index(slot_name)
+        summary = self._pipeline_prompt_slot_summary(slot_idx)
+        self.lbl_worker_prompt_slot_info.config(text=summary, fg=self.color_info if "총 " in summary else self.color_text_sec)
+
+    def _worker_open_prompt_slot_file(self):
+        if self._sync_worker_prompt_slot_to_cfg():
+            self.on_open_prompts()
+
+    def _worker_rename_prompt_slot(self):
+        if self._sync_worker_prompt_slot_to_cfg():
+            self.on_rename_slot()
+            self._reload_worker_shared_lists()
+
+    def _worker_add_prompt_slot(self):
+        self.on_add_slot()
+        self._reload_worker_shared_lists()
+
+    def _worker_delete_prompt_slot(self):
+        if self._sync_worker_prompt_slot_to_cfg():
+            self.on_delete_slot()
+            self._reload_worker_shared_lists()
 
     def _refresh_prompt_worker_compact_summary(self, *_args):
         if not hasattr(self, "worker_prompt_summary_var"):
@@ -12111,6 +12303,7 @@ class FlowVisionApp:
         self.worker_prompt_summary_var.set(
             f"프로젝트: {self.worker_project_var.get().strip() or '-'} | 파일: {slot_text} | 생성: {count_text} | 대상: {target} | 다운로드: 이미지 {download_quality}"
         )
+        self._refresh_worker_prompt_slot_info()
         self._refresh_worker_preview_progress()
         self._refresh_worker_quick_hud()
 
@@ -12166,6 +12359,7 @@ class FlowVisionApp:
         self.cfg["prompt_variant_count"] = str(self.worker_prompt_count_var.get() or "x1").strip().lower() or "x1"
         self.cfg["prompt_media_mode"] = "image"
         self.cfg["current_media_state"] = "image"
+        self.cfg["browser_channel"] = "chrome"
         if hasattr(self, "entry_interval"):
             try:
                 self.entry_interval.delete(0, "end")
@@ -12280,6 +12474,7 @@ class FlowVisionApp:
         self.cfg["asset_prompt_variant_count"] = str(self.worker_asset_count_var.get() or "x1").strip().lower() or "x1"
         self.cfg["asset_prompt_media_mode"] = "video"
         self.cfg["current_media_state"] = "video"
+        self.cfg["browser_channel"] = "chrome"
         if hasattr(self, "entry_interval"):
             try:
                 self.entry_interval.delete(0, "end")
@@ -12406,6 +12601,7 @@ class FlowVisionApp:
         self.cfg["download_number_mode_enabled"] = True
         self.cfg["download_output_dir"] = output_dir
         self.cfg["current_media_state"] = "image" if download_mode == "image" else "video"
+        self.cfg["browser_channel"] = "chrome"
         if download_mode == "image":
             self.cfg["download_image_quality"] = quality
         else:
@@ -12454,6 +12650,14 @@ class FlowVisionApp:
             status_text = self.lbl_main_status.cget("text") if hasattr(self, "lbl_main_status") else "준비 완료"
             status_color = self.lbl_main_status.cget("fg") if hasattr(self, "lbl_main_status") else self.color_success
             progress_text = self.lbl_header_progress.cget("text") if hasattr(self, "lbl_header_progress") else "0 / 0 (0.0%)"
+            if hasattr(self, "lbl_app_title"):
+                self.lbl_app_title.config(text=title)
+            if hasattr(self, "lbl_app_subtitle"):
+                self.lbl_app_subtitle.config(
+                    text=f"{worker_name} | 설정 {self._current_config_display_name()} | 프로필 {self._browser_profile_dir_name()}"
+                )
+            if hasattr(self, "lbl_header_project"):
+                self.lbl_header_project.config(text=f"프로젝트: {project_name}")
             self.lbl_worker_hud_title.config(text=f"{title} | {worker_name}")
             self.lbl_worker_hud_project.config(text=f"프로젝트: {project_name}")
             self.lbl_worker_hud_status.config(text=f"상태: {status_text}", fg=status_color)
@@ -12469,9 +12673,8 @@ class FlowVisionApp:
             }.get(self.worker_mode, "▶ 시작")
             if hasattr(self, "btn_worker_quick_start"):
                 self.btn_worker_quick_start.config(text=quick_start_text)
-            if hasattr(self, "body_pane"):
-                if not self.worker_quick_hud.winfo_ismapped():
-                    self.worker_quick_hud.pack(fill="x", pady=(0, 6), before=self.body_pane)
+            if self.worker_quick_hud.winfo_ismapped():
+                self.worker_quick_hud.pack_forget()
         else:
             if self.worker_quick_hud.winfo_ismapped():
                 self.worker_quick_hud.pack_forget()
@@ -12532,6 +12735,22 @@ class FlowVisionApp:
                 self.bottom_frame.grid_remove()
             if hasattr(self, "worker_compact_panel") and (not self.worker_compact_panel.winfo_ismapped()):
                 self.worker_compact_panel.pack(fill="both", expand=True)
+            if hasattr(self, "worker_compact_head") and self.worker_compact_head.winfo_ismapped():
+                self.worker_compact_head.pack_forget()
+            if hasattr(self, "worker_compact_meta_strip") and self.worker_compact_meta_strip.winfo_ismapped():
+                self.worker_compact_meta_strip.pack_forget()
+            if hasattr(self, "prompt_worker_summary_box") and self.prompt_worker_summary_box.winfo_ismapped():
+                self.prompt_worker_summary_box.pack_forget()
+            if hasattr(self, "asset_worker_summary_box") and self.asset_worker_summary_box.winfo_ismapped():
+                self.asset_worker_summary_box.pack_forget()
+            if hasattr(self, "download_worker_summary_box") and self.download_worker_summary_box.winfo_ismapped():
+                self.download_worker_summary_box.pack_forget()
+            if hasattr(self, "lbl_worker_prompt_help") and self.lbl_worker_prompt_help.winfo_ismapped():
+                self.lbl_worker_prompt_help.pack_forget()
+            if hasattr(self, "lbl_worker_asset_help") and self.lbl_worker_asset_help.winfo_ismapped():
+                self.lbl_worker_asset_help.pack_forget()
+            if hasattr(self, "lbl_worker_download_help") and self.lbl_worker_download_help.winfo_ismapped():
+                self.lbl_worker_download_help.pack_forget()
             if hasattr(self, "prompt_worker_simple"):
                 if self.worker_mode == "prompt":
                     self.prompt_worker_simple.pack(fill="both", expand=True, padx=16, pady=(0, 14))
@@ -12645,21 +12864,13 @@ class FlowVisionApp:
         meta = self._worker_mode_meta(kind)
         default_name = str(meta.get("default_name", "워커1") or "워커1").strip()
         base_name = re.sub(r"\d+$", "", default_name).rstrip("_") or default_name
-        next_idx = max(1, int(self.worker_launch_counters.get(kind, 1) or 1))
+        self._cleanup_worker_runtime_slots(kind)
+        next_idx = 1
+        while self._worker_slot_file(kind, next_idx).exists():
+            next_idx += 1
         return f"{base_name}{next_idx}"
 
     def _advance_worker_bundle_name(self, kind, launched_name=""):
-        current_idx = max(1, int(self.worker_launch_counters.get(kind, 1) or 1))
-        launched_name = str(launched_name or "").strip()
-        launched_idx = current_idx
-        if launched_name:
-            m = re.search(r"(\d+)\s*$", launched_name)
-            if m:
-                try:
-                    launched_idx = max(1, int(m.group(1)))
-                except Exception:
-                    launched_idx = current_idx
-        self.worker_launch_counters[kind] = max(current_idx + 1, launched_idx + 1)
         return self._suggest_worker_bundle_name(kind)
 
     def _launch_worker_process(self, kind, worker_name, config_name, browser_profile_name, project_index=0, extra_cfg=None):
@@ -12679,6 +12890,7 @@ class FlowVisionApp:
         worker_cfg["worker_mode"] = kind
         worker_cfg["worker_name"] = worker_name
         worker_cfg["browser_profile_dir"] = browser_profile_name
+        worker_cfg["browser_channel"] = "chrome"
         profiles = worker_cfg.get("project_profiles", []) or []
         try:
             project_index = int(project_index)
@@ -17193,7 +17405,6 @@ class FlowVisionApp:
         self.current_selection_input = ""
         self.current_expected_mode = None
         self.current_expected_items = []
-        self._reset_worker_queue_items()
         try:
             self.combo_input_mode.config(state="readonly")
         except Exception:
@@ -17379,6 +17590,7 @@ class FlowVisionApp:
         self._stop_worker_thread()
         self._shutdown_browser()
         self._close_action_log()
+        self._release_worker_runtime_slot()
         self._stop_tray_icon()
         self.run_input_mode = None
         self.current_run_mode = None
