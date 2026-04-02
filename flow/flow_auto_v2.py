@@ -1504,6 +1504,45 @@ class FlowVisionApp:
         except:
             pass
 
+    def _sync_worker_shared_lists_to_main_config(self):
+        if self.worker_mode not in ("prompt", "asset", "download"):
+            return False
+        main_cfg_path = self.base / CONFIG_FILE
+        try:
+            main_cfg = load_config_from_file(main_cfg_path)
+        except Exception:
+            main_cfg = copy.deepcopy(DEFAULT_CONFIG)
+
+        profiles = copy.deepcopy(self.cfg.get("project_profiles", []) or [self._default_project_profile()])
+        slots = copy.deepcopy(self.cfg.get("prompt_slots", []) or [{"name": "기본 슬롯", "file": "flow_prompts.txt"}])
+        main_cfg["project_profiles"] = profiles
+        main_cfg["prompt_slots"] = slots
+        main_cfg["active_project_profile"] = self._clamp_project_profile_index(
+            self.cfg.get("active_project_profile", main_cfg.get("active_project_profile", 0)),
+            default=0,
+        )
+        main_cfg["active_prompt_slot"] = self._clamp_slot_index(
+            self.cfg.get("active_prompt_slot", main_cfg.get("active_prompt_slot", 0)),
+            default=0,
+        )
+        try:
+            project = profiles[main_cfg["active_project_profile"]]
+            main_cfg["start_url"] = str(project.get("url", "") or main_cfg.get("start_url", "")).strip()
+        except Exception:
+            pass
+        try:
+            slot = slots[main_cfg["active_prompt_slot"]]
+            main_cfg["prompts_file"] = str(slot.get("file", main_cfg.get("prompts_file", "flow_prompts.txt")) or main_cfg.get("prompts_file", "flow_prompts.txt"))
+        except Exception:
+            pass
+        try:
+            main_cfg_path.write_text(json.dumps(main_cfg, indent=4, ensure_ascii=False), encoding="utf-8")
+            save_shared_settings_from_cfg(main_cfg, main_cfg_path.parent)
+            return True
+        except Exception as e:
+            self.log(f"⚠️ 메인 공용 목록 저장 실패: {e}")
+            return False
+
     def _root_window_title(self):
         base = APP_NAME
         if self.worker_mode in ("prompt", "asset", "download"):
@@ -2789,6 +2828,7 @@ class FlowVisionApp:
         profiles.append({"project_name": name, "url": str(url or "").strip()})
         self.cfg["project_profiles"] = profiles
         self._refresh_worker_project_controls(len(profiles) - 1)
+        self._sync_worker_shared_lists_to_main_config()
         self.log(f"📁 워커 프로젝트 추가: {name}")
 
     def _worker_rename_project_profile(self):
@@ -2804,6 +2844,7 @@ class FlowVisionApp:
         profiles[active]["project_name"] = new_name
         self.cfg["project_profiles"] = profiles
         self._refresh_worker_project_controls(active)
+        self._sync_worker_shared_lists_to_main_config()
         self.log(f"✏️ 워커 프로젝트 이름 변경: {current_name} -> {new_name}")
 
     def _worker_edit_project_profile_url(self):
@@ -2817,6 +2858,7 @@ class FlowVisionApp:
         profiles[active]["url"] = str(new_url or "").strip()
         self.cfg["project_profiles"] = profiles
         self._refresh_worker_project_controls(active)
+        self._sync_worker_shared_lists_to_main_config()
         self.log(f"🔗 워커 프로젝트 URL 변경: {current_name}")
 
     def _worker_delete_project_profile(self):
@@ -2831,6 +2873,7 @@ class FlowVisionApp:
         profiles.pop(active)
         self.cfg["project_profiles"] = profiles
         self._refresh_worker_project_controls(max(0, active - 1))
+        self._sync_worker_shared_lists_to_main_config()
         self.log(f"🗑 워커 프로젝트 삭제: {current_name}")
 
     def _active_project_profile_item(self):
@@ -18495,6 +18538,7 @@ class FlowVisionApp:
         if new_name:
             self.cfg["prompt_slots"][idx]["name"] = new_name
             self.save_config()
+            self._sync_worker_shared_lists_to_main_config()
             
             # UI Update
             slots = [s["name"] for s in self.cfg["prompt_slots"]]
@@ -18527,6 +18571,7 @@ class FlowVisionApp:
         # 설정 추가
         self.cfg["prompt_slots"].append({"name": new_name, "file": new_file})
         self.save_config()
+        self._sync_worker_shared_lists_to_main_config()
         
         # UI 갱신
         slots = [s["name"] for s in self.cfg["prompt_slots"]]
@@ -18583,6 +18628,7 @@ class FlowVisionApp:
                 self.relay_pick_var.set(False)
             
         self.save_config()
+        self._sync_worker_shared_lists_to_main_config()
         
         # UI 갱신
         slots = [s["name"] for s in self.cfg["prompt_slots"]]
