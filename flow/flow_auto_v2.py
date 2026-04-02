@@ -87,6 +87,10 @@ DEFAULT_CONFIG = {
     "prompts_file": "flow_prompts.txt",
     "prompts_separator": "|||",
     "interval_seconds": 180,
+    "prompt_combined_download_wait_seconds": 180,
+    "prompt_combined_next_interval_seconds": 180,
+    "asset_combined_download_wait_seconds": 180,
+    "asset_combined_next_interval_seconds": 180,
     "start_url": "https://labs.google/flow",
     "input_selector": "#PINHOLE_TEXT_AREA_ELEMENT_ID, textarea, [role='textbox'], [contenteditable='true']",
     "submit_selector": "button[type='submit']",
@@ -11376,7 +11380,10 @@ class FlowVisionApp:
         self.worker_project_var = tk.StringVar(value=project_values[active_project_idx] if project_values else "기본 프로젝트")
         self.worker_prompt_slot_var = tk.StringVar(value=slot_names[active_slot_idx] if slot_names else "")
         self.worker_prompt_count_var = tk.StringVar(value=str(self.cfg.get("prompt_variant_count", "x1") or "x1").strip().lower() or "x1")
-        self.worker_prompt_interval_var = tk.StringVar(value=str(int(self.cfg.get("interval_seconds", 180) or 180)))
+        prompt_download_wait = int(self.cfg.get("prompt_combined_download_wait_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
+        prompt_next_wait = int(self.cfg.get("prompt_combined_next_interval_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
+        self.worker_prompt_download_wait_var = tk.StringVar(value=str(prompt_download_wait))
+        self.worker_prompt_next_interval_var = tk.StringVar(value=str(prompt_next_wait))
         self.worker_prompt_number_mode_var = tk.StringVar(value=defaults["mode"])
         self.worker_prompt_range_start_var = tk.StringVar(value=defaults["start"])
         self.worker_prompt_range_end_var = tk.StringVar(value=defaults["end"])
@@ -11490,15 +11497,24 @@ class FlowVisionApp:
             width=8,
         )
         self.combo_worker_prompt_count.grid(row=0, column=1, sticky="w", padx=(6, 14))
-        tk.Label(prompt_extra_wrap, text="다운로드 전 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=0, column=2, sticky="w")
+        tk.Label(prompt_extra_wrap, text="생성 후 다운로드 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=0, column=2, sticky="w")
         tk.Entry(
             prompt_extra_wrap,
-            textvariable=self.worker_prompt_interval_var,
+            textvariable=self.worker_prompt_download_wait_var,
             bg=self.color_input_bg,
             fg=self.color_input_fg,
             insertbackground=self.color_input_fg,
             font=self.font_mono_small,
         ).grid(row=0, column=3, sticky="ew", padx=(6, 0), ipady=2)
+        tk.Label(prompt_extra_wrap, text="다운로드 후 다음 작업 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        tk.Entry(
+            prompt_extra_wrap,
+            textvariable=self.worker_prompt_next_interval_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        ).grid(row=1, column=1, sticky="ew", padx=(6, 14), pady=(8, 0), ipady=2)
 
         summary_box = tk.Frame(self.prompt_worker_simple, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         self.prompt_worker_summary_box = summary_box
@@ -11543,7 +11559,10 @@ class FlowVisionApp:
         asset_defaults = self._asset_worker_selection_defaults()
         self.worker_asset_project_var = tk.StringVar(value=project_values[active_project_idx] if project_values else "기본 프로젝트")
         self.worker_asset_count_var = tk.StringVar(value=str(self.cfg.get("asset_prompt_variant_count", "x1") or "x1").strip().lower() or "x1")
-        self.worker_asset_interval_var = tk.StringVar(value=str(int(self.cfg.get("interval_seconds", 180) or 180)))
+        asset_download_wait = int(self.cfg.get("asset_combined_download_wait_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
+        asset_next_wait = int(self.cfg.get("asset_combined_next_interval_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
+        self.worker_asset_download_wait_var = tk.StringVar(value=str(asset_download_wait))
+        self.worker_asset_next_interval_var = tk.StringVar(value=str(asset_next_wait))
         self.worker_asset_number_mode_var = tk.StringVar(value=asset_defaults["mode"])
         self.worker_asset_range_start_var = tk.StringVar(value=asset_defaults["start"])
         self.worker_asset_range_end_var = tk.StringVar(value=asset_defaults["end"])
@@ -11662,15 +11681,24 @@ class FlowVisionApp:
             width=8,
         )
         self.combo_worker_asset_count.grid(row=0, column=1, sticky="w", padx=(6, 14))
-        tk.Label(asset_extra_wrap, text="다운로드 전 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=0, column=2, sticky="w")
+        tk.Label(asset_extra_wrap, text="생성 후 다운로드 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=0, column=2, sticky="w")
         tk.Entry(
             asset_extra_wrap,
-            textvariable=self.worker_asset_interval_var,
+            textvariable=self.worker_asset_download_wait_var,
             bg=self.color_input_bg,
             fg=self.color_input_fg,
             insertbackground=self.color_input_fg,
             font=self.font_mono_small,
         ).grid(row=0, column=3, sticky="ew", padx=(6, 0), ipady=2)
+        tk.Label(asset_extra_wrap, text="다운로드 후 다음 작업 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        tk.Entry(
+            asset_extra_wrap,
+            textvariable=self.worker_asset_next_interval_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        ).grid(row=1, column=1, sticky="ew", padx=(6, 14), pady=(8, 0), ipady=2)
 
         asset_summary_box = tk.Frame(self.asset_worker_simple, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         self.asset_worker_summary_box = asset_summary_box
@@ -11881,7 +11909,8 @@ class FlowVisionApp:
             self.worker_project_var,
             self.worker_prompt_slot_var,
             self.worker_prompt_count_var,
-            self.worker_prompt_interval_var,
+            self.worker_prompt_download_wait_var,
+            self.worker_prompt_next_interval_var,
             self.worker_prompt_number_mode_var,
             self.worker_prompt_range_start_var,
             self.worker_prompt_range_end_var,
@@ -11892,7 +11921,8 @@ class FlowVisionApp:
         for var in (
             self.worker_asset_project_var,
             self.worker_asset_count_var,
-            self.worker_asset_interval_var,
+            self.worker_asset_download_wait_var,
+            self.worker_asset_next_interval_var,
             self.worker_asset_number_mode_var,
             self.worker_asset_range_start_var,
             self.worker_asset_range_end_var,
@@ -12195,6 +12225,15 @@ class FlowVisionApp:
     def _combined_worker_download_mode(self):
         return "video" if self.current_run_mode == "asset" else "image"
 
+    def _combined_worker_download_wait_cfg_key(self):
+        return "asset_combined_download_wait_seconds" if self.current_run_mode == "asset" else "prompt_combined_download_wait_seconds"
+
+    def _combined_worker_next_interval_cfg_key(self):
+        return "asset_combined_next_interval_seconds" if self.current_run_mode == "asset" else "prompt_combined_next_interval_seconds"
+
+    def _combined_worker_random_ratio(self):
+        return 0.25
+
     def _combined_worker_download_tag(self, source_no=None, asset_tag=""):
         normalized_tag = self._normalize_reference_asset_tag(asset_tag)
         if normalized_tag:
@@ -12210,9 +12249,19 @@ class FlowVisionApp:
 
     def _combined_worker_wait_before_download(self):
         try:
-            return max(1, int(self.cfg.get("interval_seconds", 180) or 180))
+            base = max(1, int(self.cfg.get(self._combined_worker_download_wait_cfg_key(), self.cfg.get("interval_seconds", 180) or 180) or 180))
         except Exception:
-            return 180
+            base = 180
+        extra = max(0, int(round(base * self._combined_worker_random_ratio())))
+        return max(1, base + random.randint(0, extra))
+
+    def _combined_worker_next_interval_delay(self):
+        try:
+            base = max(1, int(self.cfg.get(self._combined_worker_next_interval_cfg_key(), self.cfg.get("interval_seconds", 180) or 180) or 180))
+        except Exception:
+            base = 180
+        swing = max(0, int(round(base * self._combined_worker_random_ratio())))
+        return max(1, base + random.randint(-swing, swing))
 
     def _wait_before_combined_download(self, tag, wait_seconds):
         wait_seconds = max(1, int(wait_seconds or 1))
@@ -12244,7 +12293,7 @@ class FlowVisionApp:
         self.session_log.append(entry)
         return entry
 
-    def _finish_combined_worker_item(self, *, success, source_no=None, asset_tag="", prompt="", started_at=None, error="", file_name="", file_path="", download_tag=""):
+    def _finish_combined_worker_item(self, *, success, source_no=None, asset_tag="", prompt="", started_at=None, error="", file_name="", file_path="", download_tag="", next_delay_seconds=None):
         run_mode = self.current_run_mode or ("asset" if asset_tag else "prompt")
         queue_detail = f"저장: {file_name}" if success and file_name else ("다운로드 완료" if success else (str(error or "").strip() or "실패"))
         self._record_prompt_asset_session_result(
@@ -12268,7 +12317,8 @@ class FlowVisionApp:
         if self.index >= len(self.prompts):
             self._show_completion_popup()
             return
-        self.t_next = time.time() + 1
+        next_delay = max(1, int(next_delay_seconds or 1)) if success else 1
+        self.t_next = time.time() + next_delay
 
     def _set_worker_preview_progress(self, total):
         try:
@@ -12491,7 +12541,8 @@ class FlowVisionApp:
             target = "전체"
         download_quality = self._download_quality("image")
         self.worker_prompt_summary_var.set(
-            f"프로젝트: {self.worker_project_var.get().strip() or '-'} | 파일: {slot_text} | 생성: {count_text} | 대상: {target} | 다운로드: 이미지 {download_quality}"
+            f"프로젝트: {self.worker_project_var.get().strip() or '-'} | 파일: {slot_text} | 생성: {count_text} | 대상: {target} | "
+            f"생성대기: {self.worker_prompt_download_wait_var.get().strip() or '-'}초+랜덤 | 다음대기: {self.worker_prompt_next_interval_var.get().strip() or '-'}초±랜덤 | 다운로드: 이미지 {download_quality}"
         )
         self._refresh_worker_prompt_slot_info()
         self._refresh_worker_preview_progress()
@@ -12499,10 +12550,11 @@ class FlowVisionApp:
 
     def _apply_prompt_worker_compact_to_cfg(self, show_errors=True):
         try:
-            interval_seconds = max(1, int(str(self.worker_prompt_interval_var.get() or "180").strip()))
+            download_wait_seconds = max(1, int(str(self.worker_prompt_download_wait_var.get() or "180").strip()))
+            next_interval_seconds = max(1, int(str(self.worker_prompt_next_interval_var.get() or "180").strip()))
         except Exception:
             if show_errors:
-                messagebox.showwarning("안내", "작업 간격은 1초 이상 숫자로 적어주세요.", parent=self.root)
+                messagebox.showwarning("안내", "대기시간은 1초 이상 숫자로 적어주세요.", parent=self.root)
             return False
 
         profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
@@ -12543,7 +12595,9 @@ class FlowVisionApp:
 
         self.cfg["active_prompt_slot"] = slot_idx
         self.cfg["prompts_file"] = str(slot_info.get("file", self.cfg.get("prompts_file", "flow_prompts.txt")) or self.cfg.get("prompts_file", "flow_prompts.txt"))
-        self.cfg["interval_seconds"] = interval_seconds
+        self.cfg["interval_seconds"] = next_interval_seconds
+        self.cfg["prompt_combined_download_wait_seconds"] = download_wait_seconds
+        self.cfg["prompt_combined_next_interval_seconds"] = next_interval_seconds
         self.cfg["prompt_manual_selection_enabled"] = bool(selection_spec)
         self.cfg["prompt_manual_selection"] = selection_spec
         self.cfg["prompt_variant_count"] = str(self.worker_prompt_count_var.get() or "x1").strip().lower() or "x1"
@@ -12553,7 +12607,7 @@ class FlowVisionApp:
         if hasattr(self, "entry_interval"):
             try:
                 self.entry_interval.delete(0, "end")
-                self.entry_interval.insert(0, str(interval_seconds))
+                self.entry_interval.insert(0, str(next_interval_seconds))
             except Exception:
                 pass
         self.save_config()
@@ -12584,7 +12638,9 @@ class FlowVisionApp:
             prompt_file_text = self.worker_asset_prompt_file_var.get().strip() or "(파일 선택 필요)"
         download_quality = self._download_quality("video")
         self.worker_asset_summary_var.set(
-            f"프로젝트: {self.worker_asset_project_var.get().strip() or '-'} | 생성: {self.worker_asset_count_var.get().strip() or 'x1'} | 대상: {target} | 프롬프트: {prompt_file_text} | 다운로드: 영상 {download_quality}"
+            f"프로젝트: {self.worker_asset_project_var.get().strip() or '-'} | 생성: {self.worker_asset_count_var.get().strip() or 'x1'} | 대상: {target} | "
+            f"생성대기: {self.worker_asset_download_wait_var.get().strip() or '-'}초+랜덤 | 다음대기: {self.worker_asset_next_interval_var.get().strip() or '-'}초±랜덤 | "
+            f"프롬프트: {prompt_file_text} | 다운로드: 영상 {download_quality}"
         )
         self._refresh_worker_preview_progress()
         self._refresh_worker_quick_hud()
@@ -12610,10 +12666,11 @@ class FlowVisionApp:
 
     def _apply_asset_worker_compact_to_cfg(self, show_errors=True):
         try:
-            interval_seconds = max(1, int(str(self.worker_asset_interval_var.get() or "180").strip()))
+            download_wait_seconds = max(1, int(str(self.worker_asset_download_wait_var.get() or "180").strip()))
+            next_interval_seconds = max(1, int(str(self.worker_asset_next_interval_var.get() or "180").strip()))
         except Exception:
             if show_errors:
-                messagebox.showwarning("안내", "작업 간격은 1초 이상 숫자로 적어주세요.", parent=self.root)
+                messagebox.showwarning("안내", "대기시간은 1초 이상 숫자로 적어주세요.", parent=self.root)
             return False
 
         profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
@@ -12654,7 +12711,9 @@ class FlowVisionApp:
                 messagebox.showwarning("안내", "개별 프롬프트 파일을 사용하려면 파일을 선택해주세요.", parent=self.root)
             return False
 
-        self.cfg["interval_seconds"] = interval_seconds
+        self.cfg["interval_seconds"] = next_interval_seconds
+        self.cfg["asset_combined_download_wait_seconds"] = download_wait_seconds
+        self.cfg["asset_combined_next_interval_seconds"] = next_interval_seconds
         self.cfg["asset_loop_enabled"] = True
         self.cfg["asset_loop_start"] = max(1, min(MAX_SCENE_NUMBER, start_no))
         self.cfg["asset_loop_end"] = max(1, min(MAX_SCENE_NUMBER, end_no))
@@ -12668,7 +12727,7 @@ class FlowVisionApp:
         if hasattr(self, "entry_interval"):
             try:
                 self.entry_interval.delete(0, "end")
-                self.entry_interval.insert(0, str(interval_seconds))
+                self.entry_interval.insert(0, str(next_interval_seconds))
             except Exception:
                 pass
         if hasattr(self, "asset_loop_var"):
@@ -17810,6 +17869,8 @@ class FlowVisionApp:
         base = max(1, base)
         if self.current_run_mode == "download":
             return base
+        if self._combined_worker_download_enabled():
+            return self._combined_worker_next_interval_delay()
         try:
             speed = self.actor.cfg.get('speed_multiplier', 1.0)
         except Exception:
@@ -18131,7 +18192,11 @@ class FlowVisionApp:
                 combined_quality = self._download_quality(combined_mode)
                 download_tag = self._combined_worker_download_tag(source_no=source_no, asset_tag=asset_tag)
                 wait_before_download = self._combined_worker_wait_before_download()
-                self.log(f"⏳ 생성 대기 시작: {download_tag} | {wait_before_download}초 후 {combined_mode} 다운로드")
+                next_interval_delay = self._combined_worker_next_interval_delay()
+                self.log(
+                    f"⏳ 생성 대기 시작: {download_tag} | 생성 후 대기 {wait_before_download}초(+랜덤) | "
+                    f"다운로드 성공 후 다음 작업 대기 {next_interval_delay}초(±랜덤)"
+                )
                 self._set_worker_queue_item_state(self.index, "waiting", f"{download_tag} 생성 대기 {wait_before_download}초")
                 self._wait_before_combined_download(download_tag, wait_before_download)
                 self.log(f"⬇️ 통합 다운로드 시작: {download_tag} | {combined_mode}/{combined_quality}")
@@ -18161,6 +18226,7 @@ class FlowVisionApp:
                     file_name=saved_name,
                     file_path=saved_path,
                     download_tag=download_tag,
+                    next_delay_seconds=next_interval_delay,
                 )
                 self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 통합 작업 완료: {download_tag}")
                 self._maybe_periodic_refresh(
