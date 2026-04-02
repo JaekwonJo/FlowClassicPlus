@@ -6445,6 +6445,18 @@ class FlowVisionApp:
             pass
         return "pending", ""
 
+    def _download_search_input_matches_tag(self, search_loc, tag):
+        if search_loc is None:
+            return False
+        expected = self._normalize_download_search_text(tag)
+        if not expected:
+            return False
+        try:
+            current = self._normalize_download_search_text(self._read_input_text(search_loc))
+            return bool(current) and current == expected
+        except Exception:
+            return False
+
     def _asset_start_button_candidates(self):
         cands = []
         cands.extend(self._normalize_candidate_list(self.cfg.get("asset_start_selector", "")))
@@ -8701,7 +8713,9 @@ class FlowVisionApp:
             if more_loc is None:
                 tile_box = self._find_first_media_tile_box() or self._find_primary_media_tile_box()
                 page_has_tag_now = page_has_tag or self._download_page_contains_tag(tag)
-                if tile_box and page_has_tag_now:
+                search_matches_tag = self._download_search_input_matches_tag(search_loc, tag)
+                fallback_allowed = page_has_tag_now or (tile_count > 0 and search_matches_tag and result_state not in ("empty", "failure"))
+                if tile_box and fallback_allowed:
                     try:
                         self.page.mouse.move(
                             float(tile_box["x"]) + float(tile_box["width"]) * 0.5,
