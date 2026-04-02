@@ -8634,9 +8634,9 @@ class FlowVisionApp:
                             box = None
                         more_loc, more_sel = self._resolve_more_button_near_box(box)
             if more_loc is None:
-                tile_box = self._find_primary_media_tile_box()
-                single_result_like = tile_count > 0 and tile_count <= 2
-                if tile_box and (page_has_tag or self._download_page_contains_tag(tag) or single_result_like):
+                tile_box = self._find_first_media_tile_box() or self._find_primary_media_tile_box()
+                visible_results_ready = tile_count > 0
+                if tile_box and (page_has_tag or self._download_page_contains_tag(tag) or visible_results_ready):
                     try:
                         self.page.mouse.move(
                             float(tile_box["x"]) + float(tile_box["width"]) * 0.5,
@@ -8647,9 +8647,9 @@ class FlowVisionApp:
                         pass
                     more_loc, more_sel = self._resolve_more_button_near_box(tile_box)
                     if more_loc is not None and not used.get("card"):
-                        used["card"] = "media-tile-fallback"
-                    if more_loc is not None and single_result_like:
-                        self.log(f"ℹ️ 검색 결과 단일 타일({tile_count}개)로 판단해 대표 타일 기준 더보기를 시도합니다.")
+                        used["card"] = "media-tile-top-left"
+                    if more_loc is not None and visible_results_ready:
+                        self.log(f"ℹ️ 검색 결과 타일 {tile_count}개 감지: 맨 왼쪽 위 최신 카드 기준으로 더보기를 시도합니다.")
                         tag_confirmed = True
             if more_loc is not None:
                 used["more"] = more_sel or (self._locator_selector_hint(more_loc) or "download-more-fallback")
@@ -8679,11 +8679,13 @@ class FlowVisionApp:
                 and (not self._download_page_contains_tag(tag))
             ):
                 raise RuntimeError(f"검색 결과에 {tag} 항목이 없습니다.")
-            if (not tag_confirmed) and time.time() >= result_lookup_deadline:
+            if (not tag_confirmed) and tile_count <= 0 and time.time() >= result_lookup_deadline:
                 raise RuntimeError(f"검색 결과에 {tag} 항목이 없습니다.")
             time.sleep(0.5)
 
         if more_loc is None:
+            if tile_count > 0:
+                raise RuntimeError("검색 결과 타일은 보이지만 맨 왼쪽 위 카드의 더보기 버튼을 찾지 못했습니다.")
             if not tag_confirmed and not self._download_page_contains_tag(tag):
                 raise RuntimeError(f"검색 결과에 {tag} 항목이 없습니다.")
             raise RuntimeError(f"더보기 버튼을 찾지 못했습니다. (대기 {wait_sec}초)")
