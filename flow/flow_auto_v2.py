@@ -11394,8 +11394,6 @@ class FlowVisionApp:
         prompt_basic_actions = tk.Frame(basic_box, bg=self.color_panel_soft)
         prompt_basic_actions.grid(row=0, column=1, sticky="e", padx=(0, 12), pady=(10, 8))
         ttk.Button(prompt_basic_actions, text="새로고침", command=self._reload_worker_shared_lists).pack(side="left")
-        ttk.Button(prompt_basic_actions, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(6, 0))
-        ttk.Button(prompt_basic_actions, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         basic_box.grid_columnconfigure(1, weight=1)
 
         tk.Label(basic_box, text="프로젝트", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
@@ -11420,7 +11418,6 @@ class FlowVisionApp:
         ttk.Button(prompt_slot_actions, text="이름수정", command=self._worker_rename_prompt_slot).pack(side="left", padx=(6, 0))
         ttk.Button(prompt_slot_actions, text="삭제", command=self._worker_delete_prompt_slot).pack(side="left", padx=(6, 0))
         ttk.Button(prompt_slot_actions, text="추가", command=self._worker_add_prompt_slot).pack(side="left", padx=(6, 0))
-        ttk.Button(prompt_slot_actions, text="새로고침", command=self._reload_worker_shared_lists).pack(side="left", padx=(6, 0))
         self.lbl_worker_prompt_slot_info = tk.Label(
             basic_box,
             text="프롬프트 파일 정보 확인 중...",
@@ -11522,6 +11519,8 @@ class FlowVisionApp:
         action_row = tk.Frame(self.prompt_worker_simple, bg=self.color_card)
         action_row.pack(fill="x", pady=(2, 8))
         ttk.Button(action_row, text="■ 중지", command=self.on_stop).pack(side="left")
+        ttk.Button(action_row, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(8, 0))
+        ttk.Button(action_row, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         ttk.Button(action_row, text="🤖 작업봇 창 열기", command=self._open_prompt_worker_bot_from_compact).pack(side="right")
         self.btn_worker_prompt_start = ttk.Button(action_row, text="▶ 이미지 생성+다운로드 시작", command=self._start_prompt_worker_from_compact)
         self.btn_worker_prompt_start.pack(side="right", padx=(0, 8))
@@ -11564,8 +11563,6 @@ class FlowVisionApp:
         asset_basic_actions = tk.Frame(asset_basic_box, bg=self.color_panel_soft)
         asset_basic_actions.grid(row=0, column=1, sticky="e", padx=(0, 12), pady=(10, 8))
         ttk.Button(asset_basic_actions, text="새로고침", command=self._reload_worker_shared_lists).pack(side="left")
-        ttk.Button(asset_basic_actions, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(6, 0))
-        ttk.Button(asset_basic_actions, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         asset_basic_box.grid_columnconfigure(1, weight=1)
 
         tk.Label(asset_basic_box, text="프로젝트", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
@@ -11694,6 +11691,8 @@ class FlowVisionApp:
         asset_action_row = tk.Frame(self.asset_worker_simple, bg=self.color_card)
         asset_action_row.pack(fill="x", pady=(2, 8))
         ttk.Button(asset_action_row, text="■ 중지", command=self.on_stop).pack(side="left")
+        ttk.Button(asset_action_row, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(8, 0))
+        ttk.Button(asset_action_row, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         ttk.Button(asset_action_row, text="🤖 작업봇 창 열기", command=self._open_asset_worker_bot_from_compact).pack(side="right")
         self.btn_worker_asset_start = ttk.Button(asset_action_row, text="▶ S생성+다운로드 시작", command=self._start_asset_worker_from_compact)
         self.btn_worker_asset_start.pack(side="right", padx=(0, 8))
@@ -11736,8 +11735,6 @@ class FlowVisionApp:
         download_basic_actions = tk.Frame(download_basic_box, bg=self.color_panel_soft)
         download_basic_actions.grid(row=0, column=1, sticky="e", padx=(0, 12), pady=(10, 8))
         ttk.Button(download_basic_actions, text="새로고침", command=self._reload_worker_shared_lists).pack(side="left")
-        ttk.Button(download_basic_actions, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(6, 0))
-        ttk.Button(download_basic_actions, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         download_basic_box.grid_columnconfigure(1, weight=1)
 
         tk.Label(download_basic_box, text="프로젝트", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
@@ -11862,6 +11859,8 @@ class FlowVisionApp:
         download_action_row = tk.Frame(self.download_worker_simple, bg=self.color_card)
         download_action_row.pack(fill="x", pady=(2, 8))
         ttk.Button(download_action_row, text="■ 중지", command=self.on_stop).pack(side="left")
+        ttk.Button(download_action_row, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(8, 0))
+        ttk.Button(download_action_row, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         ttk.Button(download_action_row, text="🤖 작업봇 창 열기", command=self._open_download_worker_bot_from_compact).pack(side="right")
         self.btn_worker_download_start = ttk.Button(download_action_row, text="▶ 다운로드 시작", command=self._start_download_worker_from_compact)
         self.btn_worker_download_start.pack(side="right", padx=(0, 8))
