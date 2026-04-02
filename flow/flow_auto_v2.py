@@ -6357,6 +6357,94 @@ class FlowVisionApp:
             return False
         return bool(matched)
 
+    def _probe_download_search_result_state(self, tag):
+        if (not self.page) or (not tag):
+            return "pending", ""
+        expected = str(tag or "").strip().lower()
+        try:
+            result = self.page.evaluate(
+                """(payload) => {
+                    const expected = String(payload.tag || "").trim().toLowerCase();
+                    const emptyHits = [
+                        "일치하는 결과 없음",
+                        "선택한 항목과 일치하는 결과가 없습니다",
+                        "no matching results",
+                        "no results",
+                    ];
+                    const failurePrimary = [
+                        "문제가 발생했습니다",
+                        "정책 위반",
+                        "google 정책",
+                        "google policy",
+                        "may violate google policy",
+                    ];
+                    const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const rect = el.getBoundingClientRect();
+                        if (!rect || rect.width < 24 || rect.height < 16) return false;
+                        const style = window.getComputedStyle(el);
+                        return style && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+                    };
+                    const isInputLike = (el) => {
+                        if (!el) return false;
+                        const tag = String(el.tagName || "").toLowerCase();
+                        if (tag === "input" || tag === "textarea") return true;
+                        if (el.isContentEditable) return true;
+                        const role = String(el.getAttribute("role") || "").toLowerCase();
+                        return role === "textbox" || role === "searchbox";
+                    };
+
+                    const nodes = document.querySelectorAll("div, li, button, span, p, a, h1, h2, h3, article, section");
+                    let emptyReason = "";
+                    let failureReason = "";
+                    let found = false;
+
+                    for (const node of nodes) {
+                        if (!isVisible(node)) continue;
+                        if (isInputLike(node)) continue;
+                        if (node.querySelector("input, textarea, [role='textbox'], [role='searchbox'], [contenteditable='true']")) continue;
+                        const rect = node.getBoundingClientRect();
+                        if (rect.top < 0 || rect.top > window.innerHeight * 0.94) continue;
+                        if (rect.left < 0 || rect.left > window.innerWidth * 0.96) continue;
+                        if (rect.width > window.innerWidth * 0.98 && rect.height > window.innerHeight * 0.80) continue;
+                        const text = clean(node.innerText || "");
+                        if (!text || text.length > 260) continue;
+                        const lower = text.toLowerCase();
+
+                        if (!emptyReason && emptyHits.some((hit) => lower.includes(hit))) {
+                            emptyReason = text.slice(0, 180);
+                        }
+                        if (!failureReason) {
+                            const hasFailWord = lower.includes("실패");
+                            const hasFailureBody = failurePrimary.some((hit) => lower.includes(hit));
+                            if (hasFailureBody || (hasFailWord && (lower.includes("문제가 발생했습니다") || lower.includes("정책 위반")))) {
+                                failureReason = text.slice(0, 180);
+                            }
+                        }
+                        if (!found) {
+                            const lines = text.split(/\\n+/).map(clean).filter(Boolean);
+                            if (lines.some((line) => line.toLowerCase() === expected)) {
+                                found = true;
+                            }
+                        }
+                    }
+
+                    if (emptyReason) return {state: "empty", reason: emptyReason};
+                    if (failureReason) return {state: "failure", reason: failureReason};
+                    if (found) return {state: "found", reason: expected};
+                    return {state: "pending", reason: ""};
+                }""",
+                {"tag": expected},
+            )
+            state = str((result or {}).get("state", "") or "").strip().lower()
+            reason = str((result or {}).get("reason", "") or "").strip()
+            if state in ("empty", "failure", "found"):
+                return state, reason
+        except Exception:
+            pass
+        return "pending", ""
+
     def _asset_start_button_candidates(self):
         cands = []
         cands.extend(self._normalize_candidate_list(self.cfg.get("asset_start_selector", "")))
@@ -8549,6 +8637,12 @@ class FlowVisionApp:
         tile_box = None
         while time.time() < deadline:
             tile_count = self._count_visible_media_tiles()
+            result_state, result_reason = self._probe_download_search_result_state(tag)
+            if result_state == "empty":
+                raise RuntimeError(f"검색 결과에 {tag} 항목이 없습니다.")
+            if result_state == "failure":
+                short_reason = (result_reason or "실패").strip()
+                raise RuntimeError(f"{tag} 검색 결과가 실패 상태입니다. ({short_reason})")
             card_loc, card_sel, card_meta = self._resolve_download_card_for_tag(mode, tag, timeout_sec=1.4)
             page_has_tag = False
             if card_loc is not None:
@@ -8606,8 +8700,8 @@ class FlowVisionApp:
                         more_loc, more_sel = self._resolve_more_button_near_box(box)
             if more_loc is None:
                 tile_box = self._find_first_media_tile_box() or self._find_primary_media_tile_box()
-                visible_results_ready = tile_count > 0
-                if tile_box and (page_has_tag or self._download_page_contains_tag(tag) or visible_results_ready):
+                page_has_tag_now = page_has_tag or self._download_page_contains_tag(tag)
+                if tile_box and page_has_tag_now:
                     try:
                         self.page.mouse.move(
                             float(tile_box["x"]) + float(tile_box["width"]) * 0.5,
@@ -8619,7 +8713,7 @@ class FlowVisionApp:
                     more_loc, more_sel = self._resolve_more_button_near_box(tile_box)
                     if more_loc is not None and not used.get("card"):
                         used["card"] = "media-tile-top-left"
-                    if more_loc is not None and visible_results_ready:
+                    if more_loc is not None and tile_count > 0:
                         self.log(f"ℹ️ 검색 결과 타일 {tile_count}개 감지: 맨 왼쪽 위 최신 카드 기준으로 더보기를 시도합니다.")
                         tag_confirmed = True
             if more_loc is not None:
