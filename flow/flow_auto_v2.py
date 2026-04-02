@@ -592,11 +592,8 @@ class FlowVisionApp:
         self.download_report_path = None
         self.completion_summary_path = None
         self.retry_error_log = []
-        self.live_failure_items = []
-        self.live_failure_seen = set()
-        self.pending_generation_watches = []
-        self.observed_failure_card_signatures = {}
         self.pending_periodic_refresh = None
+        self.worker_queue_items = []
         self.section_wrappers = {}
         self.section_open_setters = {}
         self.current_selection_summary = ""
@@ -1647,345 +1644,6 @@ class FlowVisionApp:
             pass
         finally:
             self.action_log_fp = None
-
-    def _format_live_failure_token(self, source_no=None, asset_tag=""):
-        asset_tag = str(asset_tag or "").strip()
-        if asset_tag:
-            return asset_tag
-        try:
-            return str(int(source_no)).zfill(3)
-        except Exception:
-            return str(source_no or "").strip()
-
-    def _live_failure_copy_text(self):
-        tokens = []
-        seen = set()
-        for item in self.live_failure_items:
-            token = str(item.get("token", "") or "").strip()
-            if token and token not in seen:
-                seen.add(token)
-                tokens.append(token)
-        return ",".join(tokens)
-
-    def _refresh_live_failure_panel(self):
-        if not hasattr(self, "txt_live_failures"):
-            return
-        items = list(self.live_failure_items or [])
-        self.txt_live_failures.config(state="normal")
-        self.txt_live_failures.delete("1.0", "end")
-        if items:
-            lines = []
-            for item in items[-20:]:
-                stamp = str(item.get("time", "") or "").strip()
-                token = str(item.get("token", "") or "").strip()
-                reason = str(item.get("reason", "") or "").strip()
-                if stamp:
-                    lines.append(f"[{stamp}] {token} | {reason}")
-                else:
-                    lines.append(f"{token} | {reason}")
-            self.txt_live_failures.insert("1.0", "\n".join(lines))
-            if hasattr(self, "lbl_live_fail_status"):
-                self.lbl_live_fail_status.config(
-                    text=f"실패 {len(items)}개 감지",
-                    fg=self.color_error,
-                )
-        else:
-            self.txt_live_failures.insert("1.0", "작업 중 실패가 감지되면 여기에 번호가 쌓입니다.\n종료 후에는 완료 요약과 세션 리포트에도 같이 저장됩니다.")
-            if hasattr(self, "lbl_live_fail_status"):
-                self.lbl_live_fail_status.config(text="실패 없음", fg=self.color_success)
-        self.txt_live_failures.config(state="disabled")
-
-    def _reset_live_failure_tracking(self, preserve_items=False):
-        if not preserve_items:
-            self.live_failure_items = []
-            self.live_failure_seen = set()
-        self.pending_generation_watches = []
-        self.observed_failure_card_signatures = {}
-        self.pending_periodic_refresh = None
-        self.root.after(0, self._refresh_live_failure_panel)
-
-    def on_copy_live_failures(self):
-        text = self._live_failure_copy_text()
-        if not text:
-            self.log("ℹ️ 복사할 실패 번호가 아직 없습니다.")
-            return
-        try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(text)
-            self.root.update_idletasks()
-            self.log(f"📋 실패 번호 복사: {text}")
-        except Exception as e:
-            self.log(f"⚠️ 실패 번호 복사 실패: {e}")
-
-    def _snapshot_generation_failure_cards(self):
-        if not self.page:
-            return []
-        try:
-            cards = self.page.evaluate(
-                """() => {
-                    const failReasonHits = [
-                        "이 생성은 google 정책을 위반할 수 있습니다",
-                        "google 정책을 위반할 수 있습니다",
-                        "정책을 위반할 수 있습니다",
-                        "문제가 발생했습니다",
-                        "something went wrong",
-                        "this generation may violate google policies",
-                        "may violate google policies",
-                        "error occurred",
-                    ];
-                    const failTitleHits = [
-                        "실패",
-                        "failed",
-                    ];
-                    const negativeKeys = [
-                        "무엇을 만들고 싶으신가요",
-                        "프롬프트",
-                        "prompt",
-                        "message",
-                        "메시지",
-                        "start",
-                        "종료",
-                        "시작",
-                        "undo",
-                        "delete",
-                        "delete_forever",
-                        "프롬프트 재사용",
-                        "삭제",
-                        "warning",
-                    ];
-                    const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-                    const isVisible = (el) => {
-                        if (!el) return false;
-                        const rect = el.getBoundingClientRect();
-                        if (!rect || rect.width < 24 || rect.height < 16) return false;
-                        const style = window.getComputedStyle(el);
-                        return style && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
-                    };
-                    const findCard = (el) => {
-                        let cur = el;
-                        for (let depth = 0; cur && depth < 8; depth += 1, cur = cur.parentElement) {
-                            if (!isVisible(cur)) continue;
-                            const rect = cur.getBoundingClientRect();
-                            if (!rect) continue;
-                            if (rect.width < 220 || rect.height < 100) continue;
-                            if (rect.width > window.innerWidth * 0.98 || rect.height > window.innerHeight * 0.85) continue;
-                            const meta = clean(cur.innerText || cur.textContent || cur.getAttribute("aria-label") || "");
-                            const lower = meta.toLowerCase();
-                            if (negativeKeys.some((hit) => lower.includes(hit.toLowerCase()))) continue;
-                            return cur;
-                        }
-                        return el;
-                    };
-                    const out = [];
-                    const seen = new Set();
-                    const nodes = document.querySelectorAll("div, section, article, li, button, a, span, p, [role='button'], [role='link']");
-                    for (const node of nodes) {
-                        if (!isVisible(node)) continue;
-                        const text = clean(node.innerText || node.textContent || node.getAttribute("aria-label") || "");
-                        if (text.length < 4 || text.length > 260) continue;
-                        const lower = text.toLowerCase();
-                        const hasFailTitle = failTitleHits.some((hit) => lower.includes(hit.toLowerCase()));
-                        const hasFailReason = failReasonHits.some((hit) => lower.includes(hit.toLowerCase()));
-                        if (!hasFailTitle && !hasFailReason) continue;
-                        const card = findCard(node);
-                        if (!isVisible(card)) continue;
-                        const rect = card.getBoundingClientRect();
-                        if (rect.width > window.innerWidth * 0.98 || rect.height > window.innerHeight * 0.85) continue;
-                        const cardText = clean(card.innerText || card.textContent || "");
-                        const summaryText = cardText || text;
-                        const summaryLower = summaryText.toLowerCase();
-                        const cardHasFailTitle = failTitleHits.some((hit) => summaryLower.includes(hit.toLowerCase()));
-                        const cardHasFailReason = failReasonHits.some((hit) => summaryLower.includes(hit.toLowerCase()));
-                        if (!(cardHasFailTitle && cardHasFailReason)) continue;
-                        const lines = summaryText.split(/\\n+/).map(clean).filter(Boolean);
-                        const title = lines[0] || text;
-                        const summary = lines.slice(0, 4).join(" | ").slice(0, 220);
-                        const bucketTop = Math.round(rect.top / 12) * 12;
-                        const bucketLeft = Math.round(rect.left / 12) * 12;
-                        const signature = [bucketTop, bucketLeft, summary.toLowerCase()].join("|");
-                        const key = [
-                            bucketLeft,
-                            bucketTop,
-                            Math.round(rect.width),
-                            Math.round(rect.height),
-                            signature,
-                        ].join("|");
-                        if (seen.has(key)) continue;
-                        seen.add(key);
-                        out.push({
-                            key,
-                            signature,
-                            title,
-                            text: summary,
-                            summary_key: summary.toLowerCase(),
-                            top: Math.round(rect.top),
-                            left: Math.round(rect.left),
-                        });
-                    }
-                    out.sort((a, b) => {
-                        const topDiff = Number(a.top || 0) - Number(b.top || 0);
-                        if (Math.abs(topDiff) > 8) return topDiff;
-                        return Number(a.left || 0) - Number(b.left || 0);
-                    });
-                    return out;
-                }"""
-            )
-            if isinstance(cards, list):
-                return cards
-        except Exception:
-            pass
-        return []
-
-    def _expected_generation_output_count(self, profile="prompt"):
-        profile = "asset" if str(profile).strip().lower() == "asset" else "prompt"
-        cfg_key = "asset_prompt_variant_count" if profile == "asset" else "prompt_variant_count"
-        raw = str(self.cfg.get(cfg_key, "x1") or "x1").strip().lower()
-        m = re.match(r"^x\s*(\d+)$", raw)
-        if m:
-            try:
-                return max(1, min(4, int(m.group(1))))
-            except Exception:
-                return 1
-        try:
-            return max(1, min(4, int(raw)))
-        except Exception:
-            return 1
-
-    def _prune_pending_generation_watches(self, now_ts=None):
-        watches = list(self.pending_generation_watches or [])
-        if not watches:
-            return
-        if now_ts is None:
-            now_ts = time.time()
-        kept = []
-        for watch in watches:
-            try:
-                started_at = float(watch.get("started_at", 0.0) or 0.0)
-            except Exception:
-                started_at = 0.0
-            if started_at <= 0.0 or (now_ts - started_at) <= 180.0:
-                kept.append(watch)
-        self.pending_generation_watches = kept
-
-    def _register_generation_watch(self, session_idx, source_no=None, asset_tag="", baseline_cards=None, expected_outputs=1):
-        if not self.pending_generation_watches:
-            try:
-                baseline_counter = {}
-                for card in self._snapshot_generation_failure_cards():
-                    sig = str((card or {}).get("signature", "") or (card or {}).get("key", "") or "").strip()
-                    if sig:
-                        baseline_counter[sig] = int(baseline_counter.get(sig, 0) or 0) + 1
-                self.observed_failure_card_signatures = baseline_counter
-            except Exception:
-                self.observed_failure_card_signatures = {}
-        baseline_keys = set()
-        baseline_summary_counts = {}
-        for item in baseline_cards or []:
-            key = str((item or {}).get("key", "") or "").strip()
-            if key:
-                baseline_keys.add(key)
-            summary_key = str((item or {}).get("summary_key", "") or "").strip()
-            if summary_key:
-                baseline_summary_counts[summary_key] = int(baseline_summary_counts.get(summary_key, 0) or 0) + 1
-        try:
-            expected_outputs = int(expected_outputs or 1)
-        except Exception:
-            expected_outputs = 1
-        expected_outputs = max(1, min(4, expected_outputs))
-        started_at = time.time()
-        for slot_no in range(expected_outputs):
-            self.pending_generation_watches.append({
-                "session_idx": session_idx,
-                "source_no": source_no,
-                "asset_tag": str(asset_tag or "").strip(),
-                "baseline_keys": baseline_keys,
-                "baseline_count": len(list(baseline_cards or [])),
-                "baseline_summary_counts": baseline_summary_counts,
-                "started_at": started_at,
-                "slot_no": slot_no + 1,
-                "expected_outputs": expected_outputs,
-            })
-
-    def _record_live_failure_event(self, source_no=None, asset_tag="", reason="", session_idx=None, retry_label="실패"):
-        token = self._format_live_failure_token(source_no=source_no, asset_tag=asset_tag)
-        if not token:
-            return
-        dedupe_key = f"{token}|{str(reason or '').strip()}"
-        if dedupe_key in self.live_failure_seen:
-            return
-        self.live_failure_seen.add(dedupe_key)
-        try:
-            session_idx = int(session_idx)
-        except Exception:
-            session_idx = -1
-        if 0 <= session_idx < len(self.session_log):
-            self.session_log[session_idx]["status"] = "failed"
-            self.session_log[session_idx]["error"] = str(reason or "").strip()
-        self.retry_error_log.append(f"{token} | {str(retry_label or '실패').strip()} | {str(reason or '').strip()[:160]}")
-        self.live_failure_items.append({
-            "token": token,
-            "reason": str(reason or "").strip() or "문제가 발생했습니다.",
-            "time": datetime.now().strftime("%H:%M:%S"),
-            "source_no": source_no,
-            "tag": asset_tag,
-        })
-        self.log(f"🚨 Flow 실패 감지: {token} | {str(reason or '').strip() or '문제가 발생했습니다.'}")
-        self.update_status_label(f"🚨 생성 실패 감지: {token}", self.color_error)
-        self.root.after(0, self._refresh_live_failure_panel)
-
-    def _record_generation_failure(self, watch, reason):
-        if not isinstance(watch, dict):
-            return
-        source_no = watch.get("source_no")
-        asset_tag = str(watch.get("asset_tag", "") or "").strip()
-        try:
-            session_idx = int(watch.get("session_idx"))
-        except Exception:
-            session_idx = -1
-        self._record_live_failure_event(
-            source_no=source_no,
-            asset_tag=asset_tag,
-            reason=reason,
-            session_idx=session_idx,
-            retry_label="Flow 생성 실패",
-        )
-
-    def _poll_pending_generation_failure(self):
-        watches = list(self.pending_generation_watches or [])
-        if (not watches) or self.current_run_mode not in ("prompt", "asset"):
-            return
-        self._prune_pending_generation_watches()
-        watches = list(self.pending_generation_watches or [])
-        if not watches:
-            return
-        cards = self._snapshot_generation_failure_cards()
-        current_counter = {}
-        for card in cards:
-            sig = str((card or {}).get("signature", "") or (card or {}).get("key", "") or "").strip()
-            if sig:
-                current_counter[sig] = int(current_counter.get(sig, 0) or 0) + 1
-        observed_counter = dict(getattr(self, "observed_failure_card_signatures", {}) or {})
-        new_cards = []
-        consume_counter = dict(observed_counter)
-        for card in cards:
-            sig = str((card or {}).get("signature", "") or (card or {}).get("key", "") or "").strip()
-            if not sig:
-                continue
-            seen_count = int(consume_counter.get(sig, 0) or 0)
-            current_count = int(current_counter.get(sig, 0) or 0)
-            if seen_count < current_count:
-                new_cards.append(card)
-                consume_counter[sig] = seen_count + 1
-        if not new_cards:
-            self.observed_failure_card_signatures = current_counter
-            return
-        for card in new_cards:
-            if not self.pending_generation_watches:
-                break
-            watch = self.pending_generation_watches.pop(0)
-            reason = str(card.get("text", "") or card.get("title", "") or "문제가 발생했습니다.").strip()
-            self._record_generation_failure(watch, reason)
-        self.observed_failure_card_signatures = current_counter
 
     def _resolve_profile_dir(self):
         profile_dir = (self.cfg.get("browser_profile_dir") or "flow_human_profile_pw").strip()
@@ -9021,12 +8679,26 @@ class FlowVisionApp:
             }
             return self._apply_expected_shortfall_to_payload(payload, entries, "download")
         entries = list(getattr(self, "session_log", []) or [])
+        combined_run = any(
+            str(item.get("download_tag", "") or "").strip()
+            or str(item.get("file_name", "") or "").strip()
+            or str(item.get("file_path", "") or "").strip()
+            for item in entries
+        )
         failed_entries = [x for x in entries if x.get("status") == "failed"]
-        success_entries = [x for x in entries if x.get("status") != "failed"]
+        success_entries = [x for x in entries if x.get("status") == "success"]
         failed_tags = [x.get("tag", "") or str(x.get("source_no", "")) for x in failed_entries if x.get("tag") or x.get("source_no")]
         payload = {
             "run_mode": mode,
-            "title": "S자동화" if mode == "asset" else "프롬프트 자동화",
+            "title": (
+                "S자동화+다운로드"
+                if combined_run and mode == "asset"
+                else "프롬프트 자동화+다운로드"
+                if combined_run
+                else "S자동화"
+                if mode == "asset"
+                else "프롬프트 자동화"
+            ),
             "started_at": started_at,
             "ended_at": ended_at,
             "total": len(entries),
@@ -9039,7 +8711,7 @@ class FlowVisionApp:
                 pad_width=self._asset_pad_width() if mode == "asset" else 3,
             ),
             "prompt_file": str(self.cfg.get("prompts_file", "") or ""),
-            "output_dir": "",
+            "output_dir": str(self._resolve_download_output_dir()) if combined_run else "",
             "action_log_path": str(self.action_log_path) if self.action_log_path else "",
             "report_path": str(self.session_report_path) if self.session_report_path else "",
             "selection_summary": self.current_selection_summary,
@@ -10587,33 +10259,6 @@ class FlowVisionApp:
         self.lbl_hud_trait.pack(anchor="w", pady=(4, 0))
         self._set_mini_hud_collapsed(True)
 
-        fail_card = ttk.LabelFrame(right_scrollable, text=" ⚠ 실시간 실패 번호 ", padding=8)
-        fail_card.pack(fill="x", pady=(0, 8))
-        fail_top = tk.Frame(fail_card, bg=self.color_bg)
-        fail_top.pack(fill="x")
-        self.lbl_live_fail_status = tk.Label(
-            fail_top,
-            text="실패 없음",
-            font=("Malgun Gothic", 10, "bold"),
-            fg=self.color_success,
-            bg=self.color_bg,
-        )
-        self.lbl_live_fail_status.pack(side="left")
-        ttk.Button(fail_top, text="복사", command=self.on_copy_live_failures).pack(side="right")
-        self.txt_live_failures = tk.Text(
-            fail_card,
-            height=7,
-            wrap="word",
-            bg=self.color_input_bg,
-            fg=self.color_input_fg,
-            insertbackground=self.color_input_fg,
-            font=self.font_mono_small,
-            relief="flat",
-        )
-        self.txt_live_failures.pack(fill="x", pady=(6, 0))
-        self.txt_live_failures.insert("1.0", "작업 중 실패가 감지되면 여기에 번호가 쌓입니다.\n종료 후에는 완료 요약과 세션 리포트에도 같이 저장됩니다.")
-        self.txt_live_failures.config(state="disabled")
-
         ctrl_card = ttk.LabelFrame(right_scrollable, text=" ▶ 실행 컨트롤 ", padding=8)
         ctrl_card.pack(fill="x", pady=(0, 8))
         self.ctrl_card = ctrl_card
@@ -11558,7 +11203,7 @@ class FlowVisionApp:
         )
         self.combo_worker_prompt_count.grid(row=3, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
 
-        tk.Label(basic_box, text="작업 간격(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=4, column=0, sticky="w", padx=12, pady=(0, 12))
+        tk.Label(basic_box, text="다운로드 전 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=4, column=0, sticky="w", padx=12, pady=(0, 12))
         tk.Entry(
             basic_box,
             textvariable=self.worker_prompt_interval_var,
@@ -11634,12 +11279,12 @@ class FlowVisionApp:
         action_row.pack(fill="x", pady=(2, 8))
         ttk.Button(action_row, text="■ 중지", command=self.on_stop).pack(side="left")
         ttk.Button(action_row, text="🤖 작업봇 창 열기", command=self._open_prompt_worker_bot_from_compact).pack(side="right")
-        self.btn_worker_prompt_start = ttk.Button(action_row, text="▶ 이미지 자동화 시작", command=self._start_prompt_worker_from_compact)
+        self.btn_worker_prompt_start = ttk.Button(action_row, text="▶ 이미지 생성+다운로드 시작", command=self._start_prompt_worker_from_compact)
         self.btn_worker_prompt_start.pack(side="right", padx=(0, 8))
 
         self.lbl_worker_prompt_help = tk.Label(
             self.prompt_worker_simple,
-            text="여기서 바로 시작하면 됩니다. 프로젝트/파일은 기존 설정을 그대로 불러와 선택만 바꾸면 됩니다.",
+            text="프롬프트 워커는 생성 후 이미지 다운로드까지 한 번에 처리합니다. 성공 기준은 다운로드 완료입니다.",
             font=self.font_small,
             bg=self.color_card,
             fg=self.color_text_sec,
@@ -11648,6 +11293,7 @@ class FlowVisionApp:
             wraplength=760,
         )
         self.lbl_worker_prompt_help.pack(fill="x", pady=(0, 6))
+        self._build_worker_queue_panel(self.prompt_worker_simple, "prompt")
 
         self.asset_worker_simple = tk.Frame(card, bg=self.color_card)
 
@@ -11688,7 +11334,7 @@ class FlowVisionApp:
         )
         self.combo_worker_asset_count.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(0, 8))
 
-        tk.Label(asset_basic_box, text="작업 간격(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=12, pady=(0, 8))
+        tk.Label(asset_basic_box, text="다운로드 전 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=12, pady=(0, 8))
         tk.Entry(
             asset_basic_box,
             textvariable=self.worker_asset_interval_var,
@@ -11788,12 +11434,12 @@ class FlowVisionApp:
         asset_action_row.pack(fill="x", pady=(2, 8))
         ttk.Button(asset_action_row, text="■ 중지", command=self.on_stop).pack(side="left")
         ttk.Button(asset_action_row, text="🤖 작업봇 창 열기", command=self._open_asset_worker_bot_from_compact).pack(side="right")
-        self.btn_worker_asset_start = ttk.Button(asset_action_row, text="▶ S자동화 시작", command=self._start_asset_worker_from_compact)
+        self.btn_worker_asset_start = ttk.Button(asset_action_row, text="▶ S생성+다운로드 시작", command=self._start_asset_worker_from_compact)
         self.btn_worker_asset_start.pack(side="right", padx=(0, 8))
 
         self.lbl_worker_asset_help = tk.Label(
             self.asset_worker_simple,
-            text="S자동화 워커는 프로젝트와 번호만 맞춘 뒤 바로 시작하면 됩니다. 개별 프롬프트 파일은 필요할 때만 켜세요.",
+            text="S자동화 워커는 생성 후 영상 다운로드까지 한 번에 처리합니다. 다운로드가 안 되면 실패로 표시하고 다음 번호로 넘어갑니다.",
             font=self.font_small,
             bg=self.color_card,
             fg=self.color_text_sec,
@@ -11802,6 +11448,7 @@ class FlowVisionApp:
             wraplength=760,
         )
         self.lbl_worker_asset_help.pack(fill="x", pady=(0, 6))
+        self._build_worker_queue_panel(self.asset_worker_simple, "asset")
 
         self.download_worker_simple = tk.Frame(card, bg=self.color_card)
 
@@ -12000,6 +11647,7 @@ class FlowVisionApp:
         self._refresh_asset_worker_compact_summary()
         self._refresh_download_worker_quality_options()
         self._refresh_download_worker_compact_summary()
+        self._refresh_worker_queue_panel()
 
     def _refresh_worker_compact_identity(self):
         if hasattr(self, "lbl_worker_compact_subtitle"):
@@ -12013,6 +11661,276 @@ class FlowVisionApp:
             self.lbl_worker_compact_profile_state.config(text=f"현재 프로필: {self._browser_profile_dir_name()}")
         if hasattr(self, "lbl_worker_compact_name_badge"):
             self.lbl_worker_compact_name_badge.config(text=worker_display_name)
+
+    def _build_worker_queue_panel(self, parent, kind):
+        panel = tk.Frame(parent, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
+        panel.pack(fill="both", expand=True, pady=(6, 10))
+
+        head = tk.Frame(panel, bg=self.color_panel_soft)
+        head.pack(fill="x", padx=10, pady=(8, 6))
+        tk.Label(
+            head,
+            text="이미지 생성+다운로드 대기열" if kind == "prompt" else "S생성+다운로드 대기열",
+            font=self.font_body_bold,
+            bg=self.color_panel_soft,
+            fg=self.color_info,
+        ).pack(side="left")
+        status_lbl = tk.Label(
+            head,
+            text="대기 0개",
+            font=self.font_small,
+            bg=self.color_panel_soft,
+            fg=self.color_text_sec,
+        )
+        status_lbl.pack(side="right")
+
+        list_frame = tk.Frame(panel, bg=self.color_panel_soft)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        canvas = tk.Canvas(list_frame, bg=self.color_panel_soft, highlightthickness=0, bd=0, height=250)
+        scrolly = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=self.color_panel_soft)
+        inner.bind("<Configure>", lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scrolly.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrolly.pack(side="right", fill="y")
+
+        setattr(self, f"{kind}_worker_queue_status_label", status_lbl)
+        setattr(self, f"{kind}_worker_queue_canvas", canvas)
+        setattr(self, f"{kind}_worker_queue_inner", inner)
+
+    def _worker_queue_active_kind(self):
+        if self.worker_mode in ("prompt", "asset"):
+            return self.worker_mode
+        return ""
+
+    def _worker_queue_status_meta(self, status):
+        key = str(status or "pending").strip().lower()
+        mapping = {
+            "pending": ("보류 중", "#A7B5CC", "#1A2536", "#405066", 0.06),
+            "running": ("실행 중", "#FFBF66", "#2A2316", "#A96C1E", 0.22),
+            "waiting": ("생성 대기", "#8AD7FF", "#162636", "#2D7FA7", 0.48),
+            "downloading": ("다운로드 중", "#59A8FF", "#16263B", "#2F73C8", 0.78),
+            "success": ("완료", "#59D98E", "#152A1E", "#2FA55F", 1.0),
+            "failed": ("실패", "#FF7575", "#2E1B20", "#B84A57", 1.0),
+        }
+        return mapping.get(key, mapping["pending"])
+
+    def _worker_queue_item_title(self, item):
+        token = str(item.get("token", "") or "").strip()
+        prompt = re.sub(r"\s+", " ", str(item.get("prompt", "") or "").strip())
+        if prompt:
+            prompt = prompt[:72]
+        if token and prompt:
+            return f"{token} Prompt : {prompt}"
+        if token:
+            return token
+        return prompt or f"{int(item.get('seq', 0) or 0)}번 작업"
+
+    def _refresh_worker_queue_panel(self):
+        kind = self._worker_queue_active_kind()
+        if not kind:
+            return
+        inner = getattr(self, f"{kind}_worker_queue_inner", None)
+        status_lbl = getattr(self, f"{kind}_worker_queue_status_label", None)
+        if inner is None:
+            return
+        for child in inner.winfo_children():
+            child.destroy()
+
+        items = list(getattr(self, "worker_queue_items", []) or [])
+        completed = sum(1 for item in items if str(item.get("status", "")).strip().lower() == "success")
+        failed = sum(1 for item in items if str(item.get("status", "")).strip().lower() == "failed")
+        running = sum(1 for item in items if str(item.get("status", "")).strip().lower() in {"running", "waiting", "downloading"})
+        pending = max(0, len(items) - completed - failed - running)
+        if status_lbl is not None:
+            status_lbl.config(text=f"활성 {running}개 | 완료 {completed} | 실패 {failed} | 대기 {pending}")
+
+        if not items:
+            tk.Label(
+                inner,
+                text="시작하면 여기에 작업 진행 상태가 순서대로 표시됩니다.",
+                font=self.font_small,
+                bg=self.color_panel_soft,
+                fg=self.color_text_sec,
+                anchor="w",
+                justify="left",
+            ).pack(fill="x", pady=6)
+            return
+
+        for item in items:
+            status_text, fg_color, row_bg, bar_color, pct = self._worker_queue_status_meta(item.get("status"))
+            row = tk.Frame(inner, bg=row_bg, highlightbackground="#31455F", highlightthickness=1)
+            row.pack(fill="x", pady=4)
+            top = tk.Frame(row, bg=row_bg)
+            top.pack(fill="x", padx=10, pady=(8, 4))
+            tk.Label(
+                top,
+                text=self._worker_queue_item_title(item),
+                font=self.font_small,
+                bg=row_bg,
+                fg=self.color_text,
+                anchor="w",
+                justify="left",
+            ).pack(side="left", fill="x", expand=True)
+            tk.Label(
+                top,
+                text=status_text,
+                font=(self.font_ui_family, max(10, self._font_px("small")), "bold"),
+                bg=row_bg,
+                fg=fg_color,
+            ).pack(side="right")
+
+            detail = str(item.get("detail", "") or "").strip()
+            if detail:
+                tk.Label(
+                    row,
+                    text=detail[:120],
+                    font=self.font_mono_small,
+                    bg=row_bg,
+                    fg=self.color_text_sec,
+                    anchor="w",
+                    justify="left",
+                ).pack(fill="x", padx=10, pady=(0, 4))
+
+            track = tk.Frame(row, bg="#0F1724", height=6)
+            track.pack(fill="x", padx=10, pady=(0, 8))
+            track.pack_propagate(False)
+            fill = tk.Frame(track, bg=bar_color, height=6)
+            fill.place(relx=0.0, rely=0.0, relwidth=max(0.04, min(1.0, float(pct))), relheight=1.0)
+
+    def _reset_worker_queue_items(self):
+        self.worker_queue_items = []
+        self.root.after(0, self._refresh_worker_queue_panel)
+
+    def _build_worker_queue_items(self, mode):
+        mode = str(mode or "").strip().lower()
+        items = []
+        if mode == "prompt":
+            numbers = list(self.prompt_run_numbers or [])
+            if not numbers:
+                numbers = list(range(1, len(self.prompts) + 1))
+            prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
+            pad = max(3, int(self._asset_pad_width() or 3))
+            for idx, prompt in enumerate(list(self.prompts or []), start=1):
+                source_no = numbers[idx - 1] if idx - 1 < len(numbers) else idx
+                token = f"{prefix}{str(int(source_no)).zfill(pad)}"
+                items.append({
+                    "seq": idx,
+                    "token": token,
+                    "prompt": prompt,
+                    "status": "pending",
+                    "detail": "보류 중",
+                    "source_no": source_no,
+                    "asset_tag": "",
+                })
+        elif mode == "asset":
+            for idx, item in enumerate(list(self.asset_loop_items or []), start=1):
+                items.append({
+                    "seq": idx,
+                    "token": str(item.get("tag", "") or "").strip(),
+                    "prompt": str(item.get("prompt", "") or "").strip(),
+                    "status": "pending",
+                    "detail": "보류 중",
+                    "source_no": item.get("number"),
+                    "asset_tag": str(item.get("tag", "") or "").strip(),
+                })
+        return items
+
+    def _prime_worker_queue_items(self, mode):
+        self.worker_queue_items = self._build_worker_queue_items(mode)
+        self.root.after(0, self._refresh_worker_queue_panel)
+
+    def _set_worker_queue_item_state(self, seq_index, status, detail=""):
+        try:
+            seq_index = int(seq_index)
+        except Exception:
+            return
+        if seq_index < 0 or seq_index >= len(self.worker_queue_items):
+            return
+        self.worker_queue_items[seq_index]["status"] = str(status or "pending").strip().lower() or "pending"
+        self.worker_queue_items[seq_index]["detail"] = str(detail or "").strip()
+        self.root.after(0, self._refresh_worker_queue_panel)
+
+    def _combined_worker_download_enabled(self):
+        return self.worker_mode in ("prompt", "asset") and self.current_run_mode in ("prompt", "asset")
+
+    def _combined_worker_download_mode(self):
+        return "video" if self.current_run_mode == "asset" else "image"
+
+    def _combined_worker_download_tag(self, source_no=None, asset_tag=""):
+        normalized_tag = self._normalize_reference_asset_tag(asset_tag)
+        if normalized_tag:
+            return normalized_tag
+        prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
+        pad = max(3, int(self._asset_pad_width() or 3))
+        try:
+            number = int(source_no)
+        except Exception:
+            number = 0
+        number = max(1, number)
+        return f"{prefix}{str(number).zfill(pad)}"
+
+    def _combined_worker_wait_before_download(self):
+        try:
+            return max(1, int(self.cfg.get("interval_seconds", 180) or 180))
+        except Exception:
+            return 180
+
+    def _wait_before_combined_download(self, tag, wait_seconds):
+        wait_seconds = max(1, int(wait_seconds or 1))
+        for remain in range(wait_seconds, 0, -1):
+            if (not self.running) or self.paused:
+                raise RuntimeError("사용자 중지로 통합 다운로드 대기가 취소되었습니다.")
+            self.update_status_label(f"⏳ 생성 대기 후 다운로드... {tag} | {remain}초", self.color_info)
+            time.sleep(1.0)
+
+    def _record_prompt_asset_session_result(self, *, source_no=None, asset_tag="", prompt="", status="failed", error="", started_at=None, download_tag="", file_name="", file_path="", run_mode="prompt"):
+        started_at = started_at or datetime.now()
+        ended_at = datetime.now()
+        entry = {
+            "index": int(len(self.session_log) + 1),
+            "source_no": source_no or (self.index + 1),
+            "tag": asset_tag or "",
+            "download_tag": download_tag or "",
+            "prompt": prompt,
+            "duration": f"{(ended_at - started_at).total_seconds():.1f}초",
+            "status": "success" if str(status).strip().lower() == "success" else "failed",
+            "error": str(error or "").strip(),
+            "file_name": str(file_name or "").strip(),
+            "file_path": str(file_path or "").strip(),
+            "run_mode": str(run_mode or self.current_run_mode or "prompt"),
+            "started_at": started_at.isoformat(),
+            "ended_at": ended_at.isoformat(),
+        }
+        self.session_log.append(entry)
+        return entry
+
+    def _finish_combined_worker_item(self, *, success, source_no=None, asset_tag="", prompt="", started_at=None, error="", file_name="", file_path="", download_tag=""):
+        run_mode = self.current_run_mode or ("asset" if asset_tag else "prompt")
+        queue_detail = f"저장: {file_name}" if success and file_name else ("다운로드 완료" if success else (str(error or "").strip() or "실패"))
+        self._record_prompt_asset_session_result(
+            source_no=source_no,
+            asset_tag=asset_tag,
+            prompt=prompt,
+            status="success" if success else "failed",
+            error=error,
+            started_at=started_at,
+            download_tag=download_tag,
+            file_name=file_name,
+            file_path=file_path,
+            run_mode=run_mode,
+        )
+        self._set_worker_queue_item_state(self.index, "success" if success else "failed", queue_detail)
+        if not success and download_tag:
+            self.retry_error_log.append(f"{download_tag} | 통합 작업 실패 | {str(error or '').strip()[:160]}")
+        self.actor.processed_count += 1
+        self.index += 1
+        self.root.after(0, self._update_progress_ui)
+        if self.index >= len(self.prompts):
+            self._show_completion_popup()
+            return
+        self.t_next = time.time() + 1
 
     def _set_worker_preview_progress(self, total):
         try:
@@ -12189,8 +12107,9 @@ class FlowVisionApp:
             target = self.worker_prompt_manual_var.get().strip() or "(비어 있음)"
         else:
             target = "전체"
+        download_quality = self._download_quality("image")
         self.worker_prompt_summary_var.set(
-            f"프로젝트: {self.worker_project_var.get().strip() or '-'} | 파일: {slot_text} | 생성: {count_text} | 대상: {target}"
+            f"프로젝트: {self.worker_project_var.get().strip() or '-'} | 파일: {slot_text} | 생성: {count_text} | 대상: {target} | 다운로드: 이미지 {download_quality}"
         )
         self._refresh_worker_preview_progress()
         self._refresh_worker_quick_hud()
@@ -12279,8 +12198,9 @@ class FlowVisionApp:
         prompt_file_text = "공통 프롬프트 사용"
         if bool(self.worker_asset_use_prompt_file_var.get()) if hasattr(self, "worker_asset_use_prompt_file_var") else False:
             prompt_file_text = self.worker_asset_prompt_file_var.get().strip() or "(파일 선택 필요)"
+        download_quality = self._download_quality("video")
         self.worker_asset_summary_var.set(
-            f"프로젝트: {self.worker_asset_project_var.get().strip() or '-'} | 생성: {self.worker_asset_count_var.get().strip() or 'x1'} | 대상: {target} | 프롬프트: {prompt_file_text}"
+            f"프로젝트: {self.worker_asset_project_var.get().strip() or '-'} | 생성: {self.worker_asset_count_var.get().strip() or 'x1'} | 대상: {target} | 프롬프트: {prompt_file_text} | 다운로드: 영상 {download_quality}"
         )
         self._refresh_worker_preview_progress()
         self._refresh_worker_quick_hud()
@@ -12543,8 +12463,8 @@ class FlowVisionApp:
                     text=f"설정: {self._current_config_display_name()} | 프로필: {self._browser_profile_dir_name()}"
                 )
             quick_start_text = {
-                "prompt": "▶ 이미지 시작",
-                "asset": "▶ S자동화 시작",
+                "prompt": "▶ 이미지+다운로드 시작",
+                "asset": "▶ S+다운로드 시작",
                 "download": "▶ 다운로드 시작",
             }.get(self.worker_mode, "▶ 시작")
             if hasattr(self, "btn_worker_quick_start"):
@@ -17010,7 +16930,6 @@ class FlowVisionApp:
             self.download_items = self._build_download_items()
             self.download_index = 0
             self.download_session_log = []
-            self.download_filter_locked_mode = None
             if not self.download_items:
                 messagebox.showwarning("주의", "다운로드 대상 S번호가 비어 있습니다.\n시작/끝 번호를 확인해주세요.")
                 return
@@ -17027,6 +16946,7 @@ class FlowVisionApp:
             )
             self._set_current_expected_items("download", self.download_items)
             self._update_progress_ui()
+            self._reset_worker_queue_items()
             self.cfg["scheduled_start_enabled"] = False
             self.cfg["scheduled_start_at"] = ""
             if hasattr(self, "schedule_var"):
@@ -17059,6 +16979,7 @@ class FlowVisionApp:
                     pad_width=self._asset_pad_width(),
                 )
                 self._set_current_expected_items("asset", [item.get("tag", "") for item in self.asset_loop_items])
+                self._prime_worker_queue_items("asset")
                 if self.cfg.get("asset_use_prompt_slot") and missing_asset_prompts:
                     preview = ", ".join(f"S{str(n).zfill(self._asset_pad_width())}" for n in missing_asset_prompts[:5])
                     if len(missing_asset_prompts) > 5:
@@ -17080,6 +17001,7 @@ class FlowVisionApp:
                     if self.current_selection_input else "전체 프롬프트 실행"
                 )
                 self._set_current_expected_items("prompt", prompt_numbers)
+                self._prime_worker_queue_items("prompt")
             
             if not self.prompts and not self.cfg.get("relay_mode"):
                 if self.cfg.get("asset_loop_enabled"):
@@ -17107,15 +17029,10 @@ class FlowVisionApp:
                 return
 
         if self.relay_progress == 0:
-            preserve_live_failures = bool(
-                self.pipeline_runtime_active and (
-                    self.pipeline_run_position > 0 or self.pipeline_runtime_retry_round > 0
-                )
-            )
             self.session_start_time = datetime.now()
             self.session_log = []
             self.retry_error_log = []
-            self._reset_live_failure_tracking(preserve_items=preserve_live_failures)
+            self.pending_periodic_refresh = None
             self._open_action_log("download_trace" if is_download_mode else "action_trace")
             self.session_report_path = self.logs_dir / f"session_report_{self.session_start_time.strftime('%Y%m%d_%H%M%S')}.json"
             self.completion_summary_path = None
@@ -17142,9 +17059,15 @@ class FlowVisionApp:
             self.log(f"🚀 다운로드 자동화 시작 | 모드={mode_label} | 대상={len(self.download_items)}개 | 실패판단대기={self.cfg.get('download_wait_seconds', 20)}초 | 선택={self.current_selection_summary}")
         elif self.cfg.get("asset_loop_enabled"):
             prompt_source = self._asset_prompt_slot_summary() if self.cfg.get("asset_use_prompt_slot") else "공통 템플릿"
-            self.log(f"🚀 S반복 자동화 시작 | 선택={self.current_selection_summary} | 프롬프트={prompt_source}")
+            if self.worker_mode == "asset":
+                self.log(f"🚀 S자동화+다운로드 시작 | 선택={self.current_selection_summary} | 프롬프트={prompt_source}")
+            else:
+                self.log(f"🚀 S반복 자동화 시작 | 선택={self.current_selection_summary} | 프롬프트={prompt_source}")
         else:
-            self.log(f"🚀 프롬프트 자동화 시작 | 선택={self.current_selection_summary}")
+            if self.worker_mode == "prompt":
+                self.log(f"🚀 프롬프트 자동화+다운로드 시작 | 선택={self.current_selection_summary}")
+            else:
+                self.log(f"🚀 프롬프트 자동화 시작 | 선택={self.current_selection_summary}")
         if not is_download_mode:
             # 실행 시점 입력방식 고정: 중간에 설정이 바뀌어도 현재 런에는 영향 없게 한다.
             self.run_input_mode = "typing"
@@ -17266,11 +17189,11 @@ class FlowVisionApp:
         self.download_index = 0
         self.download_session_log = []
         self.download_report_path = None
-        self.download_filter_locked_mode = None
         self.current_selection_summary = ""
         self.current_selection_input = ""
         self.current_expected_mode = None
         self.current_expected_items = []
+        self._reset_worker_queue_items()
         try:
             self.combo_input_mode.config(state="readonly")
         except Exception:
@@ -17492,11 +17415,6 @@ class FlowVisionApp:
         return int(base + random.uniform(0, base * 0.3 * speed))
 
     def _tick(self):
-        if self.running and self.current_run_mode in ("prompt", "asset") and self.pending_generation_watches:
-            try:
-                self._poll_pending_generation_failure()
-            except Exception:
-                pass
         if self.running and self.t_next:
             remain = self.t_next - time.time()
             if remain > 0:
@@ -17541,11 +17459,6 @@ class FlowVisionApp:
                     self.alert_window.close()
                     self.alert_window = None
                 if not self.is_processing:
-                    if self.current_run_mode in ("prompt", "asset") and self.pending_generation_watches:
-                        try:
-                            self._poll_pending_generation_failure()
-                        except Exception:
-                            pass
                     if self.scheduled_waiting:
                         self.scheduled_waiting = False
                         self.scheduled_start_ts = None
@@ -17622,6 +17535,8 @@ class FlowVisionApp:
 
         asset_tag = None
         source_no = None
+        combined_download_enabled = self._combined_worker_download_enabled()
+        prompt = ""
         try:
             # 작업 스레드 전용 세션 생성
             self._ensure_browser_session()
@@ -17687,6 +17602,10 @@ class FlowVisionApp:
                 if asset_tag:
                     self.update_status_label(f"🔁 에셋 준비 중... ({asset_tag})", self.color_info)
                     self._run_asset_loop_prestep(asset_tag)
+
+            queue_token = self._combined_worker_download_tag(source_no=source_no, asset_tag=asset_tag)
+            if combined_download_enabled:
+                self._set_worker_queue_item_state(self.index, "running", f"{queue_token} 생성 준비 중")
 
             # 실행 시점 안정화: 입력창이 늦게 뜨는 경우를 대비해 충분히 대기
             input_probe = self._normalize_candidate_list(input_selector)
@@ -17786,7 +17705,6 @@ class FlowVisionApp:
             self.update_status_label("🚀 제출 중...", self.color_accent)
             submitted = False
             attempt_notes = []
-            failure_baseline_cards = self._snapshot_generation_failure_cards()
             self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 정책: 안전 단일 제출")
 
             try:
@@ -17806,6 +17724,49 @@ class FlowVisionApp:
                 f"[{datetime.now().strftime('%H:%M:%S')}] 제출 검증 완료: {', '.join(attempt_notes) if attempt_notes else 'OK'}"
             )
 
+            if combined_download_enabled:
+                combined_mode = self._combined_worker_download_mode()
+                combined_quality = self._download_quality(combined_mode)
+                download_tag = self._combined_worker_download_tag(source_no=source_no, asset_tag=asset_tag)
+                wait_before_download = self._combined_worker_wait_before_download()
+                self.log(f"⏳ 생성 대기 시작: {download_tag} | {wait_before_download}초 후 {combined_mode} 다운로드")
+                self._set_worker_queue_item_state(self.index, "waiting", f"{download_tag} 생성 대기 {wait_before_download}초")
+                self._wait_before_combined_download(download_tag, wait_before_download)
+                self.log(f"⬇️ 통합 다운로드 시작: {download_tag} | {combined_mode}/{combined_quality}")
+                self._set_worker_queue_item_state(self.index, "downloading", f"{download_tag} 다운로드 중")
+                self.update_status_label(f"⬇️ 다운로드 중... {download_tag}", self.color_info)
+                download_wait_sec = int(self.cfg.get("download_wait_seconds", 60) or 60)
+                download_result = self._run_single_download_flow(
+                    mode=combined_mode,
+                    tag=download_tag,
+                    quality=combined_quality,
+                    dry_run=False,
+                    wait_sec=download_wait_sec,
+                )
+                self._apply_download_used_selectors(combined_mode, download_result.get("used", {}))
+                self.save_config()
+                saved_name = str(download_result.get("file") or "").strip()
+                saved_path = str(download_result.get("path") or "").strip()
+                self.log(f"✅ 통합 작업 성공: {download_tag} -> {saved_name or '파일명 확인 필요'}")
+                self.update_status_label(f"✅ 다운로드 성공: {download_tag}", self.color_success)
+                self.play_sound("success")
+                self._finish_combined_worker_item(
+                    success=True,
+                    source_no=source_no,
+                    asset_tag=asset_tag or "",
+                    prompt=prompt,
+                    started_at=start_t,
+                    file_name=saved_name,
+                    file_path=saved_path,
+                    download_tag=download_tag,
+                )
+                self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 통합 작업 완료: {download_tag}")
+                self._maybe_periodic_refresh(
+                    completed_count=self.index,
+                    mode_label="S자동화+다운로드" if asset_tag else "프롬프트+다운로드",
+                )
+                return
+
             print("Task success")
             if asset_tag:
                 self.log(f"성공 #{self.index+1} ({asset_tag})")
@@ -17815,22 +17776,14 @@ class FlowVisionApp:
                 self.log(f"성공 #{self.index+1}")
             self.update_status_label("🎉 작업 완료!", self.color_success)
             self.play_sound("success")
-            self.session_log.append({
-                "index": self.index + 1,
-                "source_no": source_no or (self.index + 1),
-                "tag": asset_tag or "",
-                "prompt": prompt,
-                "duration": f"{(datetime.now()-start_t).total_seconds():.1f}초",
-                "status": "success",
-                "error": "",
-            })
-            expected_outputs = self._expected_generation_output_count("asset" if asset_tag else "prompt")
-            self._register_generation_watch(
-                session_idx=len(self.session_log) - 1,
-                source_no=source_no or (self.index + 1),
+            self._record_prompt_asset_session_result(
+                source_no=source_no,
                 asset_tag=asset_tag or "",
-                baseline_cards=failure_baseline_cards,
-                expected_outputs=expected_outputs,
+                prompt=prompt,
+                status="success",
+                error="",
+                started_at=start_t,
+                run_mode=self.current_run_mode or "prompt",
             )
             self.actor.processed_count += 1
             self.index += 1
@@ -17842,37 +17795,71 @@ class FlowVisionApp:
         except PlaywrightTimeoutError as e:
             print(f"TIMEOUT in run_task: {e}")
             self.log(f"⏳ 요소 대기 시간 초과: {e}")
+            if combined_download_enabled:
+                err_text = str(e).strip().splitlines()[0][:160]
+                self.update_status_label("⚠️ 실패 후 다음으로 이동", self.color_error)
+                self._finish_combined_worker_item(
+                    success=False,
+                    source_no=source_no,
+                    asset_tag=asset_tag or "",
+                    prompt=prompt,
+                    started_at=start_t,
+                    error=err_text,
+                    download_tag=self._combined_worker_download_tag(source_no=source_no, asset_tag=asset_tag),
+                )
+                return
             self.update_status_label("⚠️ 요소 탐색 시간 초과", self.color_error)
             self.retry_error_log.append(f"{asset_tag or source_no or (self.index + 1)} | 요소 대기 시간 초과 | {str(e).strip().splitlines()[0][:160]}")
             self.t_next = time.time() + 5
         except PlaywrightError as e:
             print(f"PLAYWRIGHT ERROR in run_task: {e}")
             self.log(f"❌ Playwright 오류: {e}")
+            self._shutdown_browser()
+            if combined_download_enabled:
+                err_text = str(e).strip().splitlines()[0][:160]
+                self.update_status_label("⚠️ 실패 후 다음으로 이동", self.color_error)
+                self._finish_combined_worker_item(
+                    success=False,
+                    source_no=source_no,
+                    asset_tag=asset_tag or "",
+                    prompt=prompt,
+                    started_at=start_t,
+                    error=err_text,
+                    download_tag=self._combined_worker_download_tag(source_no=source_no, asset_tag=asset_tag),
+                )
+                return
             self.update_status_label("⚠️ 브라우저 오류 재시도...", self.color_error)
             self.retry_error_log.append(f"{asset_tag or source_no or (self.index + 1)} | Playwright 오류 | {str(e).strip().splitlines()[0][:160]}")
             self.t_next = time.time() + 5
-            self._shutdown_browser()
         except Exception as e:
             err_text = str(e).strip()
+            if combined_download_enabled:
+                self.log(f"❌ 통합 작업 실패: {err_text}")
+                self.update_status_label("⚠️ 실패 후 다음으로 이동", self.color_error)
+                if asset_tag and ("에셋 검색 결과에" in err_text and "항목이 없습니다" in err_text):
+                    if self.page and (not self.page.is_closed()):
+                        self._recover_after_missing_asset_search(asset_tag)
+                self._finish_combined_worker_item(
+                    success=False,
+                    source_no=source_no,
+                    asset_tag=asset_tag or "",
+                    prompt=prompt,
+                    started_at=start_t,
+                    error=err_text,
+                    download_tag=self._combined_worker_download_tag(source_no=source_no, asset_tag=asset_tag),
+                )
+                return
             if asset_tag and ("에셋 검색 결과에" in err_text and "항목이 없습니다" in err_text):
                 self.log(f"❌ {err_text}")
                 self.update_status_label(f"⚠️ 에셋 없음 후 다음으로 이동: {asset_tag}", self.color_error)
-                session_idx = len(self.session_log)
-                self.session_log.append({
-                    "index": self.index + 1,
-                    "source_no": source_no or (self.index + 1),
-                    "tag": asset_tag or "",
-                    "prompt": prompt,
-                    "duration": f"{(datetime.now()-start_t).total_seconds():.1f}초",
-                    "status": "failed",
-                    "error": err_text,
-                })
-                self._record_live_failure_event(
-                    source_no=source_no or (self.index + 1),
+                self._record_prompt_asset_session_result(
+                    source_no=source_no,
                     asset_tag=asset_tag or "",
-                    reason=err_text,
-                    session_idx=session_idx,
-                    retry_label="에셋 검색 실패",
+                    prompt=prompt,
+                    status="failed",
+                    error=err_text,
+                    started_at=start_t,
+                    run_mode=self.current_run_mode or "asset",
                 )
                 self.actor.processed_count += 1
                 self.index += 1
@@ -17891,7 +17878,7 @@ class FlowVisionApp:
             # (중지/종료/치명 오류 시에만 세션 종료)
             self.root.after(0, self._update_progress_ui)
             self.is_processing = False
-            if self.running and (not self.paused) and self.t_next is None:
+            if self.running and (not self.paused) and self.t_next is None and self.index < len(self.prompts):
                 self.t_next = time.time() + self._current_interval_delay()
 
     def _run_download_task(self):
@@ -18143,20 +18130,23 @@ class FlowVisionApp:
     def save_session_report(self):
         if not hasattr(self, "session_log"):
             return
-        try:
-            self._poll_pending_generation_failure()
-        except Exception:
-            pass
         if self.session_report_path is None:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.session_report_path = self.logs_dir / f"session_report_{stamp}.json"
         try:
             failed_entries = [x for x in self.session_log if x.get("status") == "failed"]
             failed_tags = [x.get("tag", "") or str(x.get("source_no", "")) for x in failed_entries if x.get("tag") or x.get("source_no")]
+            combined_run = any(
+                str(item.get("download_tag", "") or "").strip()
+                or str(item.get("file_name", "") or "").strip()
+                or str(item.get("file_path", "") or "").strip()
+                for item in self.session_log
+            )
             payload = {
                 "created_at": datetime.now().isoformat(),
                 "started_at": getattr(self, "session_start_time", datetime.now()).isoformat() if hasattr(getattr(self, "session_start_time", None), "isoformat") else str(getattr(self, "session_start_time", "")),
                 "prompt_file": self.cfg.get("prompts_file"),
+                "output_dir": str(self._resolve_download_output_dir()) if combined_run else "",
                 "total_processed": len(self.session_log),
                 "selection_summary": self.current_selection_summary,
                 "selection_input": self.current_selection_input,
