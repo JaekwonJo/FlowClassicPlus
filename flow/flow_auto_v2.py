@@ -590,6 +590,7 @@ class FlowVisionApp:
         self.download_index = 0
         self.download_session_log = []
         self.download_report_path = None
+        self.download_filter_locked_mode = None
         self.completion_summary_path = None
         self.retry_error_log = []
         self.live_failure_items = []
@@ -8172,7 +8173,12 @@ class FlowVisionApp:
         reason = f"검색어 입력 실패: typed='{typed_text or '-'}' / dom={reason_dom}"
         return False, reason, ""
 
-    def _click_download_filter(self, mode, used):
+    def _click_download_filter(self, mode, used, force=False):
+        mode = "image" if mode == "image" else "video"
+        if (not force) and self.download_filter_locked_mode == mode:
+            used["filter"] = f"{mode}-filter-locked"
+            self.log(f"ℹ️ {'이미지' if mode == 'image' else '영상'} 필터 유지 중: 이번 런에서는 재클릭 생략")
+            return True
         filter_loc, filter_sel = self._resolve_download_filter_button(mode, timeout_sec=5)
         if filter_loc is None:
             # 필터 버튼을 못 찾아도 현재 화면이 이미 해당 필터일 수 있어 실패로 보지 않는다.
@@ -8182,6 +8188,7 @@ class FlowVisionApp:
         self._download_action_delay("필터 클릭 전 안정화", 0.2, 0.7)
         self._click_with_actor_fallback(filter_loc, f"{'이미지' if mode == 'image' else '영상'} 필터")
         self._download_action_delay("필터 적용 대기", 0.2, 0.9)
+        self.download_filter_locked_mode = mode
         return True
 
     def _resolve_more_button_from_card(self, card_loc, mode):
@@ -8543,7 +8550,7 @@ class FlowVisionApp:
         wait_sec = max(3, min(120, int(wait_sec)))
         used = {"search_input": "", "filter": "", "card": "", "more": "", "menu": "", "quality": ""}
 
-        self._click_download_filter(mode, used)
+        self._click_download_filter(mode, used, force=(self.download_filter_locked_mode != mode))
         if self._dismiss_download_upscale_toasts():
             self._download_action_delay("업스케일 토스트 정리 대기", 0.12, 0.45)
 
@@ -8570,6 +8577,7 @@ class FlowVisionApp:
         empty_result_deadline = min(deadline, search_started_ts + 6.0)
         search_enter_sent = False
         tag_confirmed = False
+        filter_recovery_attempted = False
         card_loc = None
         card_sel = None
         card_meta = ""
@@ -8678,6 +8686,12 @@ class FlowVisionApp:
                 and (search_enter_sent or (time.time() - search_started_ts) >= 4.0)
                 and (not self._download_page_contains_tag(tag))
             ):
+                if not filter_recovery_attempted:
+                    filter_recovery_attempted = True
+                    self.log(f"ℹ️ 결과 복구를 위해 {'이미지' if mode == 'image' else '영상'} 필터를 다시 확인합니다.")
+                    self._click_download_filter(mode, used, force=True)
+                    self._download_action_delay("필터 복구 후 재대기", 0.2, 0.7)
+                    continue
                 raise RuntimeError(f"검색 결과에 {tag} 항목이 없습니다.")
             if (not tag_confirmed) and tile_count <= 0 and time.time() >= result_lookup_deadline:
                 raise RuntimeError(f"검색 결과에 {tag} 항목이 없습니다.")
@@ -17010,6 +17024,7 @@ class FlowVisionApp:
             self.download_items = self._build_download_items()
             self.download_index = 0
             self.download_session_log = []
+            self.download_filter_locked_mode = None
             if not self.download_items:
                 messagebox.showwarning("주의", "다운로드 대상 S번호가 비어 있습니다.\n시작/끝 번호를 확인해주세요.")
                 return
@@ -17265,6 +17280,7 @@ class FlowVisionApp:
         self.download_index = 0
         self.download_session_log = []
         self.download_report_path = None
+        self.download_filter_locked_mode = None
         self.current_selection_summary = ""
         self.current_selection_input = ""
         self.current_expected_mode = None
