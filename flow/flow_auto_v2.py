@@ -11478,6 +11478,7 @@ class FlowVisionApp:
         self.worker_project_var = tk.StringVar(value=project_values[active_project_idx] if project_values else "기본 프로젝트")
         self.worker_prompt_slot_var = tk.StringVar(value=slot_names[active_slot_idx] if slot_names else "")
         self.worker_prompt_count_var = tk.StringVar(value=str(self.cfg.get("prompt_variant_count", "x1") or "x1").strip().lower() or "x1")
+        self.worker_prompt_output_dir_var = tk.StringVar(value=str(self.cfg.get("download_output_dir", "") or self._resolve_download_output_dir()))
         prompt_download_wait = int(self.cfg.get("prompt_combined_download_wait_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
         prompt_next_wait = int(self.cfg.get("prompt_combined_next_interval_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
         self.worker_prompt_download_wait_var = tk.StringVar(value=str(prompt_download_wait))
@@ -11533,6 +11534,19 @@ class FlowVisionApp:
             justify="left",
         )
         self.lbl_worker_prompt_slot_info.grid(row=5, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
+        tk.Label(basic_box, text="저장 폴더", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=6, column=0, sticky="w", padx=12, pady=(0, 12))
+        prompt_output_wrap = tk.Frame(basic_box, bg=self.color_panel_soft)
+        prompt_output_wrap.grid(row=6, column=1, sticky="ew", padx=(0, 12), pady=(0, 12))
+        prompt_output_wrap.grid_columnconfigure(0, weight=1)
+        tk.Entry(
+            prompt_output_wrap,
+            textvariable=self.worker_prompt_output_dir_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 6), ipady=2)
+        ttk.Button(prompt_output_wrap, text="폴더 선택", command=lambda: self._pick_download_output_dir_for_var(self.worker_prompt_output_dir_var)).grid(row=0, column=1, sticky="e")
 
         number_box = tk.Frame(content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         number_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
@@ -11657,6 +11671,7 @@ class FlowVisionApp:
         asset_defaults = self._asset_worker_selection_defaults()
         self.worker_asset_project_var = tk.StringVar(value=project_values[active_project_idx] if project_values else "기본 프로젝트")
         self.worker_asset_count_var = tk.StringVar(value=str(self.cfg.get("asset_prompt_variant_count", "x1") or "x1").strip().lower() or "x1")
+        self.worker_asset_output_dir_var = tk.StringVar(value=str(self.cfg.get("download_output_dir", "") or self._resolve_download_output_dir()))
         asset_download_wait = int(self.cfg.get("asset_combined_download_wait_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
         asset_next_wait = int(self.cfg.get("asset_combined_next_interval_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
         self.worker_asset_download_wait_var = tk.StringVar(value=str(asset_download_wait))
@@ -11718,6 +11733,19 @@ class FlowVisionApp:
             font=self.font_mono_small,
         ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=(0, 6), ipady=2)
         ttk.Button(asset_prompt_wrap, text="파일 선택", command=self._pick_asset_prompt_file_for_compact).grid(row=1, column=2, sticky="e")
+        tk.Label(asset_basic_box, text="저장 폴더", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=4, column=0, sticky="w", padx=12, pady=(0, 12))
+        asset_output_wrap = tk.Frame(asset_basic_box, bg=self.color_panel_soft)
+        asset_output_wrap.grid(row=4, column=1, sticky="ew", padx=(0, 12), pady=(0, 12))
+        asset_output_wrap.grid_columnconfigure(0, weight=1)
+        tk.Entry(
+            asset_output_wrap,
+            textvariable=self.worker_asset_output_dir_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 6), ipady=2)
+        ttk.Button(asset_output_wrap, text="폴더 선택", command=lambda: self._pick_download_output_dir_for_var(self.worker_asset_output_dir_var)).grid(row=0, column=1, sticky="e")
 
         asset_number_box = tk.Frame(asset_content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         asset_number_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
@@ -12007,6 +12035,7 @@ class FlowVisionApp:
             self.worker_project_var,
             self.worker_prompt_slot_var,
             self.worker_prompt_count_var,
+            self.worker_prompt_output_dir_var,
             self.worker_prompt_download_wait_var,
             self.worker_prompt_next_interval_var,
             self.worker_prompt_number_mode_var,
@@ -12019,6 +12048,7 @@ class FlowVisionApp:
         for var in (
             self.worker_asset_project_var,
             self.worker_asset_count_var,
+            self.worker_asset_output_dir_var,
             self.worker_asset_download_wait_var,
             self.worker_asset_next_interval_var,
             self.worker_asset_number_mode_var,
@@ -12639,9 +12669,11 @@ class FlowVisionApp:
         else:
             target = "전체"
         download_quality = self._download_quality("image")
+        folder_text = self.worker_prompt_output_dir_var.get().strip() if hasattr(self, "worker_prompt_output_dir_var") else ""
         self.worker_prompt_summary_var.set(
             f"프로젝트: {self.worker_project_var.get().strip() or '-'} | 파일: {slot_text} | 생성: {count_text} | 대상: {target} | "
-            f"생성대기: {self.worker_prompt_download_wait_var.get().strip() or '-'}초+랜덤 | 다음대기: {self.worker_prompt_next_interval_var.get().strip() or '-'}초±랜덤 | 다운로드: 이미지 {download_quality}"
+            f"생성대기: {self.worker_prompt_download_wait_var.get().strip() or '-'}초+랜덤 | 다음대기: {self.worker_prompt_next_interval_var.get().strip() or '-'}초±랜덤 | "
+            f"다운로드: 이미지 {download_quality} | 저장: {folder_text or '(기본 폴더)'}"
         )
         self._refresh_worker_prompt_slot_info()
         self._refresh_worker_preview_progress()
@@ -12700,6 +12732,7 @@ class FlowVisionApp:
         self.cfg["prompt_manual_selection_enabled"] = bool(selection_spec)
         self.cfg["prompt_manual_selection"] = selection_spec
         self.cfg["prompt_variant_count"] = str(self.worker_prompt_count_var.get() or "x1").strip().lower() or "x1"
+        self.cfg["download_output_dir"] = str(self.worker_prompt_output_dir_var.get() or "").strip() if hasattr(self, "worker_prompt_output_dir_var") else str(self.cfg.get("download_output_dir", "") or "").strip()
         self.cfg["prompt_media_mode"] = "image"
         self.cfg["current_media_state"] = "image"
         self.cfg["browser_channel"] = "chrome"
@@ -12736,10 +12769,11 @@ class FlowVisionApp:
         if bool(self.worker_asset_use_prompt_file_var.get()) if hasattr(self, "worker_asset_use_prompt_file_var") else False:
             prompt_file_text = self.worker_asset_prompt_file_var.get().strip() or "(파일 선택 필요)"
         download_quality = self._download_quality("video")
+        folder_text = self.worker_asset_output_dir_var.get().strip() if hasattr(self, "worker_asset_output_dir_var") else ""
         self.worker_asset_summary_var.set(
             f"프로젝트: {self.worker_asset_project_var.get().strip() or '-'} | 생성: {self.worker_asset_count_var.get().strip() or 'x1'} | 대상: {target} | "
             f"생성대기: {self.worker_asset_download_wait_var.get().strip() or '-'}초+랜덤 | 다음대기: {self.worker_asset_next_interval_var.get().strip() or '-'}초±랜덤 | "
-            f"프롬프트: {prompt_file_text} | 다운로드: 영상 {download_quality}"
+            f"프롬프트: {prompt_file_text} | 다운로드: 영상 {download_quality} | 저장: {folder_text or '(기본 폴더)'}"
         )
         self._refresh_worker_preview_progress()
         self._refresh_worker_quick_hud()
@@ -12820,6 +12854,7 @@ class FlowVisionApp:
         self.cfg["asset_use_prompt_slot"] = use_prompt_file
         self.cfg["asset_prompt_file"] = prompt_file if use_prompt_file else ""
         self.cfg["asset_prompt_variant_count"] = str(self.worker_asset_count_var.get() or "x1").strip().lower() or "x1"
+        self.cfg["download_output_dir"] = str(self.worker_asset_output_dir_var.get() or "").strip() if hasattr(self, "worker_asset_output_dir_var") else str(self.cfg.get("download_output_dir", "") or "").strip()
         self.cfg["asset_prompt_media_mode"] = "video"
         self.cfg["current_media_state"] = "video"
         self.cfg["browser_channel"] = "chrome"
@@ -12913,11 +12948,14 @@ class FlowVisionApp:
             self.save_config()
         return True
 
-    def _pick_download_output_dir_for_compact(self):
-        initial = str(self.worker_download_output_dir_var.get() or "").strip() or str(self._resolve_download_output_dir())
+    def _pick_download_output_dir_for_var(self, target_var):
+        initial = str(target_var.get() or "").strip() or str(self._resolve_download_output_dir())
         picked = filedialog.askdirectory(parent=self.root, initialdir=initial, title="다운로드 저장 폴더 선택")
         if picked:
-            self.worker_download_output_dir_var.set(picked)
+            target_var.set(picked)
+
+    def _pick_download_output_dir_for_compact(self):
+        self._pick_download_output_dir_for_var(self.worker_download_output_dir_var)
 
     def _apply_download_worker_compact_to_cfg(self, show_errors=True):
         try:
