@@ -11478,6 +11478,7 @@ class FlowVisionApp:
         self.worker_project_var = tk.StringVar(value=project_values[active_project_idx] if project_values else "기본 프로젝트")
         self.worker_prompt_slot_var = tk.StringVar(value=slot_names[active_slot_idx] if slot_names else "")
         self.worker_prompt_count_var = tk.StringVar(value=str(self.cfg.get("prompt_variant_count", "x1") or "x1").strip().lower() or "x1")
+        self.worker_prompt_quality_var = tk.StringVar(value=str(self.cfg.get("download_image_quality", "4K") or "4K").strip().upper() or "4K")
         self.worker_prompt_output_dir_var = tk.StringVar(value=str(self.cfg.get("download_output_dir", "") or self._resolve_download_output_dir()))
         prompt_download_wait = int(self.cfg.get("prompt_combined_download_wait_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
         prompt_next_wait = int(self.cfg.get("prompt_combined_next_interval_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
@@ -11609,7 +11610,17 @@ class FlowVisionApp:
             width=8,
         )
         self.combo_worker_prompt_count.grid(row=0, column=1, sticky="w", padx=(6, 14))
-        tk.Label(prompt_extra_wrap, text="생성 후 다운로드 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=0, column=2, sticky="w")
+        tk.Label(prompt_extra_wrap, text="이미지 화질", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=0, column=2, sticky="w")
+        self.combo_worker_prompt_quality = ttk.Combobox(
+            prompt_extra_wrap,
+            textvariable=self.worker_prompt_quality_var,
+            state="readonly",
+            values=("4K", "2K", "1K"),
+            font=self.font_body,
+            width=8,
+        )
+        self.combo_worker_prompt_quality.grid(row=0, column=3, sticky="w", padx=(6, 14))
+        tk.Label(prompt_extra_wrap, text="생성 후 다운로드 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", pady=(8, 0))
         tk.Entry(
             prompt_extra_wrap,
             textvariable=self.worker_prompt_download_wait_var,
@@ -11617,8 +11628,8 @@ class FlowVisionApp:
             fg=self.color_input_fg,
             insertbackground=self.color_input_fg,
             font=self.font_mono_small,
-        ).grid(row=0, column=3, sticky="ew", padx=(6, 0), ipady=2)
-        tk.Label(prompt_extra_wrap, text="다운로드 후 다음 작업 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ).grid(row=1, column=1, sticky="ew", padx=(6, 14), pady=(8, 0), ipady=2)
+        tk.Label(prompt_extra_wrap, text="다운로드 후 다음 작업 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=2, sticky="w", pady=(8, 0))
         tk.Entry(
             prompt_extra_wrap,
             textvariable=self.worker_prompt_next_interval_var,
@@ -11626,7 +11637,7 @@ class FlowVisionApp:
             fg=self.color_input_fg,
             insertbackground=self.color_input_fg,
             font=self.font_mono_small,
-        ).grid(row=1, column=1, sticky="ew", padx=(6, 14), pady=(8, 0), ipady=2)
+        ).grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(8, 0), ipady=2)
 
         summary_box = tk.Frame(self.prompt_worker_simple, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         self.prompt_worker_summary_box = summary_box
@@ -11671,6 +11682,7 @@ class FlowVisionApp:
         asset_defaults = self._asset_worker_selection_defaults()
         self.worker_asset_project_var = tk.StringVar(value=project_values[active_project_idx] if project_values else "기본 프로젝트")
         self.worker_asset_count_var = tk.StringVar(value=str(self.cfg.get("asset_prompt_variant_count", "x1") or "x1").strip().lower() or "x1")
+        self.worker_asset_quality_var = tk.StringVar(value=str(self.cfg.get("download_video_quality", "1080P") or "1080P").strip().upper() or "1080P")
         self.worker_asset_output_dir_var = tk.StringVar(value=str(self.cfg.get("download_output_dir", "") or self._resolve_download_output_dir()))
         asset_download_wait = int(self.cfg.get("asset_combined_download_wait_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
         asset_next_wait = int(self.cfg.get("asset_combined_next_interval_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
@@ -11807,7 +11819,17 @@ class FlowVisionApp:
             width=8,
         )
         self.combo_worker_asset_count.grid(row=0, column=1, sticky="w", padx=(6, 14))
-        tk.Label(asset_extra_wrap, text="생성 후 다운로드 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=0, column=2, sticky="w")
+        tk.Label(asset_extra_wrap, text="영상 화질", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=0, column=2, sticky="w")
+        self.combo_worker_asset_quality = ttk.Combobox(
+            asset_extra_wrap,
+            textvariable=self.worker_asset_quality_var,
+            state="readonly",
+            values=("1080P", "720P", "4K"),
+            font=self.font_body,
+            width=8,
+        )
+        self.combo_worker_asset_quality.grid(row=0, column=3, sticky="w", padx=(6, 14))
+        tk.Label(asset_extra_wrap, text="생성 후 다운로드 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", pady=(8, 0))
         tk.Entry(
             asset_extra_wrap,
             textvariable=self.worker_asset_download_wait_var,
@@ -11815,8 +11837,8 @@ class FlowVisionApp:
             fg=self.color_input_fg,
             insertbackground=self.color_input_fg,
             font=self.font_mono_small,
-        ).grid(row=0, column=3, sticky="ew", padx=(6, 0), ipady=2)
-        tk.Label(asset_extra_wrap, text="다운로드 후 다음 작업 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ).grid(row=1, column=1, sticky="ew", padx=(6, 14), pady=(8, 0), ipady=2)
+        tk.Label(asset_extra_wrap, text="다운로드 후 다음 작업 대기(초)", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=1, column=2, sticky="w", pady=(8, 0))
         tk.Entry(
             asset_extra_wrap,
             textvariable=self.worker_asset_next_interval_var,
@@ -11824,7 +11846,7 @@ class FlowVisionApp:
             fg=self.color_input_fg,
             insertbackground=self.color_input_fg,
             font=self.font_mono_small,
-        ).grid(row=1, column=1, sticky="ew", padx=(6, 14), pady=(8, 0), ipady=2)
+        ).grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(8, 0), ipady=2)
 
         asset_summary_box = tk.Frame(self.asset_worker_simple, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         self.asset_worker_summary_box = asset_summary_box
@@ -12035,6 +12057,7 @@ class FlowVisionApp:
             self.worker_project_var,
             self.worker_prompt_slot_var,
             self.worker_prompt_count_var,
+            self.worker_prompt_quality_var,
             self.worker_prompt_output_dir_var,
             self.worker_prompt_download_wait_var,
             self.worker_prompt_next_interval_var,
@@ -12048,6 +12071,7 @@ class FlowVisionApp:
         for var in (
             self.worker_asset_project_var,
             self.worker_asset_count_var,
+            self.worker_asset_quality_var,
             self.worker_asset_output_dir_var,
             self.worker_asset_download_wait_var,
             self.worker_asset_next_interval_var,
@@ -12668,7 +12692,7 @@ class FlowVisionApp:
             target = self.worker_prompt_manual_var.get().strip() or "(비어 있음)"
         else:
             target = "전체"
-        download_quality = self._download_quality("image")
+        download_quality = str(self.worker_prompt_quality_var.get() or self._download_quality("image")).strip().upper()
         folder_text = self.worker_prompt_output_dir_var.get().strip() if hasattr(self, "worker_prompt_output_dir_var") else ""
         self.worker_prompt_summary_var.set(
             f"프로젝트: {self.worker_project_var.get().strip() or '-'} | 파일: {slot_text} | 생성: {count_text} | 대상: {target} | "
@@ -12732,10 +12756,21 @@ class FlowVisionApp:
         self.cfg["prompt_manual_selection_enabled"] = bool(selection_spec)
         self.cfg["prompt_manual_selection"] = selection_spec
         self.cfg["prompt_variant_count"] = str(self.worker_prompt_count_var.get() or "x1").strip().lower() or "x1"
+        self.cfg["download_image_quality"] = str(self.worker_prompt_quality_var.get() or self.cfg.get("download_image_quality", "4K")).strip().upper() or "4K"
         self.cfg["download_output_dir"] = str(self.worker_prompt_output_dir_var.get() or "").strip() if hasattr(self, "worker_prompt_output_dir_var") else str(self.cfg.get("download_output_dir", "") or "").strip()
         self.cfg["prompt_media_mode"] = "image"
         self.cfg["current_media_state"] = "image"
         self.cfg["browser_channel"] = "chrome"
+        if hasattr(self, "download_image_quality_var"):
+            try:
+                self.download_image_quality_var.set(self.cfg["download_image_quality"])
+            except Exception:
+                pass
+        if hasattr(self, "download_output_dir_var"):
+            try:
+                self.download_output_dir_var.set(self.cfg["download_output_dir"])
+            except Exception:
+                pass
         if hasattr(self, "entry_interval"):
             try:
                 self.entry_interval.delete(0, "end")
@@ -12768,7 +12803,7 @@ class FlowVisionApp:
         prompt_file_text = "공통 프롬프트 사용"
         if bool(self.worker_asset_use_prompt_file_var.get()) if hasattr(self, "worker_asset_use_prompt_file_var") else False:
             prompt_file_text = self.worker_asset_prompt_file_var.get().strip() or "(파일 선택 필요)"
-        download_quality = self._download_quality("video")
+        download_quality = str(self.worker_asset_quality_var.get() or self._download_quality("video")).strip().upper()
         folder_text = self.worker_asset_output_dir_var.get().strip() if hasattr(self, "worker_asset_output_dir_var") else ""
         self.worker_asset_summary_var.set(
             f"프로젝트: {self.worker_asset_project_var.get().strip() or '-'} | 생성: {self.worker_asset_count_var.get().strip() or 'x1'} | 대상: {target} | "
@@ -12854,10 +12889,21 @@ class FlowVisionApp:
         self.cfg["asset_use_prompt_slot"] = use_prompt_file
         self.cfg["asset_prompt_file"] = prompt_file if use_prompt_file else ""
         self.cfg["asset_prompt_variant_count"] = str(self.worker_asset_count_var.get() or "x1").strip().lower() or "x1"
+        self.cfg["download_video_quality"] = str(self.worker_asset_quality_var.get() or self.cfg.get("download_video_quality", "1080P")).strip().upper() or "1080P"
         self.cfg["download_output_dir"] = str(self.worker_asset_output_dir_var.get() or "").strip() if hasattr(self, "worker_asset_output_dir_var") else str(self.cfg.get("download_output_dir", "") or "").strip()
         self.cfg["asset_prompt_media_mode"] = "video"
         self.cfg["current_media_state"] = "video"
         self.cfg["browser_channel"] = "chrome"
+        if hasattr(self, "download_video_quality_var"):
+            try:
+                self.download_video_quality_var.set(self.cfg["download_video_quality"])
+            except Exception:
+                pass
+        if hasattr(self, "download_output_dir_var"):
+            try:
+                self.download_output_dir_var.set(self.cfg["download_output_dir"])
+            except Exception:
+                pass
         if hasattr(self, "entry_interval"):
             try:
                 self.entry_interval.delete(0, "end")
