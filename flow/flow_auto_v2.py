@@ -7970,6 +7970,99 @@ class FlowVisionApp:
             return True
         return False
 
+    def _score_download_card_candidate(self, locator, selector, tag):
+        if locator is None:
+            return float("-inf"), False, ""
+        try:
+            box = locator.bounding_box()
+        except Exception:
+            box = None
+        if not box:
+            return float("-inf"), False, ""
+
+        width = float(box.get("width") or 0.0)
+        height = float(box.get("height") or 0.0)
+        x = float(box.get("x") or 0.0)
+        y = float(box.get("y") or 0.0)
+        if width < 150.0 or height < 90.0:
+            return float("-inf"), False, ""
+
+        viewport_w = 1600.0
+        viewport_h = 900.0
+        try:
+            vp = self.page.viewport_size or {}
+            viewport_w = float(vp.get("width") or viewport_w)
+            viewport_h = float(vp.get("height") or viewport_h)
+        except Exception:
+            pass
+
+        area = width * height
+        # 결과 그리드 전체 래퍼처럼 너무 큰 박스는 제외한다.
+        if width >= (viewport_w * 0.92) and height >= (viewport_h * 0.58):
+            return float("-inf"), False, ""
+        if area > (viewport_w * viewport_h * 0.52):
+            return float("-inf"), False, ""
+
+        meta = self._normalize_download_search_text(self._locator_meta_text(locator))
+        matched, _ = self._download_card_matches_tag(locator, tag)
+        score = 0.0
+
+        if matched:
+            score += 5000.0
+
+        try:
+            detail = locator.evaluate(
+                """(el) => {
+                    const media = el.querySelectorAll ? el.querySelectorAll("img, video, canvas").length : 0;
+                    const buttons = el.querySelectorAll ? el.querySelectorAll("button, [role='button']").length : 0;
+                    const cls = String(el.className || "").toLowerCase();
+                    const role = String(el.getAttribute("role") || "").toLowerCase();
+                    const tag = String(el.tagName || "").toLowerCase();
+                    return { media, buttons, cls, role, tag };
+                }"""
+            ) or {}
+        except Exception:
+            detail = {}
+
+        media_count = int(detail.get("media") or 0)
+        button_count = int(detail.get("buttons") or 0)
+        cls = str(detail.get("cls") or "")
+        role = str(detail.get("role") or "")
+        tag_name = str(detail.get("tag") or "")
+        selector_l = str(selector or "").lower()
+
+        if media_count > 0:
+            score += 320.0
+        if button_count > 0:
+            score += 70.0
+        if tag_name == "article":
+            score += 140.0
+        if role == "listitem":
+            score += 110.0
+        if any(token in cls for token in ("card", "tile", "result", "item", "media")):
+            score += 120.0
+        if any(token in selector_l for token in ("article", "listitem", "card", "tile", "result")):
+            score += 80.0
+
+        if 180.0 <= width <= 760.0:
+            score += 120.0
+        elif width > 980.0:
+            score -= 260.0
+        if 120.0 <= height <= 620.0:
+            score += 120.0
+        elif height > 760.0:
+            score -= 260.0
+
+        score -= (y * 0.38)
+        score -= (x * 0.08)
+
+        if any(token in meta for token in ("DOWNLOAD", "다운로드", "UPSCALE", "업스케일", "TOAST", "ALERT", "NOTICE")):
+            score -= 800.0
+        if any(token in meta for token in ("FILTER", "필터", "SEARCH", "검색")):
+            score -= 500.0
+
+        return score, matched, meta
+
     def _resolve_download_card_for_tag(self, mode, tag, timeout_sec=6):
         if not self.page:
             return None, None, ""
@@ -7977,21 +8070,42 @@ class FlowVisionApp:
         best_fallback = None
         best_fallback_sel = None
         best_fallback_meta = ""
+        best_fallback_score = float("-inf")
         while time.time() < end_ts:
-            card_loc, card_sel = self._resolve_best_locator(
-                self._download_card_candidates(mode),
-                timeout_ms=1100,
-                prefer_enabled=False,
-                reject_fn=self._reject_download_card_candidate,
-            )
-            if card_loc is not None:
-                matched, meta = self._download_card_matches_tag(card_loc, tag)
-                if matched:
-                    return card_loc, card_sel, meta
-                if best_fallback is None:
-                    best_fallback = card_loc
-                    best_fallback_sel = card_sel
-                    best_fallback_meta = meta
+            best_match = None
+            best_match_sel = None
+            best_match_meta = ""
+            best_match_score = float("-inf")
+            for sel in self._download_card_candidates(mode):
+                try:
+                    loc = self.page.locator(sel)
+                    total = min(loc.count(), 40)
+                except Exception:
+                    continue
+                for idx in range(total):
+                    cand = loc.nth(idx)
+                    try:
+                        if not cand.is_visible(timeout=700):
+                            continue
+                    except Exception:
+                        continue
+                    if self._reject_download_card_candidate(cand, sel):
+                        continue
+                    score, matched, meta = self._score_download_card_candidate(cand, sel, tag)
+                    if score == float("-inf"):
+                        continue
+                    if matched and score > best_match_score:
+                        best_match = cand
+                        best_match_sel = sel
+                        best_match_meta = meta
+                        best_match_score = score
+                    if score > best_fallback_score:
+                        best_fallback = cand
+                        best_fallback_sel = sel
+                        best_fallback_meta = meta
+                        best_fallback_score = score
+            if best_match is not None:
+                return best_match, best_match_sel, best_match_meta
             time.sleep(0.35)
         return best_fallback, best_fallback_sel, best_fallback_meta
 
@@ -8481,14 +8595,19 @@ class FlowVisionApp:
                         card_meta = ""
                         time.sleep(0.20)
                     if page_has_tag:
-                        self.log(f"ℹ️ 카드 태그는 불일치했지만, 페이지 상단/본문에서 {tag} 표시를 확인해 타일 기준으로 계속 진행합니다.")
+                        self.log(
+                            f"ℹ️ 카드 안의 태그는 안 보이지만, 페이지가 {tag} 검색 결과로 보입니다. "
+                            "대표 카드 기준으로 더보기를 계속 찾습니다."
+                        )
                         tag_confirmed = True
-                    card_loc = None
-                    card_sel = None
-                    card_meta = ""
+                    else:
+                        card_loc = None
+                        card_sel = None
+                        card_meta = ""
                 else:
                     page_has_tag = True
                     tag_confirmed = True
+                if card_loc is not None:
                     try:
                         self.actor.move_to_locator(card_loc, label=f"결과 카드({tag})")
                     except Exception:
