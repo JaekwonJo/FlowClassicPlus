@@ -2039,6 +2039,7 @@ class FlowVisionApp:
     def on_open_bot_work_window(self):
         try:
             self.on_option_toggle()
+            self._sync_worker_selected_project_url(save_now=False)
             self._ensure_browser_session()
             self.actor.set_page(self.page)
             start_url = (self.cfg.get("start_url") or "").strip()
@@ -2808,6 +2809,7 @@ class FlowVisionApp:
                 var.set(selected_name)
             except Exception:
                 pass
+        self._sync_worker_selected_project_url(save_now=False)
         self.save_config()
         self._refresh_prompt_worker_compact_summary()
         self._refresh_asset_worker_compact_summary()
@@ -2821,7 +2823,7 @@ class FlowVisionApp:
         name = str(name or "").strip()
         if not name:
             return
-        url = simpledialog.askstring("프로젝트 URL", f"'{name}' 프로젝트 URL을 입력하세요:", initialvalue="https://labs.google/flow", parent=self.root)
+        url = self._ask_worker_project_url("프로젝트 URL", f"'{name}' 프로젝트 URL을 입력하세요:", initialvalue="https://labs.google/flow")
         if url is None:
             return
         profiles = self.cfg.get("project_profiles", [])
@@ -2852,7 +2854,7 @@ class FlowVisionApp:
         active = self._worker_current_project_index()
         current_name = str(profiles[active].get("project_name", "") or "").strip() or "프로젝트"
         current_url = str(profiles[active].get("url", "") or "").strip()
-        new_url = simpledialog.askstring("프로젝트 URL 편집", f"'{current_name}' 프로젝트 URL을 입력하세요:", initialvalue=current_url, parent=self.root)
+        new_url = self._ask_worker_project_url("프로젝트 URL 편집", f"'{current_name}' 프로젝트 URL을 입력하세요:", initialvalue=current_url)
         if new_url is None:
             return
         profiles[active]["url"] = str(new_url or "").strip()
@@ -2875,6 +2877,59 @@ class FlowVisionApp:
         self._refresh_worker_project_controls(max(0, active - 1))
         self._sync_worker_shared_lists_to_main_config()
         self.log(f"🗑 워커 프로젝트 삭제: {current_name}")
+
+    def _ask_worker_project_url(self, title, prompt, initialvalue=""):
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.transient(self.root)
+        win.grab_set()
+        win.configure(bg=self.color_bg)
+        win.geometry("980x180")
+        win.minsize(760, 180)
+
+        tk.Label(
+            win,
+            text=prompt,
+            font=self.font_body_bold,
+            bg=self.color_bg,
+            fg=self.color_text,
+            anchor="w",
+            justify="left",
+            wraplength=920,
+        ).pack(fill="x", padx=16, pady=(16, 8))
+
+        value_var = tk.StringVar(value=str(initialvalue or "").strip())
+        entry = tk.Entry(
+            win,
+            textvariable=value_var,
+            bg=self.color_input_bg,
+            fg=self.color_input_fg,
+            insertbackground=self.color_input_fg,
+            font=self.font_mono_small,
+        )
+        entry.pack(fill="x", padx=16, ipady=4)
+        entry.focus_set()
+        entry.selection_range(0, "end")
+
+        result = {"value": None}
+
+        def _submit():
+            result["value"] = value_var.get().strip()
+            win.destroy()
+
+        def _cancel():
+            result["value"] = None
+            win.destroy()
+
+        btn_row = tk.Frame(win, bg=self.color_bg)
+        btn_row.pack(fill="x", padx=16, pady=(14, 16))
+        ttk.Button(btn_row, text="취소", command=_cancel).pack(side="right")
+        ttk.Button(btn_row, text="확인", command=_submit).pack(side="right", padx=(0, 8))
+
+        win.bind("<Return>", lambda _e: _submit())
+        win.bind("<Escape>", lambda _e: _cancel())
+        self.root.wait_window(win)
+        return result["value"]
 
     def _active_project_profile_item(self):
         profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
@@ -12518,6 +12573,7 @@ class FlowVisionApp:
             self.cfg["active_prompt_slot"] = active_slot_idx
             self.cfg["prompts_file"] = str((self.cfg.get("prompt_slots", []) or [{}])[active_slot_idx].get("file", self.cfg.get("prompts_file", "flow_prompts.txt")) or self.cfg.get("prompts_file", "flow_prompts.txt"))
 
+        self._sync_worker_selected_project_url(save_now=False)
         self.save_config()
         self._refresh_prompt_worker_compact_summary()
         self._refresh_asset_worker_compact_summary()
@@ -12835,6 +12891,27 @@ class FlowVisionApp:
         if self.worker_mode == "download" and hasattr(self, "worker_download_project_var"):
             return str(self.worker_download_project_var.get() or "").strip() or self._active_project_name()
         return self._active_project_name()
+
+    def _sync_worker_selected_project_url(self, save_now=True):
+        if self.worker_mode not in ("prompt", "asset", "download"):
+            return False
+        profiles = self.cfg.get("project_profiles", []) or [self._default_project_profile()]
+        project_values = [str(item.get("project_name", "") or f"프로젝트 {idx+1}") for idx, item in enumerate(profiles)]
+        project_name = self._worker_selected_project_name()
+        project_idx = project_values.index(project_name) if project_name in project_values else self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0)
+        project_idx = self._clamp_project_profile_index(project_idx, default=0)
+        self.cfg["active_project_profile"] = project_idx
+        if profiles:
+            project = profiles[project_idx]
+            self.cfg["start_url"] = str(project.get("url", "") or self.cfg.get("start_url", "")).strip()
+        if hasattr(self, "start_url_var"):
+            try:
+                self.start_url_var.set(str(self.cfg.get("start_url", "") or "").strip())
+            except Exception:
+                pass
+        if save_now:
+            self.save_config()
+        return True
 
     def _pick_download_output_dir_for_compact(self):
         initial = str(self.worker_download_output_dir_var.get() or "").strip() or str(self._resolve_download_output_dir())
@@ -14570,7 +14647,10 @@ class FlowVisionApp:
             self.cfg["typing_speed_profile"] = self.typing_speed_profile_var.get().strip()
         else:
             self.cfg["typing_speed_profile"] = str(self.cfg.get("typing_speed_profile", "x5")).strip() or "x5"
-        self.cfg["start_url"] = self.start_url_var.get().strip() if hasattr(self, "start_url_var") else self.cfg.get("start_url", "")
+        if self.worker_mode in ("prompt", "asset", "download"):
+            self._sync_worker_selected_project_url(save_now=False)
+        else:
+            self.cfg["start_url"] = self.start_url_var.get().strip() if hasattr(self, "start_url_var") else self.cfg.get("start_url", "")
         self.cfg["input_selector"] = self.input_selector_var.get().strip() if hasattr(self, "input_selector_var") else self.cfg.get("input_selector", "")
         self.cfg["submit_selector"] = self.submit_selector_var.get().strip() if hasattr(self, "submit_selector_var") else self.cfg.get("submit_selector", "")
         self.cfg["auto_open_new_project"] = self.auto_new_project_var.get() if hasattr(self, "auto_new_project_var") else self.cfg.get("auto_open_new_project", True)
