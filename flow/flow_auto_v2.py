@@ -2203,12 +2203,22 @@ class FlowVisionApp:
         self._try_open_new_project_if_needed(input_hint)
         input_locator, _ = self._resolve_prompt_input_locator(input_hint, timeout_ms=2200)
 
-        detected_state = self.refresh_detected_media_state(
-            ensure_session=False,
-            input_locator=input_locator,
-            profile=profile,
-            write_log=True,
-        )
+        detected_state = None
+        for idx, delay_sec in enumerate((0.0, 0.55, 0.95)):
+            if delay_sec > 0:
+                time.sleep(delay_sec)
+                try:
+                    input_locator, _ = self._resolve_prompt_input_locator(input_hint, timeout_ms=1800)
+                except Exception:
+                    pass
+            detected_state = self.refresh_detected_media_state(
+                ensure_session=False,
+                input_locator=input_locator,
+                profile=profile,
+                write_log=True,
+            )
+            if detected_state in ("image", "video"):
+                break
         if detected_state not in ("image", "video"):
             return False, "현재 상태 감지 실패", None, input_locator
 
@@ -2279,26 +2289,16 @@ class FlowVisionApp:
         if start_loc is None:
             start_loc, _ = self._resolve_text_locator_any_frame(["시작", "Start"], timeout_ms=1000)
         if search_loc is None:
-            search_loc, _ = self._resolve_text_locator_any_frame(["에셋 검색", "Asset search", "Search assets"], timeout_ms=1200)
+            search_loc, _ = self._resolve_text_locator_any_frame(["애셋 검색", "에셋 검색", "Asset search", "Search assets"], timeout_ms=1200)
 
-        input_loc, _ = self._resolve_best_locator_with_scroll(
-            input_candidates,
-            timeout_ms=1800,
-            prefer_enabled=False,
-            ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
-        )
+        input_loc, _ = self._resolve_asset_search_input_locator(timeout_sec=1.8, dump_label="에셋 검색창 자동점검")
         if (input_loc is None) and (search_loc is not None):
             try:
                 search_loc.click(timeout=2000)
             except Exception:
                 pass
             self.actor.random_action_delay("자동 점검 검색 입력칸 확인 대기", 0.3, 1.0)
-            input_loc, _ = self._resolve_best_locator_with_scroll(
-                input_candidates,
-                timeout_ms=2200,
-                prefer_enabled=False,
-                ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
-            )
+            input_loc, _ = self._resolve_asset_search_input_locator(timeout_sec=2.0, dump_label="에셋 검색창 자동점검")
 
         start_ok = start_loc is not None
         input_ok = input_loc is not None
@@ -6047,7 +6047,7 @@ class FlowVisionApp:
             if (not box) or box["width"] < 80 or box["height"] < 18:
                 return None, None
             meta = self._locator_meta_text(focus_loc)
-            positive_keys = ("asset", "search", "에셋", "검색")
+            positive_keys = ("asset", "search", "에셋", "애셋", "검색")
             negative_keys = ("project", "title", "이름", "rename", "name", "prompt", "프롬프트", "무엇을 만들고")
             if any(k in meta for k in negative_keys):
                 return None, None
@@ -6487,7 +6487,7 @@ class FlowVisionApp:
         except Exception:
             pass
 
-        positive_keys = ("image", "이미지", "photo", "사진", "gallery", "asset", "에셋", "media", "reference")
+        positive_keys = ("image", "이미지", "photo", "사진", "gallery", "asset", "에셋", "애셋", "media", "reference")
         negative_keys = ("video", "동영상", "설정", "setting", "menu", "download", "다운로드")
 
         while time.time() < end_ts:
@@ -6558,6 +6558,9 @@ class FlowVisionApp:
         start_loc, _ = self._resolve_text_locator_any_frame(["시작", "Start"], timeout_ms=900)
         if start_loc is not None:
             return True
+        input_loc, _ = self._resolve_asset_search_input_locator(timeout_sec=0.8)
+        if input_loc is not None:
+            return True
 
         side_loc, side_sel = self._resolve_asset_sidebar_button(timeout_sec=timeout_sec)
         if side_loc is None:
@@ -6577,19 +6580,47 @@ class FlowVisionApp:
         if start_loc is not None:
             return True
         start_loc, _ = self._resolve_text_locator_any_frame(["시작", "Start"], timeout_ms=1000)
-        return start_loc is not None
+        if start_loc is not None:
+            return True
+        input_loc, _ = self._resolve_asset_search_input_locator(timeout_sec=1.2)
+        return input_loc is not None
 
     def _open_asset_search_surface_for_detection(self):
         if not self.page:
             return False
-        input_loc, _ = self._resolve_best_locator_with_scroll(
-            self._asset_search_input_candidates(),
-            timeout_ms=1200,
-            prefer_enabled=False,
-            ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
-        )
+        input_loc, _ = self._resolve_asset_search_input_locator(timeout_sec=1.2)
         if input_loc is not None:
             return True
+
+        search_loc, search_sel = self._resolve_best_locator_with_scroll(
+            self._asset_search_button_candidates() + [
+                "text=애셋 검색",
+                "text=에셋 검색",
+                "text=Asset search",
+                "text=Search assets",
+                "[aria-label*='애셋' i][aria-label*='검색' i]",
+                "[aria-label*='에셋' i][aria-label*='검색' i]",
+                "[title*='애셋' i][title*='검색' i]",
+                "[title*='에셋' i][title*='검색' i]",
+                "[aria-label*='asset' i][aria-label*='search' i]",
+                "[title*='asset' i][title*='search' i]",
+            ],
+            timeout_ms=1800,
+            prefer_enabled=False,
+            ratios=(0.0, 0.12, 0.24, 0.36, 0.50),
+        )
+        if search_loc is None:
+            search_loc, search_sel = self._resolve_text_locator_any_frame(
+                ["애셋 검색", "에셋 검색", "Asset search", "Search assets"],
+                timeout_ms=1000,
+            )
+        if search_loc is not None:
+            if self._click_with_actor_fallback(search_loc, "에셋 검색 버튼"):
+                self.log(f"🔎 자동탐색용 에셋 검색 클릭: {search_sel or '텍스트 탐색'}")
+                self.actor.random_action_delay("에셋 검색창 표시 대기", 0.4, 1.2)
+                input_loc, _ = self._resolve_asset_search_input_locator(timeout_sec=1.6)
+                if input_loc is not None:
+                    return True
 
         start_loc, start_sel = self._resolve_best_locator_with_scroll(
             self._asset_start_button_candidates(),
@@ -6606,18 +6637,15 @@ class FlowVisionApp:
             return False
         self.log(f"🟢 자동탐색용 시작 클릭: {start_sel or '텍스트 탐색'}")
         self.actor.random_action_delay("에셋 검색창 표시 대기", 0.5, 1.4)
-        input_loc, _ = self._resolve_best_locator_with_scroll(
-            self._asset_search_input_candidates(),
-            timeout_ms=1800,
-            prefer_enabled=False,
-            ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
-        )
+        input_loc, _ = self._resolve_asset_search_input_locator(timeout_sec=1.8)
         return input_loc is not None
 
     def _asset_search_button_candidates(self):
         cands = []
         cands.extend(self._normalize_candidate_list(self.cfg.get("asset_search_button_selector", "")))
         cands.extend([
+            "button:has-text('애셋 검색')",
+            "[role='button']:has-text('애셋 검색')",
             "button:has-text('에셋 검색')",
             "[role='button']:has-text('에셋 검색')",
             "button:has-text('Asset search')",
@@ -6637,10 +6665,18 @@ class FlowVisionApp:
         cands = []
         cands.extend(self._normalize_candidate_list(self.cfg.get("asset_search_input_selector", "")))
         cands.extend([
+            "input[placeholder*='애셋 검색' i]",
+            "input[aria-label*='애셋 검색' i]",
+            "textarea[placeholder*='애셋 검색' i]",
+            "textarea[aria-label*='애셋 검색' i]",
             "input[placeholder*='에셋 검색' i]",
             "input[aria-label*='에셋 검색' i]",
             "textarea[placeholder*='에셋 검색' i]",
             "textarea[aria-label*='에셋 검색' i]",
+            "input[placeholder*='애셋' i]",
+            "input[aria-label*='애셋' i]",
+            "textarea[placeholder*='애셋' i]",
+            "textarea[aria-label*='애셋' i]",
             "input[placeholder*='asset' i]",
             "input[aria-label*='asset' i]",
             "textarea[placeholder*='asset' i]",
@@ -6649,10 +6685,15 @@ class FlowVisionApp:
             "input[aria-label*='검색' i]",
             "textarea[placeholder*='검색' i]",
             "textarea[aria-label*='검색' i]",
+            "[role='textbox'][aria-label*='애셋' i]",
             "[role='textbox'][aria-label*='에셋' i]",
             "[role='textbox'][aria-label*='asset' i]",
+            "[contenteditable='true'][aria-label*='애셋' i]",
             "[contenteditable='true'][aria-label*='에셋' i]",
             "[contenteditable='true'][aria-label*='asset' i]",
+            "[contenteditable='plaintext-only'][aria-label*='애셋' i]",
+            "[contenteditable='plaintext-only'][aria-label*='에셋' i]",
+            "[contenteditable='plaintext-only'][aria-label*='asset' i]",
             "input[type='search']",
             "[role='searchbox']",
         ])
@@ -6663,6 +6704,143 @@ class FlowVisionApp:
                 uniq.append(x)
                 seen.add(x)
         return uniq
+
+    def _asset_search_input_probe_candidates(self):
+        cands = []
+        cands.extend(self._asset_search_input_candidates())
+        cands.extend([
+            "input",
+            "textarea",
+            "[role='searchbox']",
+            "[role='textbox']",
+            "[contenteditable='true']",
+            "[contenteditable='plaintext-only']",
+        ])
+        return list(dict.fromkeys([x for x in cands if x]))
+
+    def _is_asset_search_overlay_input_box(self, box):
+        if not box:
+            return False
+        try:
+            width = float(box.get("width") or 0.0)
+            height = float(box.get("height") or 0.0)
+            x = float(box.get("x") or 0.0)
+            y = float(box.get("y") or 0.0)
+        except Exception:
+            return False
+        if width < 160.0 or width > 1200.0:
+            return False
+        if height < 16.0 or height > 60.0:
+            return False
+        if y < 0.0 or y > 240.0:
+            return False
+        if x < 40.0 or x > 1400.0:
+            return False
+        return True
+
+    def _resolve_asset_search_input_locator(self, timeout_sec=2.0, dump_label=""):
+        if not self.page:
+            return None, None
+        end_ts = time.time() + max(0.6, float(timeout_sec or 2.0))
+        best_dump = []
+        dumped = False
+        while time.time() < end_ts:
+            best = None
+            best_sel = None
+            best_score = float("-inf")
+            dump_rows = []
+            selectors = self._asset_search_input_probe_candidates()
+            for sel in selectors:
+                try:
+                    loc = self.page.locator(sel)
+                    total = min(loc.count(), 40)
+                except Exception:
+                    continue
+                for idx in range(total):
+                    cand = loc.nth(idx)
+                    try:
+                        if not cand.is_visible(timeout=250):
+                            continue
+                        box = cand.bounding_box()
+                    except Exception:
+                        continue
+                    if not box:
+                        continue
+                    meta = self._locator_meta_text(cand)
+                    width = float(box["width"] or 0.0)
+                    height = float(box["height"] or 0.0)
+                    x = float(box["x"] or 0.0)
+                    y = float(box["y"] or 0.0)
+                    cx = x + width / 2.0
+                    role_search = any(k in meta for k in ("searchbox", "type search"))
+                    meta_has_search = any(k in meta for k in ("검색", "search", "asset", "에셋", "애셋", "recent", "최근"))
+                    overlay_shape = self._is_asset_search_overlay_input_box(box)
+                    active_bonus = False
+                    try:
+                        active_bonus = bool(cand.evaluate("(el) => el === document.activeElement"))
+                    except Exception:
+                        active_bonus = False
+                    if (not overlay_shape) and (not meta_has_search) and (not active_bonus):
+                        continue
+                    score = 0.0
+                    if width < 120.0 or height < 16.0:
+                        score -= 900.0
+                    if y <= 190.0:
+                        score += 720.0
+                    elif y <= 300.0:
+                        score += 180.0
+                    else:
+                        score -= 1600.0
+                    if 180.0 <= width <= 980.0:
+                        score += 220.0
+                    elif width > 1200.0:
+                        score -= 400.0
+                    score -= abs(cx - 560.0) * 0.12
+                    if active_bonus:
+                        score += 740.0
+                    if meta_has_search:
+                        score += 620.0
+                    if role_search:
+                        score += 260.0
+                    if overlay_shape:
+                        score += 260.0
+                    if any(k in meta for k in ("무엇을 만들", "prompt", "프롬프트", "message", "메시지")):
+                        score -= 2200.0
+                    if any(k in meta for k in ("project", "title", "이름", "rename", "name")):
+                        score -= 1400.0
+                    if any(k in meta for k in ("nano banana", "veo", "videocam", "crop_", "x1", "x2", "x3", "x4")):
+                        score -= 900.0
+                    score -= idx * 4.0
+                    dump_rows.append((score, sel, meta[:100], box))
+                    if score > best_score:
+                        best = cand
+                        best_sel = self._locator_selector_hint(cand) or sel
+                        best_score = score
+            if dump_rows:
+                best_dump = sorted(dump_rows, key=lambda x: x[0], reverse=True)[:10]
+            if best is not None and best_score > 120.0:
+                if dump_label and (not dumped) and best_dump:
+                    self.log(f"🧩 {dump_label} 후보 덤프")
+                    for idx, row in enumerate(best_dump, start=1):
+                        box = row[3] or {}
+                        self.log(
+                            f"   {idx:02d}. score={row[0]:.1f} sel={row[1]} meta='{row[2]}' "
+                            f"box=({float(box.get('x') or 0.0):.1f}, {float(box.get('y') or 0.0):.1f}, "
+                            f"{float(box.get('width') or 0.0):.1f}, {float(box.get('height') or 0.0):.1f})"
+                        )
+                    dumped = True
+                return best, best_sel
+            time.sleep(0.12)
+        if dump_label and best_dump:
+            self.log(f"🧩 {dump_label} 후보 덤프(실패)")
+            for idx, row in enumerate(best_dump, start=1):
+                box = row[3] or {}
+                self.log(
+                    f"   {idx:02d}. score={row[0]:.1f} sel={row[1]} meta='{row[2]}' "
+                    f"box=({float(box.get('x') or 0.0):.1f}, {float(box.get('y') or 0.0):.1f}, "
+                    f"{float(box.get('width') or 0.0):.1f}, {float(box.get('height') or 0.0):.1f})"
+                )
+        return None, None
 
     def _wait_best_locator(self, candidates, timeout_sec=8, prefer_enabled=True):
         end_ts = time.time() + max(1, timeout_sec)
@@ -7041,12 +7219,7 @@ class FlowVisionApp:
                 self.log("ℹ️ Step1 시작 버튼 미탐지(현재 화면 유지)")
 
         # 2-0) 에셋 검색 버튼 없이 바로 검색 입력칸이 열리는 UI 대응
-        direct_input, _ = self._resolve_best_locator_with_scroll(
-            self._asset_search_input_candidates(),
-            timeout_ms=1600,
-            prefer_enabled=False,
-            ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
-        )
+        direct_input, direct_sel = self._resolve_asset_search_input_locator(timeout_sec=1.6)
         if direct_input is not None:
             try:
                 direct_input.click(timeout=1200)
@@ -7066,15 +7239,18 @@ class FlowVisionApp:
                     direct_input = None
             if direct_input is not None:
                 self.page.keyboard.press("Enter")
-                self.log(f"✅ Step2 에셋 검색 입력 완료(직접입력): {asset_tag}")
+                self.log(f"✅ Step2 에셋 검색 입력 완료(직접입력): {asset_tag} | {direct_sel or '자동 탐색'}")
                 self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.2, 1.0)
                 self._wait_asset_search_resolution(asset_tag)
                 return
 
         search_candidates = self._asset_search_button_candidates() + [
+            "text=애셋 검색",
             "text=에셋 검색",
             "text=Asset search",
             "text=Search assets",
+            "[aria-label*='애셋' i][aria-label*='검색' i]",
+            "[title*='애셋' i][title*='검색' i]",
             "[aria-label*='에셋' i][aria-label*='검색' i]",
             "[title*='에셋' i][title*='검색' i]",
             "[aria-label*='asset' i][aria-label*='search' i]",
@@ -7088,7 +7264,7 @@ class FlowVisionApp:
         )
         if search_locator is None:
             search_locator, search_selector = self._resolve_text_locator_any_frame(
-                ["에셋 검색", "Asset search", "Search assets"],
+                ["애셋 검색", "에셋 검색", "Asset search", "Search assets"],
                 timeout_ms=1200,
             )
         if search_locator is not None:
@@ -7098,12 +7274,7 @@ class FlowVisionApp:
                 self.log(f"🔎 Step2 에셋 검색 클릭: {search_selector or '텍스트 탐색'}")
                 self.actor.random_action_delay("에셋 검색 클릭 후 대기", 0.4, 1.6)
 
-        search_input, _ = self._resolve_best_locator_with_scroll(
-            self._asset_search_input_candidates(),
-            timeout_ms=2200,
-            prefer_enabled=False,
-            ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
-        )
+        search_input, search_input_sel = self._resolve_asset_search_input_locator(timeout_sec=2.0)
         if search_input is None:
             focus_input, _focus_sel = self._resolve_focused_asset_search_input()
             if focus_input is not None:
@@ -7157,7 +7328,7 @@ class FlowVisionApp:
 
         self.actor.random_action_delay("에셋 검색어 입력 후 대기", 0.1, 0.5)
         self.page.keyboard.press("Enter")
-        self.log(f"✅ Step2 에셋 검색 입력 완료: {asset_tag}")
+        self.log(f"✅ Step2 에셋 검색 입력 완료: {asset_tag} | {search_input_sel or '자동 탐색'}")
         self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.2, 1.0)
         self._wait_asset_search_resolution(asset_tag)
 
@@ -15904,12 +16075,23 @@ class FlowVisionApp:
         self.cfg[self._preset_cfg_key(profile, "mode_preset_enabled")] = True
         if profile == "asset":
             # S자동화는 저장된 값보다 현재 화면 상태를 우선 본다.
-            detected_state = self.refresh_detected_media_state(
-                ensure_session=False,
-                input_locator=input_locator,
-                profile="asset",
-                write_log=False,
-            )
+            input_hint = (self.cfg.get("input_selector") or "").strip() or "#PINHOLE_TEXT_AREA_ELEMENT_ID, textarea, [contenteditable='true'], [role='textbox']"
+            detected_state = None
+            for delay_sec in (0.0, 0.45, 0.85):
+                if delay_sec > 0:
+                    time.sleep(delay_sec)
+                    try:
+                        input_locator, _ = self._resolve_prompt_input_locator(input_hint, timeout_ms=1800)
+                    except Exception:
+                        pass
+                detected_state = self.refresh_detected_media_state(
+                    ensure_session=False,
+                    input_locator=input_locator,
+                    profile="asset",
+                    write_log=False,
+                )
+                if detected_state in ("image", "video"):
+                    break
             if detected_state == "video":
                 self.current_media_state = "video"
                 self.cfg["current_media_state"] = "video"
@@ -15919,7 +16101,17 @@ class FlowVisionApp:
                 self.save_config()
                 self.log("ℹ️ S자동화 생성 모드 유지: video")
                 return
-            ok = self._switch_media_state("video", input_locator=input_locator, profile="asset")
+            ok = False
+            for delay_sec in (0.0, 0.65):
+                if delay_sec > 0:
+                    time.sleep(delay_sec)
+                    try:
+                        input_locator, _ = self._resolve_prompt_input_locator(input_hint, timeout_ms=1800)
+                    except Exception:
+                        pass
+                ok = self._switch_media_state("video", input_locator=input_locator, profile="asset")
+                if ok:
+                    break
             if not ok:
                 raise RuntimeError("S자동화 시작 전 image→video 전환에 실패했습니다. 상태 확인과 이미지→동영상 테스트를 다시 확인해주세요.")
             self.cfg["asset_prompt_media_mode"] = "video"
@@ -16415,6 +16607,18 @@ class FlowVisionApp:
             self.refresh_detected_media_state(ensure_session=False)
             return True
 
+        if open_loc is None:
+            input_hint = (self.cfg.get("input_selector") or "").strip() or "#PINHOLE_TEXT_AREA_ELEMENT_ID, textarea, [contenteditable='true'], [role='textbox']"
+            for delay_sec in (0.45, 0.85):
+                time.sleep(delay_sec)
+                try:
+                    input_locator, _ = self._resolve_prompt_input_locator(input_hint, timeout_ms=1800)
+                except Exception:
+                    pass
+                open_loc, open_desc, inferred_state = self._resolve_current_media_panel_button(input_locator=input_locator, profile=profile)
+                if open_loc is not None:
+                    current_state = inferred_state or current_state
+                    break
         if open_loc is None:
             self.log(f"⚠️ 현재 생성 모드 버튼을 찾지 못했습니다. ({profile}/{current_state})")
             return False
@@ -17054,6 +17258,7 @@ class FlowVisionApp:
             time.sleep(random.uniform(1.0, 2.3))
             self._prepare_page_for_selector_detection()
             self._ensure_asset_workspace_visible(timeout_sec=4)
+            self._open_asset_search_surface_for_detection()
 
             start_loc, start_sel = self._resolve_best_locator_with_scroll(
                 self._asset_start_button_candidates(),
@@ -17081,28 +17286,18 @@ class FlowVisionApp:
                     pass
             if search_loc is None:
                 search_loc, search_sel = self._resolve_text_locator_any_frame(
-                    ["에셋 검색", "Asset search", "Search assets"],
+                    ["애셋 검색", "에셋 검색", "Asset search", "Search assets"],
                     timeout_ms=1200,
                 )
 
-            input_loc, input_sel = self._resolve_best_locator_with_scroll(
-                self._asset_search_input_candidates(),
-                timeout_ms=1200,
-                prefer_enabled=False,
-                ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
-            )
+            input_loc, input_sel = self._resolve_asset_search_input_locator(timeout_sec=1.4, dump_label="에셋 검색창 자동탐색")
             if (input_loc is None) and (search_loc is not None):
                 try:
                     search_loc.click(timeout=2000)
                     self.actor.random_action_delay("에셋 검색 입력칸 표시 대기", 0.3, 1.2)
                 except Exception:
                     pass
-                input_loc, input_sel = self._resolve_best_locator_with_scroll(
-                    self._asset_search_input_candidates(),
-                    timeout_ms=2200,
-                    prefer_enabled=False,
-                    ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
-                )
+                input_loc, input_sel = self._resolve_asset_search_input_locator(timeout_sec=2.0, dump_label="에셋 검색창 자동탐색")
 
             if start_sel:
                 self.cfg["asset_start_selector"] = start_sel
@@ -17166,28 +17361,18 @@ class FlowVisionApp:
                 start_loc, start_sel = self._resolve_text_locator_any_frame(["시작", "Start"], timeout_ms=1000)
             if search_loc is None:
                 search_loc, search_sel = self._resolve_text_locator_any_frame(
-                    ["에셋 검색", "Asset search", "Search assets"],
+                    ["애셋 검색", "에셋 검색", "Asset search", "Search assets"],
                     timeout_ms=1200,
                 )
 
-            input_loc, input_sel = self._resolve_best_locator_with_scroll(
-                input_candidates,
-                timeout_ms=1800,
-                prefer_enabled=False,
-                ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
-            )
+            input_loc, input_sel = self._resolve_asset_search_input_locator(timeout_sec=1.8, dump_label="에셋 검색창 테스트")
             if (input_loc is None) and (search_loc is not None):
                 try:
                     search_loc.click(timeout=2000)
                 except Exception:
                     pass
                 self.actor.random_action_delay("검색 입력칸 확인 대기", 0.3, 1.0)
-                input_loc, input_sel = self._resolve_best_locator_with_scroll(
-                    input_candidates,
-                    timeout_ms=2200,
-                    prefer_enabled=False,
-                    ratios=(0.0, 0.18, 0.30, 0.42, 0.56),
-                )
+                input_loc, input_sel = self._resolve_asset_search_input_locator(timeout_sec=2.0, dump_label="에셋 검색창 테스트")
 
             start_ok = start_loc is not None
             search_ok = search_loc is not None
