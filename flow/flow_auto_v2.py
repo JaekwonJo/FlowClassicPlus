@@ -91,6 +91,7 @@ DEFAULT_CONFIG = {
     "prompt_combined_next_interval_seconds": 180,
     "asset_combined_download_wait_seconds": 180,
     "asset_combined_next_interval_seconds": 180,
+    "asset_combined_download_fallback_image": False,
     "start_url": "https://labs.google/flow",
     "input_selector": "#PINHOLE_TEXT_AREA_ELEMENT_ID, textarea, [role='textbox'], [contenteditable='true']",
     "submit_selector": "button[type='submit']",
@@ -1372,7 +1373,13 @@ class FlowVisionApp:
         if hasattr(self, "lbl_header_progress"):
             self.lbl_header_progress.config(font=(self.font_mono_family, max(12, self._font_px("mono")), "bold"))
         if hasattr(self, "lbl_main_status"):
-            self.lbl_main_status.config(font=(self.font_ui_family, max(15, self._font_px("hud")), "bold"))
+            status_size = max(12, self._font_px("small")) if self.worker_mode in ("prompt", "asset", "download") else max(15, self._font_px("hud"))
+            status_wrap = 240 if self.worker_mode in ("prompt", "asset", "download") else 0
+            self.lbl_main_status.config(
+                font=(self.font_ui_family, status_size, "bold"),
+                wraplength=status_wrap,
+                justify="right",
+            )
         if hasattr(self, "header_progress_canvas"):
             bar_height = 16 if compact else 18
             if narrow:
@@ -9514,11 +9521,29 @@ class FlowVisionApp:
 
     def update_status_label(self, text, color):
         if color == "white": color = self.color_text
-        self.lbl_main_status.config(text=text, fg=color)
+        display_text = self._format_header_status_text(text)
+        self.lbl_main_status.config(text=display_text, fg=color)
         if hasattr(self, "lbl_hud_state"):
             self.lbl_hud_state.config(text=f"상태: {text}", fg=color)
         if hasattr(self, "lbl_worker_hud_status"):
             self.lbl_worker_hud_status.config(text=f"상태: {text}", fg=color)
+
+    def _format_header_status_text(self, text):
+        text = str(text or "").strip() or "준비 완료"
+        if self.worker_mode not in ("prompt", "asset", "download"):
+            return text
+        compact = text
+        compact = compact.replace("⏳ ", "").replace("✅ ", "").replace("⚠️ ", "").replace("🚀 ", "")
+        compact = compact.replace("⬇️ ", "").replace("⏸ ", "").replace("▶ ", "").replace("☕ ", "")
+        if " | " in compact:
+            compact = compact.replace(" | ", "\n", 1)
+        elif "... " in compact:
+            compact = compact.replace("... ", "...\n", 1)
+        elif len(compact) > 24 and " " in compact:
+            parts = compact.split()
+            pivot = max(1, len(parts) // 2)
+            compact = " ".join(parts[:pivot]) + "\n" + " ".join(parts[pivot:])
+        return compact
 
     def _create_collapsible_section(self, parent, title, opened=False):
         title_key = str(title or "")
@@ -9707,7 +9732,16 @@ class FlowVisionApp:
         status_f = tk.Frame(right_f, bg=self.color_header)
         status_f.pack(side="left", padx=(0, 10))
         tk.Label(status_f, text="현재 상태", font=self.font_small, bg=self.color_header, fg=self.color_text_sec).pack(anchor="e")
-        self.lbl_main_status = tk.Label(status_f, text="준비 완료", font=(self.font_ui_family, 16, "bold"), bg=self.color_header, fg=self.color_success)
+        self.lbl_main_status = tk.Label(
+            status_f,
+            text="준비 완료",
+            font=(self.font_ui_family, 16, "bold"),
+            bg=self.color_header,
+            fg=self.color_success,
+            anchor="e",
+            justify="right",
+            width=26,
+        )
         self.lbl_main_status.pack(anchor="e")
         self.btn_go_pipeline = ttk.Button(right_f, text="🏃 이어달리기", command=self.show_pipeline_window)
         self.btn_go_pipeline.pack(side="left", padx=(0, 6))
@@ -11974,6 +12008,7 @@ class FlowVisionApp:
         asset_next_wait = int(self.cfg.get("asset_combined_next_interval_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
         self.worker_asset_download_wait_var = tk.StringVar(value=str(asset_download_wait))
         self.worker_asset_next_interval_var = tk.StringVar(value=str(asset_next_wait))
+        self.worker_asset_fallback_image_var = tk.BooleanVar(value=bool(self.cfg.get("asset_combined_download_fallback_image", False)))
         self.worker_asset_number_mode_var = tk.StringVar(value=asset_defaults["mode"])
         self.worker_asset_range_start_var = tk.StringVar(value=asset_defaults["start"])
         self.worker_asset_range_end_var = tk.StringVar(value=asset_defaults["end"])
@@ -12133,6 +12168,17 @@ class FlowVisionApp:
             insertbackground=self.color_input_fg,
             font=self.font_mono_small,
         ).grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(8, 0), ipady=2)
+        tk.Checkbutton(
+            asset_extra_wrap,
+            text="실패 시 이미지 다운로드하기",
+            variable=self.worker_asset_fallback_image_var,
+            bg=self.color_panel_soft,
+            fg=self.color_text,
+            activebackground=self.color_panel_soft,
+            activeforeground=self.color_text,
+            selectcolor=self.color_panel_soft,
+            font=self.font_small,
+        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(10, 0))
 
         asset_summary_box = tk.Frame(self.asset_worker_simple, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         self.asset_worker_summary_box = asset_summary_box
@@ -12379,6 +12425,7 @@ class FlowVisionApp:
         ):
             var.trace_add("write", self._refresh_asset_worker_compact_summary)
         self.worker_asset_use_prompt_file_var.trace_add("write", self._refresh_asset_worker_compact_summary)
+        self.worker_asset_fallback_image_var.trace_add("write", self._refresh_asset_worker_compact_summary)
 
         for var in (
             self.worker_download_project_var,
@@ -12753,6 +12800,13 @@ class FlowVisionApp:
     def _combined_worker_download_mode(self):
         return "video" if self.current_run_mode == "asset" else "image"
 
+    def _asset_worker_image_fallback_enabled(self):
+        return bool(
+            self.current_run_mode == "asset"
+            and self.worker_mode == "asset"
+            and bool(self.cfg.get("asset_combined_download_fallback_image", False))
+        )
+
     def _combined_worker_download_wait_cfg_key(self):
         return "asset_combined_download_wait_seconds" if self.current_run_mode == "asset" else "prompt_combined_download_wait_seconds"
 
@@ -12790,6 +12844,47 @@ class FlowVisionApp:
             base = 180
         swing = max(0, int(round(base * self._combined_worker_random_ratio())))
         return max(1, base + random.randint(-swing, swing))
+
+    def _run_combined_download_with_optional_fallback(self, *, mode, tag, wait_sec):
+        quality = self._download_quality(mode)
+        try:
+            result = self._run_single_download_flow(
+                mode=mode,
+                tag=tag,
+                quality=quality,
+                dry_run=False,
+                wait_sec=wait_sec,
+            )
+            self._apply_download_used_selectors(mode, result.get("used", {}))
+            return result, mode, quality
+        except Exception as primary_error:
+            if mode != "video" or not self._asset_worker_image_fallback_enabled():
+                raise
+            primary_reason = str(primary_error).strip().splitlines()[0][:160]
+            image_mode = "image"
+            image_quality = self._download_quality(image_mode)
+            self.log(
+                f"🖼️ 영상 다운로드 실패, 이미지 다운로드 폴백 시도: {tag} | "
+                f"원인: {primary_reason}"
+            )
+            self._set_worker_queue_item_state(self.index, "downloading", f"{tag} 실패 후 이미지 다운로드 시도")
+            self.update_status_label(f"🖼️ 이미지 폴백 다운로드 중... {tag}", self.color_info)
+            try:
+                result = self._run_single_download_flow(
+                    mode=image_mode,
+                    tag=tag,
+                    quality=image_quality,
+                    dry_run=False,
+                    wait_sec=wait_sec,
+                )
+                self._apply_download_used_selectors(image_mode, result.get("used", {}))
+                return result, image_mode, image_quality
+            except Exception as image_error:
+                image_reason = str(image_error).strip().splitlines()[0][:160]
+                raise RuntimeError(
+                    f"영상 다운로드 실패 후 이미지 다운로드도 실패했습니다. "
+                    f"(영상: {primary_reason} | 이미지: {image_reason})"
+                ) from image_error
 
     def _wait_before_combined_download(self, tag, wait_seconds):
         wait_seconds = max(1, int(wait_seconds or 1))
@@ -13187,7 +13282,8 @@ class FlowVisionApp:
         self.worker_asset_summary_var.set(
             f"프로젝트: {self.worker_asset_project_var.get().strip() or '-'} | 생성: {self.worker_asset_count_var.get().strip() or 'x1'} | 대상: {target} | "
             f"생성대기: {self.worker_asset_download_wait_var.get().strip() or '-'}초+랜덤 | 다음대기: {self.worker_asset_next_interval_var.get().strip() or '-'}초±랜덤 | "
-            f"프롬프트: {prompt_file_text} | 다운로드: 영상 {download_quality} | 저장: {folder_text or '(기본 폴더)'}"
+            f"프롬프트: {prompt_file_text} | 다운로드: 영상 {download_quality}"
+            f"{' + 실패시 이미지 폴백' if bool(self.worker_asset_fallback_image_var.get()) else ''} | 저장: {folder_text or '(기본 폴더)'}"
         )
         self._refresh_worker_preview_progress()
         self._refresh_worker_quick_hud()
@@ -13269,6 +13365,7 @@ class FlowVisionApp:
         self.cfg["asset_prompt_file"] = prompt_file if use_prompt_file else ""
         self.cfg["asset_prompt_variant_count"] = str(self.worker_asset_count_var.get() or "x1").strip().lower() or "x1"
         self.cfg["download_video_quality"] = str(self.worker_asset_quality_var.get() or self.cfg.get("download_video_quality", "1080P")).strip().upper() or "1080P"
+        self.cfg["asset_combined_download_fallback_image"] = bool(self.worker_asset_fallback_image_var.get()) if hasattr(self, "worker_asset_fallback_image_var") else bool(self.cfg.get("asset_combined_download_fallback_image", False))
         self.cfg["download_output_dir"] = str(self.worker_asset_output_dir_var.get() or "").strip() if hasattr(self, "worker_asset_output_dir_var") else str(self.cfg.get("download_output_dir", "") or "").strip()
         self.cfg["asset_prompt_media_mode"] = "video"
         self.cfg["current_media_state"] = "video"
@@ -18810,18 +18907,18 @@ class FlowVisionApp:
                 self._set_worker_queue_item_state(self.index, "downloading", f"{download_tag} 다운로드 중")
                 self.update_status_label(f"⬇️ 다운로드 중... {download_tag}", self.color_info)
                 download_wait_sec = int(self.cfg.get("download_wait_seconds", 60) or 60)
-                download_result = self._run_single_download_flow(
+                download_result, actual_download_mode, actual_download_quality = self._run_combined_download_with_optional_fallback(
                     mode=combined_mode,
                     tag=download_tag,
-                    quality=combined_quality,
-                    dry_run=False,
                     wait_sec=download_wait_sec,
                 )
-                self._apply_download_used_selectors(combined_mode, download_result.get("used", {}))
                 self.save_config()
                 saved_name = str(download_result.get("file") or "").strip()
                 saved_path = str(download_result.get("path") or "").strip()
-                self.log(f"✅ 통합 작업 성공: {download_tag} -> {saved_name or '파일명 확인 필요'}")
+                success_tail = f"{saved_name or '파일명 확인 필요'}"
+                if actual_download_mode != combined_mode:
+                    success_tail += f" ({actual_download_mode}/{actual_download_quality} 폴백)"
+                self.log(f"✅ 통합 작업 성공: {download_tag} -> {success_tail}")
                 self.update_status_label(f"✅ 다운로드 성공: {download_tag}", self.color_success)
                 self.play_sound("success")
                 self._finish_combined_worker_item(
