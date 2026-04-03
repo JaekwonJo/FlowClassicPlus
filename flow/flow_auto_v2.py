@@ -11938,7 +11938,12 @@ class FlowVisionApp:
 
         action_row = tk.Frame(self.prompt_worker_simple, bg=self.color_card)
         action_row.pack(fill="x", pady=(2, 8))
-        ttk.Button(action_row, text="■ 중지", command=self.on_stop).pack(side="left")
+        self.btn_worker_prompt_stop = ttk.Button(action_row, text="⏹ 완전정지", command=self.on_stop, state="disabled")
+        self.btn_worker_prompt_stop.pack(side="left")
+        self.btn_worker_prompt_pause = ttk.Button(action_row, text="⏸ 일시정지", command=self.on_pause, state="disabled")
+        self.btn_worker_prompt_pause.pack(side="left", padx=(6, 0))
+        self.btn_worker_prompt_resume = ttk.Button(action_row, text="▶ 재개", command=self.on_resume, state="disabled")
+        self.btn_worker_prompt_resume.pack(side="left", padx=(6, 0))
         ttk.Button(action_row, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(8, 0))
         ttk.Button(action_row, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         ttk.Button(action_row, text="🤖 작업봇 창 열기", command=self._open_prompt_worker_bot_from_compact).pack(side="right")
@@ -12147,7 +12152,12 @@ class FlowVisionApp:
 
         asset_action_row = tk.Frame(self.asset_worker_simple, bg=self.color_card)
         asset_action_row.pack(fill="x", pady=(2, 8))
-        ttk.Button(asset_action_row, text="■ 중지", command=self.on_stop).pack(side="left")
+        self.btn_worker_asset_stop = ttk.Button(asset_action_row, text="⏹ 완전정지", command=self.on_stop, state="disabled")
+        self.btn_worker_asset_stop.pack(side="left")
+        self.btn_worker_asset_pause = ttk.Button(asset_action_row, text="⏸ 일시정지", command=self.on_pause, state="disabled")
+        self.btn_worker_asset_pause.pack(side="left", padx=(6, 0))
+        self.btn_worker_asset_resume = ttk.Button(asset_action_row, text="▶ 재개", command=self.on_resume, state="disabled")
+        self.btn_worker_asset_resume.pack(side="left", padx=(6, 0))
         ttk.Button(asset_action_row, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(8, 0))
         ttk.Button(asset_action_row, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         ttk.Button(asset_action_row, text="🤖 작업봇 창 열기", command=self._open_asset_worker_bot_from_compact).pack(side="right")
@@ -12315,7 +12325,12 @@ class FlowVisionApp:
 
         download_action_row = tk.Frame(self.download_worker_simple, bg=self.color_card)
         download_action_row.pack(fill="x", pady=(2, 8))
-        ttk.Button(download_action_row, text="■ 중지", command=self.on_stop).pack(side="left")
+        self.btn_worker_download_stop = ttk.Button(download_action_row, text="⏹ 완전정지", command=self.on_stop, state="disabled")
+        self.btn_worker_download_stop.pack(side="left")
+        self.btn_worker_download_pause = ttk.Button(download_action_row, text="⏸ 일시정지", command=self.on_pause, state="disabled")
+        self.btn_worker_download_pause.pack(side="left", padx=(6, 0))
+        self.btn_worker_download_resume = ttk.Button(download_action_row, text="▶ 재개", command=self.on_resume, state="disabled")
+        self.btn_worker_download_resume.pack(side="left", padx=(6, 0))
         ttk.Button(download_action_row, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(8, 0))
         ttk.Button(download_action_row, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         ttk.Button(download_action_row, text="🤖 작업봇 창 열기", command=self._open_download_worker_bot_from_compact).pack(side="right")
@@ -12408,6 +12423,38 @@ class FlowVisionApp:
         if hasattr(self, "lbl_worker_compact_name_badge"):
             self.lbl_worker_compact_name_badge.config(text=worker_display_name)
 
+    def _sync_worker_action_buttons(self):
+        running = bool(self.running)
+        paused = bool(self.paused)
+        start_state = "disabled" if (running or paused) else "normal"
+        pause_state = "normal" if running else "disabled"
+        resume_state = "normal" if paused else "disabled"
+        stop_state = "normal" if (running or paused or self.is_processing) else "disabled"
+        for btn_name in ("btn_worker_prompt_start", "btn_worker_asset_start", "btn_worker_download_start"):
+            if hasattr(self, btn_name):
+                try:
+                    getattr(self, btn_name).config(state=start_state)
+                except Exception:
+                    pass
+        for btn_name in ("btn_worker_prompt_pause", "btn_worker_asset_pause", "btn_worker_download_pause"):
+            if hasattr(self, btn_name):
+                try:
+                    getattr(self, btn_name).config(state=pause_state)
+                except Exception:
+                    pass
+        for btn_name in ("btn_worker_prompt_resume", "btn_worker_asset_resume", "btn_worker_download_resume"):
+            if hasattr(self, btn_name):
+                try:
+                    getattr(self, btn_name).config(state=resume_state)
+                except Exception:
+                    pass
+        for btn_name in ("btn_worker_prompt_stop", "btn_worker_asset_stop", "btn_worker_download_stop"):
+            if hasattr(self, btn_name):
+                try:
+                    getattr(self, btn_name).config(state=stop_state)
+                except Exception:
+                    pass
+
     def _build_worker_queue_panel(self, parent, kind):
         panel = tk.Frame(parent, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         panel.pack(fill="both", expand=True, pady=(6, 10))
@@ -12437,16 +12484,43 @@ class FlowVisionApp:
         scrolly = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
         inner = tk.Frame(canvas, bg=self.color_panel_soft)
         inner.bind("<Configure>", lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw")
+        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
         canvas.configure(yscrollcommand=scrolly.set)
         canvas.pack(side="left", fill="both", expand=True)
         scrolly.pack(side="right", fill="y")
+        canvas._scroll_canvas_target = canvas
+        inner._scroll_canvas_target = canvas
+        canvas.bind("<Configure>", lambda e, mode=kind: self._on_worker_queue_canvas_configure(mode))
 
         setattr(self, f"{kind}_worker_queue_status_label", status_lbl)
         setattr(self, f"{kind}_worker_queue_canvas", canvas)
         setattr(self, f"{kind}_worker_queue_inner", inner)
+        setattr(self, f"{kind}_worker_queue_window_id", window_id)
         setattr(self, f"{kind}_worker_queue_rows", [])
         setattr(self, f"{kind}_worker_queue_empty_label", None)
+
+    def _on_worker_queue_canvas_configure(self, kind):
+        canvas = getattr(self, f"{kind}_worker_queue_canvas", None)
+        window_id = getattr(self, f"{kind}_worker_queue_window_id", None)
+        if canvas is None or window_id is None:
+            return
+        try:
+            canvas.itemconfigure(window_id, width=max(1, int(canvas.winfo_width() or 1)))
+        except Exception:
+            pass
+        self.root.after_idle(self._refresh_worker_queue_panel)
+
+    def _worker_queue_column_count(self, kind):
+        canvas = getattr(self, f"{kind}_worker_queue_canvas", None)
+        try:
+            width = int(canvas.winfo_width() or 0) if canvas is not None else 0
+        except Exception:
+            width = 0
+        if width >= 1120:
+            return 3
+        if width >= 700:
+            return 2
+        return 1
 
     def _worker_queue_active_kind(self):
         if self.worker_mode in ("prompt", "asset"):
@@ -12494,7 +12568,6 @@ class FlowVisionApp:
 
     def _create_worker_queue_row(self, parent):
         row = tk.Frame(parent, bg="#1A2536", highlightbackground="#31455F", highlightthickness=1)
-        row.pack(fill="x", pady=2)
         top = tk.Frame(row, bg="#1A2536")
         top.pack(fill="x", padx=8, pady=(5, 2))
         title_label = tk.Label(
@@ -12505,6 +12578,7 @@ class FlowVisionApp:
             fg=self.color_text,
             anchor="w",
             justify="left",
+            wraplength=360,
         )
         title_label.pack(side="left", fill="x", expand=True)
         status_label = tk.Label(
@@ -12523,6 +12597,7 @@ class FlowVisionApp:
             fg=self.color_text_sec,
             anchor="w",
             justify="left",
+            wraplength=360,
         )
         detail_label.pack(fill="x", padx=8, pady=(0, 2))
         track = tk.Frame(row, bg="#0F1724", height=4)
@@ -12572,7 +12647,7 @@ class FlowVisionApp:
                     anchor="w",
                     justify="left",
                 )
-                empty_label.pack(fill="x", pady=6)
+                empty_label.grid(row=0, column=0, sticky="w", padx=4, pady=6)
                 setattr(self, f"{kind}_worker_queue_empty_label", empty_label)
             return
 
@@ -12588,16 +12663,36 @@ class FlowVisionApp:
             rows = [self._create_worker_queue_row(inner) for _ in items]
             setattr(self, f"{kind}_worker_queue_rows", rows)
 
+        cols = self._worker_queue_column_count(kind)
+        canvas = getattr(self, f"{kind}_worker_queue_canvas", None)
+        try:
+            canvas_width = int(canvas.winfo_width() or 0) if canvas is not None else 0
+        except Exception:
+            canvas_width = 0
+        usable_width = max(280, canvas_width - 28)
+        card_width = max(220, int(usable_width / max(1, cols)) - 10)
+        text_wrap = max(150, card_width - 84)
+        for col_idx in range(3):
+            inner.grid_columnconfigure(col_idx, weight=1 if col_idx < cols else 0, uniform=f"{kind}_worker_queue_col")
+
         for row_info, item in zip(rows, items):
             status_text, fg_color, row_bg, bar_color, pct = self._worker_queue_status_meta(item.get("status"))
             row_info["row"].config(bg=row_bg)
             row_info["top"].config(bg=row_bg)
-            row_info["title"].config(text=self._worker_queue_item_title(item), bg=row_bg)
+            row_info["title"].config(text=self._worker_queue_item_title(item), bg=row_bg, wraplength=text_wrap)
             row_info["status"].config(text=status_text, bg=row_bg, fg=fg_color)
             detail = str(item.get("detail", "") or "").strip()
-            row_info["detail"].config(text=detail[:120], bg=row_bg)
+            row_info["detail"].config(text=detail[:120], bg=row_bg, wraplength=text_wrap)
             row_info["fill"].config(bg=bar_color)
             row_info["fill"].place(relx=0.0, rely=0.0, relwidth=max(0.04, min(1.0, float(pct))), relheight=1.0)
+        for idx, row_info in enumerate(rows):
+            row_info["row"].grid(
+                row=idx // cols,
+                column=idx % cols,
+                sticky="nsew",
+                padx=4,
+                pady=4,
+            )
 
     def _reset_worker_queue_items(self):
         self.worker_queue_items = []
@@ -12699,7 +12794,10 @@ class FlowVisionApp:
     def _wait_before_combined_download(self, tag, wait_seconds):
         wait_seconds = max(1, int(wait_seconds or 1))
         for remain in range(wait_seconds, 0, -1):
-            if (not self.running) or self.paused:
+            while self.paused:
+                self.update_status_label(f"⏸ 일시정지 중... {tag}", self.color_info)
+                time.sleep(0.25)
+            if not self.running:
                 raise RuntimeError("사용자 중지로 통합 다운로드 대기가 취소되었습니다.")
             self._set_worker_queue_item_state(self.index, "waiting", f"{tag} 생성 대기 {remain}초")
             self.update_status_label(f"⏳ 생성 대기 후 다운로드... {tag} | {remain}초", self.color_info)
@@ -18015,6 +18113,7 @@ class FlowVisionApp:
         if hasattr(self, "btn_resume"):
             self.btn_resume.config(state="disabled")
         self.btn_stop.config(state="normal")
+        self._sync_worker_action_buttons()
         self.update_status_label("🚀 시작 중...", self.color_success)
         self.play_sound("start")
         if is_download_mode:
@@ -18087,6 +18186,7 @@ class FlowVisionApp:
         if hasattr(self, "btn_resume"):
             self.btn_resume.config(state="normal")
         self.btn_stop.config(state="normal")
+        self._sync_worker_action_buttons()
         self.update_status_label("⏸ 일시정지", self.color_info)
         self.log("⏸ 자동화 일시정지 (브라우저/탭 유지)")
 
@@ -18111,6 +18211,7 @@ class FlowVisionApp:
         self.pause_remaining = None
         if not self.is_processing:
             self.t_next = time.time() + wait_sec
+        self._sync_worker_action_buttons()
         self.update_status_label("▶ 재개됨", self.color_success)
         self.log(f"▶ 자동화 재개 (다음 작업까지 약 {wait_sec}초)")
 
@@ -18135,6 +18236,7 @@ class FlowVisionApp:
         self.relay_progress = 0
         self.scheduled_waiting = False
         self.scheduled_start_ts = None
+        self._sync_worker_action_buttons()
         if self.alert_window:
             self.alert_window.close()
             self.alert_window = None
@@ -18492,6 +18594,9 @@ class FlowVisionApp:
                 self.actor.take_bio_break(status_callback=lambda m: self.update_status_label(m, self.color_error))
                 self.actor.update_batch_size()
                 self.actor.processed_count = 0
+                self.t_next = time.time() + 1
+                self.update_status_label("☕ 휴식 종료, 다음 작업 재개 준비", self.color_success)
+                self.log("☕ 휴식 종료 후 다음 작업을 바로 이어서 준비합니다.")
                 self.is_processing = False
                 return
         except Exception as e:
