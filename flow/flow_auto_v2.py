@@ -596,6 +596,7 @@ class FlowVisionApp:
         self.download_session_log = []
         self.download_report_path = None
         self.completion_summary_path = None
+        self.completion_summary_output_copy_paths = []
         self.retry_error_log = []
         self.pending_periodic_refresh = None
         self.worker_queue_items = []
@@ -9458,6 +9459,9 @@ class FlowVisionApp:
                 lines.append(f"이어달리기 리포트: {payload.get('report_path')}")
             if getattr(self, "completion_summary_path", None):
                 lines.append(f"완료 요약: {self.completion_summary_path}")
+            copy_paths = list(getattr(self, "completion_summary_output_copy_paths", []) or [])
+            if copy_paths:
+                lines.append(f"저장 폴더 사본: {copy_paths[0]}")
             return "\n".join(lines)
         lines = [
             f"작업 종류: {payload.get('title', '자동화')}",
@@ -9506,6 +9510,9 @@ class FlowVisionApp:
             lines.append(f"리포트: {payload.get('report_path')}")
         if getattr(self, "completion_summary_path", None):
             lines.append(f"완료 요약: {self.completion_summary_path}")
+        copy_paths = list(getattr(self, "completion_summary_output_copy_paths", []) or [])
+        if copy_paths:
+            lines.append(f"저장 폴더 사본: {copy_paths[0]}")
         return "\n".join(lines)
 
     def _save_completion_summary(self, payload):
@@ -9514,10 +9521,45 @@ class FlowVisionApp:
         else:
             stamp_base = getattr(self, "session_start_time", datetime.now())
         stamp = stamp_base.strftime("%Y%m%d_%H%M%S") if hasattr(stamp_base, "strftime") else datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_name = f"completion_summary_{stamp}.txt"
         self.completion_summary_path = self.logs_dir / f"completion_summary_{stamp}.txt"
+        self.completion_summary_output_copy_paths = []
         text = self._format_completion_popup_text(payload)
         self.completion_summary_path.write_text(text, encoding="utf-8")
         self.log(f"🧾 완료 요약 저장: {self.completion_summary_path.name}")
+        for out_dir in self._completion_summary_output_dirs(payload):
+            try:
+                copy_path = out_dir / file_name
+                copy_path.write_text(text, encoding="utf-8")
+                self.completion_summary_output_copy_paths.append(copy_path)
+                self.log(f"🧾 완료 요약 사본 저장: {copy_path}")
+            except Exception as e:
+                self.log(f"⚠️ 완료 요약 사본 저장 실패: {out_dir} | {e}")
+
+    def _completion_summary_output_dirs(self, payload):
+        dirs = []
+        seen = set()
+        candidates = []
+        direct = str(payload.get("output_dir", "") or "").strip()
+        if direct:
+            candidates.append(direct)
+        for item in payload.get("entries", []) or []:
+            item_dir = str(item.get("output_dir", "") or "").strip()
+            if item_dir:
+                candidates.append(item_dir)
+        for raw in candidates:
+            try:
+                path_obj = Path(raw).expanduser()
+                path_obj.mkdir(parents=True, exist_ok=True)
+                resolved_key = str(path_obj.resolve())
+                logs_key = str(self.logs_dir.resolve())
+                if resolved_key == logs_key or resolved_key in seen:
+                    continue
+                seen.add(resolved_key)
+                dirs.append(path_obj)
+            except Exception:
+                continue
+        return dirs
 
     def update_status_label(self, text, color):
         if color == "white": color = self.color_text
