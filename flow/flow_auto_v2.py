@@ -17036,32 +17036,59 @@ class FlowVisionApp:
             return submit_loc, "geometry"
         return None, None
 
-    def _confirm_submission_started(self, input_locator, before_text, timeout_sec=12, submit_locator=None):
+    def _capture_submit_state(self, submit_locator):
+        state = {
+            "visible": False,
+            "enabled": None,
+            "meta": "",
+        }
+        if submit_locator is None:
+            return state
+        try:
+            state["visible"] = bool(submit_locator.is_visible(timeout=250))
+        except Exception:
+            state["visible"] = False
+        try:
+            state["enabled"] = bool(submit_locator.is_enabled(timeout=250))
+        except Exception:
+            state["enabled"] = None
+        try:
+            state["meta"] = str(self._locator_meta_text(submit_locator) or "").strip().lower()
+        except Exception:
+            state["meta"] = ""
+        return state
+
+    def _confirm_submission_started(self, input_locator, before_text, timeout_sec=12, submit_locator=None, submit_before_state=None, indicator_before=False):
         """
         제출 직후 실제로 동작이 시작됐는지 검증.
         """
         end_ts = time.time() + max(2, timeout_sec)
         before_text = (before_text or "").strip()
         min_shrunk_len = max(2, int(len(before_text) * 0.25)) if before_text else 2
+        submit_before_state = dict(submit_before_state or {})
+        before_enabled = submit_before_state.get("enabled")
+        before_meta = str(submit_before_state.get("meta") or "").strip().lower()
+        indicator_before = bool(indicator_before)
         while time.time() < end_ts:
-            if self._is_generation_indicator_visible():
-                return True
+            current_submit_state = self._capture_submit_state(submit_locator) if submit_locator is not None else {}
+            current_meta = str(current_submit_state.get("meta") or "").strip().lower()
+            if submit_locator is not None:
+                if (before_enabled is True) and (current_submit_state.get("enabled") is False):
+                    return True, "submit_disabled"
+                if current_meta and current_meta != before_meta:
+                    if any(x in current_meta for x in ("중지", "취소", "stop", "cancel", "generating", "생성 중", "processing", "처리 중")):
+                        return True, "submit_changed"
+            if self._is_generation_indicator_visible() and (not indicator_before):
+                return True, "generation_indicator"
             current = self._read_input_text(input_locator)
             # 입력창이 비워졌거나 크게 변하면 제출 성공으로 판단
             if before_text and current != before_text:
                 if len(current) <= min_shrunk_len:
-                    return True
+                    return True, "input_cleared"
                 if len(current) < max(4, int(len(before_text) * 0.55)):
-                    return True
-            if submit_locator is not None:
-                try:
-                    if not submit_locator.is_enabled(timeout=250):
-                        if (not before_text) or (len(current) <= max(6, int(len(before_text) * 0.8))):
-                            return True
-                except Exception:
-                    pass
+                    return True, "input_shrunk"
             time.sleep(0.5)
-        return False
+        return False, "timeout"
 
     def _is_input_visible(self, input_selector):
         if not self.page:
@@ -18996,21 +19023,40 @@ class FlowVisionApp:
             attempt_notes = []
             self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 정책: 안전 단일 제출")
             submit_locator, submit_selector_hint = self._resolve_submit_locator_for_input(input_locator, timeout_ms=1200)
+            submit_before_state = self._capture_submit_state(submit_locator)
+            indicator_before = self._is_generation_indicator_visible()
 
             try:
                 input_locator.click(timeout=1200)
             except Exception:
                 pass
-            self.actor.random_action_delay("Enter 제출 전 딜레이", 0.2, 0.8)
-            self.page.keyboard.press("Enter")
-            self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 시도: Enter(단일 1회)")
-            submitted = self._confirm_submission_started(
-                input_locator,
-                before_submit_text,
-                timeout_sec=4,
-                submit_locator=submit_locator,
-            )
-            attempt_notes.append(f"Enter={'OK' if submitted else 'FAIL'}")
+            if has_inline_prompt_refs and submit_locator is not None:
+                self._action_log(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] 제출 시도: 버튼 클릭 우선 ({submit_selector_hint or 'geometry'})"
+                )
+                clicked = self._click_with_actor_fallback(submit_locator, "제출 버튼")
+                submitted, submit_reason = self._confirm_submission_started(
+                    input_locator,
+                    before_submit_text,
+                    timeout_sec=5,
+                    submit_locator=submit_locator,
+                    submit_before_state=submit_before_state,
+                    indicator_before=indicator_before,
+                ) if clicked else (False, "button_click_failed")
+                attempt_notes.append(f"Button={'OK' if submitted else 'FAIL'}({submit_reason})")
+            else:
+                self.actor.random_action_delay("Enter 제출 전 딜레이", 0.2, 0.8)
+                self.page.keyboard.press("Enter")
+                self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 시도: Enter(단일 1회)")
+                submitted, submit_reason = self._confirm_submission_started(
+                    input_locator,
+                    before_submit_text,
+                    timeout_sec=4,
+                    submit_locator=submit_locator,
+                    submit_before_state=submit_before_state,
+                    indicator_before=indicator_before,
+                )
+                attempt_notes.append(f"Enter={'OK' if submitted else 'FAIL'}({submit_reason})")
 
             if not submitted:
                 if submit_locator is not None:
@@ -19019,13 +19065,17 @@ class FlowVisionApp:
                     )
                     clicked = self._click_with_actor_fallback(submit_locator, "제출 버튼")
                     if clicked:
-                        submitted = self._confirm_submission_started(
+                        submitted, submit_reason = self._confirm_submission_started(
                             input_locator,
                             before_submit_text,
                             timeout_sec=8,
                             submit_locator=submit_locator,
+                            submit_before_state=submit_before_state,
+                            indicator_before=indicator_before,
                         )
-                    attempt_notes.append(f"Button={'OK' if submitted else 'FAIL'}")
+                    else:
+                        submit_reason = "button_click_failed"
+                    attempt_notes.append(f"Button={'OK' if submitted else 'FAIL'}({submit_reason})")
                 else:
                     attempt_notes.append("Button=SKIP")
 
