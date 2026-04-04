@@ -17021,23 +17021,45 @@ class FlowVisionApp:
                 continue
         return False
 
-    def _confirm_submission_started(self, input_locator, before_text, timeout_sec=12):
+    def _resolve_submit_locator_for_input(self, input_locator, timeout_ms=1200):
+        submit_candidates = self._submit_candidates()
+        submit_loc, submit_sel = self._resolve_best_locator(
+            submit_candidates,
+            near_locator=input_locator,
+            timeout_ms=timeout_ms,
+            prefer_enabled=False,
+        )
+        if submit_loc is not None:
+            return submit_loc, submit_sel or "selector"
+        submit_loc = self._resolve_submit_by_geometry(input_locator, timeout_ms=timeout_ms)
+        if submit_loc is not None:
+            return submit_loc, "geometry"
+        return None, None
+
+    def _confirm_submission_started(self, input_locator, before_text, timeout_sec=12, submit_locator=None):
         """
         제출 직후 실제로 동작이 시작됐는지 검증.
         """
         end_ts = time.time() + max(2, timeout_sec)
         before_text = (before_text or "").strip()
+        min_shrunk_len = max(2, int(len(before_text) * 0.25)) if before_text else 2
         while time.time() < end_ts:
             if self._is_generation_indicator_visible():
                 return True
             current = self._read_input_text(input_locator)
             # 입력창이 비워졌거나 크게 변하면 제출 성공으로 판단
             if before_text and current != before_text:
-                if len(current) <= max(2, int(len(before_text) * 0.4)):
+                if len(current) <= min_shrunk_len:
                     return True
-                # 완전히 같은 프롬프트가 아니면 일부 변형도 성공으로 인정
-                if current[:40] != before_text[:40]:
+                if len(current) < max(4, int(len(before_text) * 0.55)):
                     return True
+            if submit_locator is not None:
+                try:
+                    if not submit_locator.is_enabled(timeout=250):
+                        if (not before_text) or (len(current) <= max(6, int(len(before_text) * 0.8))):
+                            return True
+                except Exception:
+                    pass
             time.sleep(0.5)
         return False
 
@@ -18973,6 +18995,7 @@ class FlowVisionApp:
             submitted = False
             attempt_notes = []
             self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 정책: 안전 단일 제출")
+            submit_locator, submit_selector_hint = self._resolve_submit_locator_for_input(input_locator, timeout_ms=1200)
 
             try:
                 input_locator.click(timeout=1200)
@@ -18981,8 +19004,30 @@ class FlowVisionApp:
             self.actor.random_action_delay("Enter 제출 전 딜레이", 0.2, 0.8)
             self.page.keyboard.press("Enter")
             self._action_log(f"[{datetime.now().strftime('%H:%M:%S')}] 제출 시도: Enter(단일 1회)")
-            submitted = self._confirm_submission_started(input_locator, before_submit_text, timeout_sec=10)
+            submitted = self._confirm_submission_started(
+                input_locator,
+                before_submit_text,
+                timeout_sec=4,
+                submit_locator=submit_locator,
+            )
             attempt_notes.append(f"Enter={'OK' if submitted else 'FAIL'}")
+
+            if not submitted:
+                if submit_locator is not None:
+                    self._action_log(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] 제출 폴백 시도: 버튼 클릭 ({submit_selector_hint or 'geometry'})"
+                    )
+                    clicked = self._click_with_actor_fallback(submit_locator, "제출 버튼")
+                    if clicked:
+                        submitted = self._confirm_submission_started(
+                            input_locator,
+                            before_submit_text,
+                            timeout_sec=8,
+                            submit_locator=submit_locator,
+                        )
+                    attempt_notes.append(f"Button={'OK' if submitted else 'FAIL'}")
+                else:
+                    attempt_notes.append("Button=SKIP")
 
             if not submitted:
                 raise RuntimeError(f"제출 확인 실패(생성 시작 신호 없음): {', '.join(attempt_notes)}")
