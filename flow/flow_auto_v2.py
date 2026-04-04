@@ -15513,7 +15513,6 @@ class FlowVisionApp:
         iy = ib["y"]
         iw = ib["width"]
         ih = ib["height"]
-        input_cx = ix + iw / 2.0
         input_cy = iy + ih / 2.0
         input_right = ix + iw
 
@@ -15544,23 +15543,27 @@ class FlowVisionApp:
                 b = None
             if not b:
                 continue
-            if b["width"] < 18 or b["height"] < 18:
+            if b["width"] < 20 or b["height"] < 20:
                 continue
-
             cx = b["x"] + b["width"] / 2.0
             cy = b["y"] + b["height"] / 2.0
+            bw = float(b["width"])
+            bh = float(b["height"])
+            if bw > 84 or bh > 84:
+                continue
+            if cy < (iy - 36) or cy > (iy + ih + 36):
+                continue
+            if cx < (ix + iw * 0.82):
+                continue
+            if cx > (input_right + 110):
+                continue
             score = 0.0
 
-            # 입력창 행과 가까운 버튼(특히 우측)을 선호
-            score += abs(cy - input_cy) * 3.0
-            score += abs(cx - (input_right - 24.0)) * 1.5
-
-            # 입력창보다 너무 위쪽(상단바)은 강한 패널티
-            if cy < (iy - 180):
-                score += 3000.0
-            # 입력창 왼쪽에 있는 버튼(+) 등은 패널티
-            if cx < (ix + iw * 0.45):
-                score += 900.0
+            # 하단 입력창 오른쪽 화살표 근처만 강하게 선호
+            score += abs(cy - input_cy) * 6.0
+            score += abs(cx - (input_right + 26.0)) * 2.8
+            score += abs(bw - 46.0) * 1.2
+            score += abs(bh - 46.0) * 1.2
 
             try:
                 meta = cand.evaluate(
@@ -15569,10 +15572,12 @@ class FlowVisionApp:
             except Exception:
                 meta = ""
             if meta:
-                if any(x in meta for x in ("menu", "메뉴", "설정", "setting", "도움", "help", "프로젝트")):
-                    score += 1600.0
+                if any(x in meta for x in ("애셋", "에셋", "asset", "검색", "search", "오래된", "정렬", "업로드", "upload", "이미지", "영상", "video", "image", "nano", "banana", "crop", "x2", "x3", "x4", "모델", "model", "menu", "메뉴", "설정", "setting", "settings", "도움", "help", "프로젝트")):
+                    continue
                 if any(x in meta for x in ("생성", "generate", "send", "보내")):
                     score -= 350.0
+                if any(x in meta for x in ("arrow", "forward", "submit")):
+                    score -= 200.0
 
             if score < best_score:
                 best_score = score
@@ -17022,18 +17027,60 @@ class FlowVisionApp:
         return False
 
     def _resolve_submit_locator_for_input(self, input_locator, timeout_ms=1200):
+        input_box = None
+        try:
+            input_box = input_locator.bounding_box() if input_locator is not None else None
+        except Exception:
+            input_box = None
+
+        def _reject_submit_candidate(cand, _sel):
+            if input_box is None:
+                return False
+            try:
+                box = cand.bounding_box()
+            except Exception:
+                box = None
+            if not box:
+                return True
+            try:
+                ix = float(input_box["x"])
+                iy = float(input_box["y"])
+                iw = float(input_box["width"])
+                ih = float(input_box["height"])
+                bw = float(box["width"])
+                bh = float(box["height"])
+                cx = float(box["x"]) + float(box["width"]) / 2.0
+                cy = float(box["y"]) + float(box["height"]) / 2.0
+            except Exception:
+                return True
+            if bw < 20.0 or bh < 20.0:
+                return True
+            if bw > 84.0 or bh > 84.0:
+                return True
+            if cy < (iy - 36.0) or cy > (iy + ih + 36.0):
+                return True
+            if cx < (ix + iw * 0.82):
+                return True
+            if cx > (ix + iw + 110.0):
+                return True
+            meta = str(self._locator_meta_text(cand) or "").strip().lower()
+            if any(x in meta for x in ("애셋", "에셋", "asset", "검색", "search", "오래된", "정렬", "업로드", "upload", "이미지", "영상", "video", "image", "nano", "banana", "crop", "x2", "x3", "x4", "모델", "model", "menu", "메뉴", "설정", "setting", "settings", "도움", "help", "프로젝트")):
+                return True
+            return False
+
         submit_candidates = self._submit_candidates()
-        submit_loc, submit_sel = self._resolve_best_locator(
-            submit_candidates,
-            near_locator=input_locator,
-            timeout_ms=timeout_ms,
-            prefer_enabled=False,
-        )
+        submit_loc = self._resolve_submit_by_geometry(input_locator, timeout_ms=timeout_ms)
+        submit_sel = "geometry" if submit_loc is not None else None
+        if submit_loc is None:
+            submit_loc, submit_sel = self._resolve_best_locator(
+                submit_candidates,
+                near_locator=input_locator,
+                timeout_ms=timeout_ms,
+                prefer_enabled=False,
+                reject_fn=_reject_submit_candidate,
+            )
         if submit_loc is not None:
             return submit_loc, submit_sel or "selector"
-        submit_loc = self._resolve_submit_by_geometry(input_locator, timeout_ms=timeout_ms)
-        if submit_loc is not None:
-            return submit_loc, "geometry"
         return None, None
 
     def _capture_submit_state(self, submit_locator):
@@ -19025,6 +19072,18 @@ class FlowVisionApp:
             submit_locator, submit_selector_hint = self._resolve_submit_locator_for_input(input_locator, timeout_ms=1200)
             submit_before_state = self._capture_submit_state(submit_locator)
             indicator_before = self._is_generation_indicator_visible()
+            if submit_locator is not None:
+                try:
+                    submit_box = submit_locator.bounding_box()
+                except Exception:
+                    submit_box = None
+                submit_meta = str(self._locator_meta_text(submit_locator) or "").strip()
+                if submit_box:
+                    self._action_log(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] 제출 후보: {submit_selector_hint or '-'} "
+                        f"meta='{submit_meta[:80]}' box=({float(submit_box.get('x') or 0.0):.1f}, {float(submit_box.get('y') or 0.0):.1f}, "
+                        f"{float(submit_box.get('width') or 0.0):.1f}, {float(submit_box.get('height') or 0.0):.1f})"
+                    )
 
             try:
                 input_locator.click(timeout=1200)
