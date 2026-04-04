@@ -13805,6 +13805,8 @@ class FlowVisionApp:
     def _launch_worker_process(self, kind, worker_name, config_name, browser_profile_name, project_index=0, extra_cfg=None):
         meta = self._worker_mode_meta(kind)
         worker_name = str(worker_name or "").strip() or meta["default_name"]
+        worker_idx = self._extract_worker_index(worker_name, default=1)
+        runtime_slot_path = self._worker_slot_file(kind, worker_idx)
         config_name = sanitize_named_token(config_name or worker_name, fallback=meta["default_name"])
         browser_profile_name = self._sanitize_browser_profile_name(browser_profile_name or worker_name)
         config_path = self._named_config_path(config_name)
@@ -13879,9 +13881,24 @@ class FlowVisionApp:
             if creationflags:
                 popen_kwargs["creationflags"] = creationflags
         proc = subprocess.Popen(cmd, **popen_kwargs)
+        try:
+            runtime_payload = {
+                "pid": int(proc.pid),
+                "worker_mode": kind,
+                "worker_name": worker_name,
+                "registered_at": datetime.now().isoformat(),
+                "source": "launcher",
+            }
+            runtime_slot_path.write_text(json.dumps(runtime_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
         time.sleep(0.9)
         exit_code = proc.poll()
         if exit_code is not None:
+            try:
+                runtime_slot_path.unlink()
+            except Exception:
+                pass
             crash_hint = ""
             if crash_log.exists():
                 try:
