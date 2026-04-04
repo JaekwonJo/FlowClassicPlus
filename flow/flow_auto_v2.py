@@ -13894,9 +13894,17 @@ class FlowVisionApp:
         worker_cfg = load_config_from_file(config_path) if config_path.exists() else copy.deepcopy(self.cfg)
         # 프로젝트 목록은 메인 설정을 공용으로 쓰기 때문에, 오래된 워커 설정이 있어도
         # 최신 메인 프로젝트 목록으로 다시 맞춘 뒤 인덱스를 안전하게 보정한다.
-        main_profiles = copy.deepcopy(self.cfg.get("project_profiles", []) or [])
+        main_cfg_path = self.base / CONFIG_FILE
+        try:
+            latest_main_cfg = load_config_from_file(main_cfg_path)
+        except Exception:
+            latest_main_cfg = copy.deepcopy(self.cfg)
+        main_profiles = copy.deepcopy(latest_main_cfg.get("project_profiles", []) or [])
         if main_profiles:
             worker_cfg["project_profiles"] = main_profiles
+        latest_main_slots = copy.deepcopy(latest_main_cfg.get("prompt_slots", []) or [])
+        if latest_main_slots:
+            worker_cfg["prompt_slots"] = latest_main_slots
         worker_cfg["config_label"] = config_name
         worker_cfg["worker_mode"] = kind
         worker_cfg["worker_name"] = worker_name
