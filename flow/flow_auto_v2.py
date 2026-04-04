@@ -18665,9 +18665,35 @@ class FlowVisionApp:
 
     def _persist_ui_options(self):
         try:
+            self._persist_worker_compact_options()
+        except Exception:
+            pass
+        try:
             self.on_option_toggle()
         except Exception:
             pass
+
+    def _persist_worker_compact_options(self):
+        if self.worker_mode == "prompt":
+            self._apply_prompt_worker_compact_to_cfg(show_errors=False)
+            try:
+                self._sync_worker_shared_lists_to_main_config()
+            except Exception:
+                pass
+            return
+        if self.worker_mode == "asset":
+            self._apply_asset_worker_compact_to_cfg(show_errors=False)
+            try:
+                self._sync_worker_shared_lists_to_main_config()
+            except Exception:
+                pass
+            return
+        if self.worker_mode == "download":
+            self._apply_download_worker_compact_to_cfg(show_errors=False)
+            try:
+                self._sync_worker_shared_lists_to_main_config()
+            except Exception:
+                pass
 
     def _ask_close_action(self):
         result = {"action": "cancel"}
