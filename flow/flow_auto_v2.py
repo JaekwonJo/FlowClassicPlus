@@ -601,6 +601,7 @@ class FlowVisionApp:
         self.pending_periodic_refresh = None
         self.worker_queue_items = []
         self.worker_runtime_slot_path = None
+        self.worker_launch_registry = {}
         self.section_wrappers = {}
         self.section_open_setters = {}
         self.current_selection_summary = ""
@@ -1632,6 +1633,27 @@ class FlowVisionApp:
                 path.unlink()
             except Exception:
                 pass
+
+    def _cleanup_worker_launch_registry(self, kind=None):
+        registry = getattr(self, "worker_launch_registry", None)
+        if not isinstance(registry, dict):
+            self.worker_launch_registry = {}
+            registry = self.worker_launch_registry
+        kinds = [str(kind).strip().lower()] if kind else list(registry.keys())
+        for kind_key in kinds:
+            items = registry.get(kind_key, {}) or {}
+            cleaned = {}
+            for idx, proc in items.items():
+                try:
+                    alive = proc is not None and proc.poll() is None
+                except Exception:
+                    alive = False
+                if alive:
+                    cleaned[int(idx)] = proc
+            if cleaned:
+                registry[kind_key] = cleaned
+            elif kind_key in registry:
+                registry.pop(kind_key, None)
 
     def _register_worker_runtime_slot(self):
         if self.worker_mode not in ("prompt", "asset", "download"):
@@ -13835,9 +13857,25 @@ class FlowVisionApp:
         meta = self._worker_mode_meta(kind)
         default_name = str(meta.get("default_name", "워커1") or "워커1").strip()
         base_name = re.sub(r"\d+$", "", default_name).rstrip("_") or default_name
+        kind_key = str(kind or "").strip().lower()
+        self._cleanup_worker_launch_registry(kind_key)
         self._cleanup_worker_runtime_slots(kind)
+        used_indexes = set()
+        for idx in (self.worker_launch_registry.get(kind_key, {}) or {}).keys():
+            try:
+                used_indexes.add(max(1, int(idx)))
+            except Exception:
+                pass
+        for path in self._worker_runtime_dir().glob(f"{kind_key}_*.json"):
+            m = re.search(r"_(\d+)\.json$", path.name)
+            if not m:
+                continue
+            try:
+                used_indexes.add(max(1, int(m.group(1))))
+            except Exception:
+                pass
         next_idx = 1
-        while self._worker_slot_file(kind, next_idx).exists():
+        while next_idx in used_indexes:
             next_idx += 1
         return f"{base_name}{next_idx}"
 
@@ -13923,6 +13961,8 @@ class FlowVisionApp:
             if creationflags:
                 popen_kwargs["creationflags"] = creationflags
         proc = subprocess.Popen(cmd, **popen_kwargs)
+        kind_key = str(kind or "").strip().lower()
+        self.worker_launch_registry.setdefault(kind_key, {})[worker_idx] = proc
         try:
             runtime_payload = {
                 "pid": int(proc.pid),
@@ -13937,6 +13977,7 @@ class FlowVisionApp:
         time.sleep(0.9)
         exit_code = proc.poll()
         if exit_code is not None:
+            self._cleanup_worker_launch_registry(kind_key)
             try:
                 runtime_slot_path.unlink()
             except Exception:
