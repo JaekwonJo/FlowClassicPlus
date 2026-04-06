@@ -161,6 +161,7 @@ DEFAULT_CONFIG = {
     "asset_use_prompt_slot": False,
     "asset_prompt_slot": 0,
     "asset_prompt_file": "",
+    "asset_search_sort_order": "oldest",
     "download_number_mode_enabled": False,
     "asset_manual_selection": "",
     "asset_start_selector": "",
@@ -584,6 +585,7 @@ class FlowVisionApp:
         self.enter_only_submit = True
         self.asset_loop_items = []
         self.asset_video_ready_for_run = False
+        self.asset_search_sort_applied_order = ""
         self.current_run_mode = None
         self.tray_icon = None
         self.tray_thread = None
@@ -7204,6 +7206,7 @@ class FlowVisionApp:
         if not self.page or self.page.is_closed():
             return
         self.asset_video_ready_for_run = False
+        self.asset_search_sort_applied_order = ""
         self.current_media_state = None
         self.cfg["current_media_state"] = ""
         try:
@@ -7251,6 +7254,7 @@ class FlowVisionApp:
         # 2-0) 에셋 검색 버튼 없이 바로 검색 입력칸이 열리는 UI 대응
         direct_input, direct_sel = self._resolve_asset_search_input_locator(timeout_sec=1.6)
         if direct_input is not None:
+            direct_input = self._ensure_asset_search_sort_preference(search_input=direct_input)
             try:
                 direct_input.click(timeout=1200)
             except Exception:
@@ -7308,6 +7312,7 @@ class FlowVisionApp:
         if search_input is None:
             focus_input, _focus_sel = self._resolve_focused_asset_search_input()
             if focus_input is not None:
+                focus_input = self._ensure_asset_search_sort_preference(search_input=focus_input)
                 try:
                     focus_input.click(timeout=1200)
                 except Exception:
@@ -7339,6 +7344,7 @@ class FlowVisionApp:
                 return
             raise RuntimeError(f"Step2 실패: 에셋 검색 입력창을 찾지 못했습니다. (dom={reason_dom})")
 
+        search_input = self._ensure_asset_search_sort_preference(search_input=search_input)
         try:
             search_input.click(timeout=1500)
         except Exception:
@@ -7920,9 +7926,25 @@ class FlowVisionApp:
             time.sleep(0.10)
         return None, None
 
-    def _resolve_prompt_reference_oldest_option(self, timeout_sec=1.6):
+    def _normalize_asset_search_sort_order(self, value, default="oldest"):
+        raw = str(value or "").strip().lower()
+        if raw in ("latest", "newest", "recent", "최신", "최신순", "최신 순"):
+            return "latest"
+        if raw in ("oldest", "old", "오래된", "오래된순", "오래된 순"):
+            return "oldest"
+        return "latest" if default == "latest" else "oldest"
+
+    def _asset_search_sort_order_label(self, order):
+        return "최신 순" if self._normalize_asset_search_sort_order(order) == "latest" else "오래된 순"
+
+    def _asset_search_sort_menu_label(self, order):
+        return "최신순" if self._normalize_asset_search_sort_order(order) == "latest" else "오래된 순"
+
+    def _resolve_prompt_reference_sort_option(self, order="oldest", timeout_sec=1.6):
         if not self.page:
             return None, None
+        order = self._normalize_asset_search_sort_order(order)
+        labels = ("최신순", "최신 순") if order == "latest" else ("오래된 순",)
         end_ts = time.time() + max(1.0, timeout_sec)
         while time.time() < end_ts:
             for sel in (
@@ -7948,51 +7970,54 @@ class FlowVisionApp:
                     if not box:
                         continue
                     meta = self._locator_meta_text(cand)
-                    if "오래된 순" not in meta:
+                    if not any(label in meta for label in labels):
                         continue
                     return cand, self._locator_selector_hint(cand) or sel
             time.sleep(0.10)
         return None, None
 
-    def _set_prompt_reference_sort_oldest(self, search_input=None):
+    def _set_prompt_reference_sort_preference(self, search_input=None, order="oldest", log_prefix="레퍼런스"):
         if not self.page:
-            return search_input
+            return search_input, False
+        order = self._normalize_asset_search_sort_order(order)
+        order_label = self._asset_search_sort_order_label(order)
+        menu_label = self._asset_search_sort_menu_label(order)
         sort_button, sort_sel = self._resolve_prompt_reference_sort_button(search_input=search_input, timeout_sec=1.5)
         if sort_button is None:
-            self.log("⚠️ 레퍼런스 정렬 버튼을 찾지 못해 기본 정렬로 계속합니다.")
-            return search_input
+            self.log(f"⚠️ {log_prefix} 정렬 버튼을 찾지 못해 기본 정렬로 계속합니다.")
+            return search_input, False
         try:
             sort_meta = self._locator_meta_text(sort_button)
         except Exception:
             sort_meta = ""
-        if "오래된 순" in sort_meta:
+        if menu_label in sort_meta or (order == "latest" and "최신 순" in sort_meta):
             if search_input is not None:
                 try:
                     search_input.click(timeout=600)
                 except Exception:
                     pass
-            self.log("↕️ 레퍼런스 정렬 상태 확인: 이미 오래된 순")
-            return search_input
+            self.log(f"↕️ {log_prefix} 정렬 상태 확인: 이미 {order_label}")
+            return search_input, True
         try:
             sort_button.click(timeout=1200)
         except Exception:
-            if not self._click_with_actor_fallback(sort_button, "레퍼런스 정렬 버튼"):
-                self.log("⚠️ 레퍼런스 정렬 버튼 클릭에 실패해 기본 정렬로 계속합니다.")
-                return search_input
-        self.log(f"↕️ 레퍼런스 정렬 버튼 클릭: {sort_sel or '자동 탐색'}")
-        self.actor.random_action_delay("레퍼런스 정렬 메뉴 표시 대기", 0.08, 0.18)
-        oldest_button, oldest_sel = self._resolve_prompt_reference_oldest_option(timeout_sec=1.4)
-        if oldest_button is None:
-            self.log("⚠️ `오래된 순` 항목을 찾지 못해 기본 정렬로 계속합니다.")
-            return search_input
+            if not self._click_with_actor_fallback(sort_button, f"{log_prefix} 정렬 버튼"):
+                self.log(f"⚠️ {log_prefix} 정렬 버튼 클릭에 실패해 기본 정렬로 계속합니다.")
+                return search_input, False
+        self.log(f"↕️ {log_prefix} 정렬 버튼 클릭: {sort_sel or '자동 탐색'}")
+        self.actor.random_action_delay(f"{log_prefix} 정렬 메뉴 표시 대기", 0.08, 0.18)
+        order_button, order_sel = self._resolve_prompt_reference_sort_option(order=order, timeout_sec=1.4)
+        if order_button is None:
+            self.log(f"⚠️ `{order_label}` 항목을 찾지 못해 기본 정렬로 계속합니다.")
+            return search_input, False
         try:
-            oldest_button.click(timeout=1200)
+            order_button.click(timeout=1200)
         except Exception:
-            if not self._click_with_actor_fallback(oldest_button, "레퍼런스 오래된 순"):
-                self.log("⚠️ `오래된 순` 클릭에 실패해 기본 정렬로 계속합니다.")
-                return search_input
-        self.log(f"↕️ 레퍼런스 정렬 선택: 오래된 순 ({oldest_sel or '자동 탐색'})")
-        self.actor.random_action_delay("레퍼런스 정렬 반영 대기", 0.10, 0.22)
+            if not self._click_with_actor_fallback(order_button, f"{log_prefix} {order_label}"):
+                self.log(f"⚠️ `{order_label}` 클릭에 실패해 기본 정렬로 계속합니다.")
+                return search_input, False
+        self.log(f"↕️ {log_prefix} 정렬 선택: {order_label} ({order_sel or '자동 탐색'})")
+        self.actor.random_action_delay(f"{log_prefix} 정렬 반영 대기", 0.10, 0.22)
         if search_input is not None:
             try:
                 existing_box = search_input.bounding_box()
@@ -8003,16 +8028,37 @@ class FlowVisionApp:
                     search_input.click(timeout=1200)
                 except Exception:
                     pass
-                self.log("🔎 레퍼런스 검색창 재확인: 기존 검색창 유지")
-                return search_input
+                self.log(f"🔎 {log_prefix} 검색창 재확인: 기존 검색창 유지")
+                return search_input, True
         refreshed_input, refreshed_sel = self._resolve_prompt_reference_search_overlay_input(timeout_sec=1.2)
         if refreshed_input is not None:
             try:
                 refreshed_input.click(timeout=1200)
             except Exception:
                 pass
-            self.log(f"🔎 레퍼런스 검색창 재확인: {refreshed_sel or '자동 탐색'}")
-            return refreshed_input
+            self.log(f"🔎 {log_prefix} 검색창 재확인: {refreshed_sel or '자동 탐색'}")
+            return refreshed_input, True
+        return search_input, True
+
+    def _set_prompt_reference_sort_oldest(self, search_input=None):
+        search_input, _applied = self._set_prompt_reference_sort_preference(
+            search_input=search_input,
+            order="oldest",
+            log_prefix="레퍼런스",
+        )
+        return search_input
+
+    def _ensure_asset_search_sort_preference(self, search_input=None):
+        desired_order = self._normalize_asset_search_sort_order(self.cfg.get("asset_search_sort_order", "oldest"))
+        if self.asset_search_sort_applied_order == desired_order:
+            return search_input
+        search_input, applied = self._set_prompt_reference_sort_preference(
+            search_input=search_input,
+            order=desired_order,
+            log_prefix="S에셋",
+        )
+        if applied:
+            self.asset_search_sort_applied_order = desired_order
         return search_input
 
     def _click_prompt_reference_first_result(self, search_input=None, asset_tag="", timeout_sec=3):
@@ -12073,6 +12119,7 @@ class FlowVisionApp:
         self.worker_asset_download_wait_var = tk.StringVar(value=str(asset_download_wait))
         self.worker_asset_next_interval_var = tk.StringVar(value=str(asset_next_wait))
         self.worker_asset_fallback_image_var = tk.BooleanVar(value=bool(self.cfg.get("asset_combined_download_fallback_image", False)))
+        self.worker_asset_sort_order_var = tk.StringVar(value=self._asset_search_sort_order_label(self.cfg.get("asset_search_sort_order", "oldest")))
         self.worker_asset_number_mode_var = tk.StringVar(value=asset_defaults["mode"])
         self.worker_asset_range_start_var = tk.StringVar(value=asset_defaults["start"])
         self.worker_asset_range_end_var = tk.StringVar(value=asset_defaults["end"])
@@ -12232,6 +12279,16 @@ class FlowVisionApp:
             insertbackground=self.color_input_fg,
             font=self.font_mono_small,
         ).grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(8, 0), ipady=2)
+        tk.Label(asset_extra_wrap, text="에셋 정렬 순서", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self.combo_worker_asset_sort_order = ttk.Combobox(
+            asset_extra_wrap,
+            textvariable=self.worker_asset_sort_order_var,
+            state="readonly",
+            values=("오래된 순", "최신 순"),
+            font=self.font_body,
+            width=12,
+        )
+        self.combo_worker_asset_sort_order.grid(row=2, column=1, sticky="w", padx=(6, 14), pady=(8, 0))
         tk.Checkbutton(
             asset_extra_wrap,
             text="실패 시 이미지 다운로드하기",
@@ -12242,7 +12299,7 @@ class FlowVisionApp:
             activeforeground=self.color_text,
             selectcolor=self.color_panel_soft,
             font=self.font_small,
-        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        ).grid(row=3, column=0, columnspan=4, sticky="w", pady=(10, 0))
 
         asset_summary_box = tk.Frame(self.asset_worker_simple, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         self.asset_worker_summary_box = asset_summary_box
@@ -12481,6 +12538,7 @@ class FlowVisionApp:
             self.worker_asset_output_dir_var,
             self.worker_asset_download_wait_var,
             self.worker_asset_next_interval_var,
+            self.worker_asset_sort_order_var,
             self.worker_asset_number_mode_var,
             self.worker_asset_range_start_var,
             self.worker_asset_range_end_var,
@@ -13346,7 +13404,7 @@ class FlowVisionApp:
         self.worker_asset_summary_var.set(
             f"프로젝트: {self.worker_asset_project_var.get().strip() or '-'} | 생성: {self.worker_asset_count_var.get().strip() or 'x1'} | 대상: {target} | "
             f"생성대기: {self.worker_asset_download_wait_var.get().strip() or '-'}초+랜덤 | 다음대기: {self.worker_asset_next_interval_var.get().strip() or '-'}초±랜덤 | "
-            f"프롬프트: {prompt_file_text} | 다운로드: 영상 {download_quality}"
+            f"정렬: {self.worker_asset_sort_order_var.get().strip() or '오래된 순'} | 프롬프트: {prompt_file_text} | 다운로드: 영상 {download_quality}"
             f"{' + 실패시 이미지 폴백' if bool(self.worker_asset_fallback_image_var.get()) else ''} | 저장: {folder_text or '(기본 폴더)'}"
         )
         self._refresh_worker_preview_progress()
@@ -13430,6 +13488,9 @@ class FlowVisionApp:
         self.cfg["asset_prompt_variant_count"] = str(self.worker_asset_count_var.get() or "x1").strip().lower() or "x1"
         self.cfg["download_video_quality"] = str(self.worker_asset_quality_var.get() or self.cfg.get("download_video_quality", "1080P")).strip().upper() or "1080P"
         self.cfg["asset_combined_download_fallback_image"] = bool(self.worker_asset_fallback_image_var.get()) if hasattr(self, "worker_asset_fallback_image_var") else bool(self.cfg.get("asset_combined_download_fallback_image", False))
+        self.cfg["asset_search_sort_order"] = self._normalize_asset_search_sort_order(
+            self.worker_asset_sort_order_var.get() if hasattr(self, "worker_asset_sort_order_var") else self.cfg.get("asset_search_sort_order", "oldest")
+        )
         self.cfg["download_output_dir"] = str(self.worker_asset_output_dir_var.get() or "").strip() if hasattr(self, "worker_asset_output_dir_var") else str(self.cfg.get("download_output_dir", "") or "").strip()
         self.cfg["asset_prompt_media_mode"] = "video"
         self.cfg["current_media_state"] = "video"
@@ -18203,6 +18264,7 @@ class FlowVisionApp:
     def _set_run_mode(self, mode):
         self.current_run_mode = mode
         self.asset_video_ready_for_run = False
+        self.asset_search_sort_applied_order = ""
         if mode in ("prompt", "asset"):
             use_asset = (mode == "asset")
             self.cfg["asset_loop_enabled"] = use_asset
