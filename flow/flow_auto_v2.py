@@ -8141,13 +8141,27 @@ class FlowVisionApp:
         desired_order = self._normalize_asset_search_sort_order(self.cfg.get("asset_search_sort_order", "oldest"))
         if self.asset_search_sort_applied_order == desired_order:
             return search_input
-        search_input, applied = self._set_prompt_reference_sort_preference(
-            search_input=search_input,
-            order=desired_order,
-            log_prefix="S에셋",
-        )
-        if applied:
-            self.asset_search_sort_applied_order = desired_order
+        for attempt in range(2):
+            if search_input is not None:
+                try:
+                    search_input.click(timeout=1200)
+                except Exception:
+                    pass
+                self.actor.random_action_delay(
+                    "S에셋 검색창 활성화 대기" if attempt == 0 else "S에셋 검색창 재활성화 대기",
+                    0.08,
+                    0.18,
+                )
+            search_input, applied = self._set_prompt_reference_sort_preference(
+                search_input=search_input,
+                order=desired_order,
+                log_prefix="S에셋",
+            )
+            if applied:
+                self.asset_search_sort_applied_order = desired_order
+                break
+            if attempt == 0:
+                self.log("🔁 S에셋 정렬 재시도: 검색창을 다시 활성화한 뒤 한 번 더 확인합니다.")
         return search_input
 
     def _click_prompt_reference_first_result(self, search_input=None, asset_tag="", timeout_sec=3):
