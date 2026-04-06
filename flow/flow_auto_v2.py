@@ -7935,20 +7935,43 @@ class FlowVisionApp:
                             best_score = score
             if best is not None and best_score > -300.0:
                 return best, best_sel or ""
-            text_loc, text_sel = self._resolve_text_locator_any_frame(["최신순", "최신 순", "오래된 순", "최근 사용", "가장 많이 사용"], timeout_ms=350)
-            if text_loc is not None:
-                try:
-                    text_box = text_loc.bounding_box()
-                except Exception:
-                    text_box = None
-                if text_box and search_box:
+            text_best = None
+            text_best_sel = None
+            text_best_score = float("-inf")
+            for txt in ("최신순", "최신 순", "오래된 순", "최근 사용", "가장 많이 사용"):
+                for fr in frames:
                     try:
-                        if float(text_box["x"]) >= float(search_box["x"]) + float(search_box["width"]) - 30.0 and abs(float(text_box["y"]) - float(search_box["y"])) <= 90.0:
-                            return text_loc, text_sel or "text-fallback"
+                        loc = fr.get_by_text(txt, exact=False)
+                        total = min(loc.count(), 30)
                     except Exception:
-                        pass
-                elif text_box:
-                    return text_loc, text_sel or "text-fallback"
+                        continue
+                    for idx in range(total):
+                        cand = loc.nth(idx)
+                        try:
+                            if not cand.is_visible(timeout=250):
+                                continue
+                            text_box = cand.bounding_box()
+                        except Exception:
+                            continue
+                        if not text_box:
+                            continue
+                        score = 120.0
+                        if search_box:
+                            try:
+                                score -= abs(float(text_box["y"]) - float(search_box["y"])) * 1.0
+                                score -= abs(float(text_box["x"]) - (float(search_box["x"]) + float(search_box["width"]) + 24.0)) * 0.15
+                                if float(text_box["x"]) < float(search_box["x"]) + float(search_box["width"]) - 20.0:
+                                    score -= 500.0
+                                if abs(float(text_box["y"]) - float(search_box["y"])) > 90.0:
+                                    score -= 220.0
+                            except Exception:
+                                pass
+                        if score > text_best_score:
+                            text_best = cand
+                            text_best_sel = f"text:{txt}"
+                            text_best_score = score
+            if text_best is not None and text_best_score > -220.0:
+                return text_best, text_best_sel or "text-fallback"
             time.sleep(0.10)
         return None, None
 
