@@ -7948,6 +7948,7 @@ class FlowVisionApp:
         end_ts = time.time() + max(1.0, timeout_sec)
         while time.time() < end_ts:
             matches = []
+            oldest_matches = []
             for sel in (
                 "button",
                 "[role='button']",
@@ -7971,17 +7972,18 @@ class FlowVisionApp:
                     if not box:
                         continue
                     meta = self._locator_meta_text(cand)
+                    item = {
+                        "locator": cand,
+                        "selector": self._locator_selector_hint(cand) or sel,
+                        "meta": meta,
+                        "box": box,
+                        "sel": sel,
+                    }
+                    if "오래된 순" in meta:
+                        oldest_matches.append(item)
                     if not any(label in meta for label in labels):
                         continue
-                    matches.append(
-                        {
-                            "locator": cand,
-                            "selector": self._locator_selector_hint(cand) or sel,
-                            "meta": meta,
-                            "box": box,
-                            "sel": sel,
-                        }
-                    )
+                    matches.append(item)
             if matches:
                 if order == "latest":
                     anchor_y = None
@@ -8003,6 +8005,23 @@ class FlowVisionApp:
                             continue
                         preferred.append(item)
                     target_pool = preferred or matches
+                    oldest_y = None
+                    if oldest_matches:
+                        try:
+                            oldest_y = min(float((item.get("box") or {}).get("y") or 0.0) for item in oldest_matches)
+                        except Exception:
+                            oldest_y = None
+                    if oldest_y is not None:
+                        above_oldest = []
+                        for item in target_pool:
+                            try:
+                                item_y = float((item.get("box") or {}).get("y") or 0.0)
+                            except Exception:
+                                item_y = 0.0
+                            if item_y < oldest_y:
+                                above_oldest.append(item)
+                        if above_oldest:
+                            target_pool = above_oldest
                     best = max(
                         target_pool,
                         key=lambda item: (
