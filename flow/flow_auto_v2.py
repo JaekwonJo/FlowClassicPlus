@@ -12771,6 +12771,12 @@ class FlowVisionApp:
             fg=self.color_text_sec,
         )
         status_lbl.pack(side="right", padx=(8, 0))
+        ttk.Button(
+            head,
+            text="실패 번호 복붙",
+            command=lambda mode=kind: self._copy_worker_queue_failed_tags(mode),
+            style="ControlCompact.TButton",
+        ).pack(side="right", padx=(0, 8))
         ttk.Button(head, text="지우기", command=self._reset_worker_queue_items, style="ControlCompact.TButton").pack(side="right")
 
         list_frame = tk.Frame(panel, bg=self.color_panel_soft)
@@ -12811,9 +12817,9 @@ class FlowVisionApp:
             width = int(canvas.winfo_width() or 0) if canvas is not None else 0
         except Exception:
             width = 0
-        if width >= 1120:
+        if width >= 860:
             return 3
-        if width >= 700:
+        if width >= 560:
             return 2
         return 1
 
@@ -12992,6 +12998,45 @@ class FlowVisionApp:
     def _reset_worker_queue_items(self):
         self.worker_queue_items = []
         self.root.after(0, self._refresh_worker_queue_panel)
+
+    def _copy_worker_queue_failed_tags(self, kind=""):
+        mode = str(kind or self._worker_queue_active_kind() or "").strip().lower()
+        if mode not in ("prompt", "asset"):
+            return
+        failed_tags = []
+        seen = set()
+        for item in list(getattr(self, "worker_queue_items", []) or []):
+            status = str(item.get("status", "") or "").strip().lower()
+            if status != "failed":
+                continue
+            token = str(item.get("token", "") or "").strip()
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            failed_tags.append(token)
+        if not failed_tags:
+            try:
+                messagebox.showinfo("안내", "현재 대기열에 실패 항목이 없습니다.", parent=self.root)
+            except Exception:
+                pass
+            return
+        prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() if mode in {"prompt", "asset"} else ""
+        compact = self._compact_failed_tags_text(
+            failed_tags,
+            prefix=prefix,
+            pad_width=self._asset_pad_width(),
+        )
+        if not compact:
+            compact = ",".join(failed_tags)
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(compact)
+            self.root.update_idletasks()
+        except Exception as e:
+            messagebox.showerror("복사 실패", f"클립보드 복사 중 오류가 발생했습니다.\n{e}", parent=self.root)
+            return
+        self.log(f"📋 실패 번호 복사: {compact}")
+        self.update_status_label("📋 실패 번호 복사 완료", self.color_success)
 
     def _build_worker_queue_items(self, mode):
         mode = str(mode or "").strip().lower()
