@@ -12996,8 +12996,43 @@ class FlowVisionApp:
             )
 
     def _reset_worker_queue_items(self):
+        if self.running or self.paused or self.is_processing:
+            try:
+                messagebox.showinfo("안내", "작업 중에는 대기열을 초기화할 수 없습니다.", parent=self.root)
+            except Exception:
+                pass
+            return
         self.worker_queue_items = []
+        self._reset_completed_worker_session_state()
         self.root.after(0, self._refresh_worker_queue_panel)
+
+    def _reset_completed_worker_session_state(self):
+        self.index = 0
+        self.download_index = 0
+        self.relay_progress = 0
+        self.prompt_run_numbers = None
+        self.asset_loop_items = []
+        self.prompts = []
+        self.download_items = []
+        self.session_log = []
+        self.retry_error_log = []
+        self.download_session_log = []
+        self.current_run_mode = None
+        self.current_selection_summary = ""
+        self.current_selection_input = ""
+        self.current_expected_mode = None
+        self.current_expected_items = []
+        self.session_report_path = None
+        self.download_report_path = None
+        self.completion_summary_path = None
+        self.pending_periodic_refresh = None
+        try:
+            self.actor.processed_count = 0
+            self.actor.current_batch_size = 0
+        except Exception:
+            pass
+        self._update_progress_ui()
+        self.update_status_label("준비 완료", self.color_success)
 
     def _copy_worker_queue_failed_tags(self, kind=""):
         mode = str(kind or self._worker_queue_active_kind() or "").strip().lower()
