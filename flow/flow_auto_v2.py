@@ -2863,6 +2863,7 @@ class FlowVisionApp:
         self.cfg["project_profiles"] = profiles
         self._refresh_worker_project_controls(len(profiles) - 1)
         self._sync_worker_shared_lists_to_main_config()
+        self._save_active_worker_compact_options(manual=False, silent=True)
         self.log(f"📁 워커 프로젝트 추가: {name}")
 
     def _worker_rename_project_profile(self):
@@ -2879,6 +2880,7 @@ class FlowVisionApp:
         self.cfg["project_profiles"] = profiles
         self._refresh_worker_project_controls(active)
         self._sync_worker_shared_lists_to_main_config()
+        self._save_active_worker_compact_options(manual=False, silent=True)
         self.log(f"✏️ 워커 프로젝트 이름 변경: {current_name} -> {new_name}")
 
     def _worker_edit_project_profile_url(self):
@@ -2893,6 +2895,7 @@ class FlowVisionApp:
         self.cfg["project_profiles"] = profiles
         self._refresh_worker_project_controls(active)
         self._sync_worker_shared_lists_to_main_config()
+        self._save_active_worker_compact_options(manual=False, silent=True)
         self.log(f"🔗 워커 프로젝트 URL 변경: {current_name}")
 
     def _worker_delete_project_profile(self):
@@ -2908,6 +2911,7 @@ class FlowVisionApp:
         self.cfg["project_profiles"] = profiles
         self._refresh_worker_project_controls(max(0, active - 1))
         self._sync_worker_shared_lists_to_main_config()
+        self._save_active_worker_compact_options(manual=False, silent=True)
         self.log(f"🗑 워커 프로젝트 삭제: {current_name}")
 
     def _ask_worker_project_url(self, title, prompt, initialvalue=""):
@@ -12058,6 +12062,7 @@ class FlowVisionApp:
         self.combo_worker_project = ttk.Combobox(basic_box, textvariable=self.worker_project_var, state="readonly", values=project_values, font=self.font_body)
         self.combo_worker_project.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(0, 8))
         self.combo_worker_project.bind("<Double-Button-1>", lambda _e: self._worker_rename_project_profile())
+        self.combo_worker_project.bind("<<ComboboxSelected>>", self._autosave_prompt_worker_selection)
 
         prompt_project_actions = tk.Frame(basic_box, bg=self.color_panel_soft)
         prompt_project_actions.grid(row=2, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 8))
@@ -12069,6 +12074,7 @@ class FlowVisionApp:
         tk.Label(basic_box, text="프롬프트 파일", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=3, column=0, sticky="w", padx=12, pady=(0, 8))
         self.combo_worker_prompt_slot = ttk.Combobox(basic_box, textvariable=self.worker_prompt_slot_var, state="readonly", values=slot_names, font=self.font_body)
         self.combo_worker_prompt_slot.grid(row=3, column=1, sticky="ew", padx=(0, 12), pady=(0, 8))
+        self.combo_worker_prompt_slot.bind("<<ComboboxSelected>>", self._autosave_prompt_worker_selection)
 
         prompt_slot_actions = tk.Frame(basic_box, bg=self.color_panel_soft)
         prompt_slot_actions.grid(row=4, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 8))
@@ -12216,6 +12222,7 @@ class FlowVisionApp:
         self.btn_worker_prompt_resume.pack(side="left", padx=(6, 0))
         ttk.Button(action_row, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(8, 0))
         ttk.Button(action_row, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
+        ttk.Button(action_row, text="💾 저장", command=lambda: self._save_active_worker_compact_options(manual=True)).pack(side="left", padx=(6, 0))
         ttk.Button(action_row, text="🤖 작업봇 창 열기", command=self._open_prompt_worker_bot_from_compact).pack(side="right")
         self.btn_worker_prompt_start = ttk.Button(action_row, text="▶ 이미지 생성+다운로드 시작", command=self._start_prompt_worker_from_compact)
         self.btn_worker_prompt_start.pack(side="right", padx=(0, 8))
@@ -12271,6 +12278,7 @@ class FlowVisionApp:
         self.combo_worker_asset_project = ttk.Combobox(asset_basic_box, textvariable=self.worker_asset_project_var, state="readonly", values=project_values, font=self.font_body)
         self.combo_worker_asset_project.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(0, 8))
         self.combo_worker_asset_project.bind("<Double-Button-1>", lambda _e: self._worker_rename_project_profile())
+        self.combo_worker_asset_project.bind("<<ComboboxSelected>>", lambda _e: self._save_active_worker_compact_options(manual=False, silent=True))
 
         asset_project_actions = tk.Frame(asset_basic_box, bg=self.color_panel_soft)
         asset_project_actions.grid(row=2, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 8))
@@ -12453,6 +12461,7 @@ class FlowVisionApp:
         self.btn_worker_asset_resume.pack(side="left", padx=(6, 0))
         ttk.Button(asset_action_row, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(8, 0))
         ttk.Button(asset_action_row, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
+        ttk.Button(asset_action_row, text="💾 저장", command=lambda: self._save_active_worker_compact_options(manual=True)).pack(side="left", padx=(6, 0))
         ttk.Button(asset_action_row, text="🤖 작업봇 창 열기", command=self._open_asset_worker_bot_from_compact).pack(side="right")
         self.btn_worker_asset_start = ttk.Button(asset_action_row, text="▶ S생성+다운로드 시작", command=self._start_asset_worker_from_compact)
         self.btn_worker_asset_start.pack(side="right", padx=(0, 8))
@@ -13472,15 +13481,18 @@ class FlowVisionApp:
         if self._sync_worker_prompt_slot_to_cfg():
             self.on_rename_slot()
             self._reload_worker_shared_lists()
+            self._save_active_worker_compact_options(manual=False, silent=True)
 
     def _worker_add_prompt_slot(self):
         self.on_add_slot()
         self._reload_worker_shared_lists()
+        self._save_active_worker_compact_options(manual=False, silent=True)
 
     def _worker_delete_prompt_slot(self):
         if self._sync_worker_prompt_slot_to_cfg():
             self.on_delete_slot()
             self._reload_worker_shared_lists()
+            self._save_active_worker_compact_options(manual=False, silent=True)
 
     def _refresh_prompt_worker_compact_summary(self, *_args):
         if not hasattr(self, "worker_prompt_summary_var"):
@@ -13504,6 +13516,36 @@ class FlowVisionApp:
         self._refresh_worker_prompt_slot_info()
         self._refresh_worker_preview_progress()
         self._refresh_worker_quick_hud()
+
+    def _save_active_worker_compact_options(self, manual=False, silent=False):
+        try:
+            ok = self._persist_worker_compact_options()
+            if ok is False:
+                if manual:
+                    try:
+                        messagebox.showwarning("저장 실패", "현재 워커 설정을 저장하지 못했습니다. 입력값을 확인해주세요.", parent=self.root)
+                    except Exception:
+                        pass
+                return False
+            if manual:
+                self.update_status_label("💾 워커 설정 저장 완료", self.color_success)
+                try:
+                    messagebox.showinfo("저장 완료", "현재 워커 설정을 저장했습니다.", parent=self.root)
+                except Exception:
+                    pass
+            elif not silent:
+                self.update_status_label("💾 워커 설정 자동 저장", self.color_success)
+            return True
+        except Exception as e:
+            if manual:
+                try:
+                    messagebox.showerror("저장 실패", f"워커 설정 저장 중 오류가 발생했습니다.\n{e}", parent=self.root)
+                except Exception:
+                    pass
+            return False
+
+    def _autosave_prompt_worker_selection(self, *_args):
+        self._save_active_worker_compact_options(manual=False, silent=True)
 
     def _apply_prompt_worker_compact_to_cfg(self, show_errors=True):
         try:
@@ -18951,25 +18993,27 @@ class FlowVisionApp:
 
     def _persist_worker_compact_options(self):
         if self.worker_mode == "prompt":
-            self._apply_prompt_worker_compact_to_cfg(show_errors=False)
+            ok = self._apply_prompt_worker_compact_to_cfg(show_errors=False)
             try:
                 self._sync_worker_shared_lists_to_main_config()
             except Exception:
                 pass
-            return
+            return bool(ok)
         if self.worker_mode == "asset":
-            self._apply_asset_worker_compact_to_cfg(show_errors=False)
+            ok = self._apply_asset_worker_compact_to_cfg(show_errors=False)
             try:
                 self._sync_worker_shared_lists_to_main_config()
             except Exception:
                 pass
-            return
+            return bool(ok)
         if self.worker_mode == "download":
-            self._apply_download_worker_compact_to_cfg(show_errors=False)
+            ok = self._apply_download_worker_compact_to_cfg(show_errors=False)
             try:
                 self._sync_worker_shared_lists_to_main_config()
             except Exception:
                 pass
+            return bool(ok)
+        return True
 
     def _ask_close_action(self):
         result = {"action": "cancel"}
