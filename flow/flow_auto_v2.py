@@ -7889,10 +7889,10 @@ class FlowVisionApp:
             best = None
             best_sel = None
             best_score = float("-inf")
-            for sel in ("button", "[role='button']", "div[role='button']"):
+            for sel in ("button", "[role='button']", "div[role='button']", "[role='combobox']", "[aria-haspopup='menu']", "[aria-expanded]"):
                 try:
                     loc = self.page.locator(sel)
-                    total = min(loc.count(), 40)
+                    total = min(loc.count(), 120)
                 except Exception:
                     continue
                 for idx in range(total):
@@ -7914,15 +7914,33 @@ class FlowVisionApp:
                         score -= abs((float(box["x"]) + float(box["width"]) * 0.5) - (float(search_box["x"]) + float(search_box["width"]) + 70.0)) * 0.18
                         if float(box["x"]) < float(search_box["x"]) + float(search_box["width"]) - 40.0:
                             score -= 600.0
+                        if float(box["y"]) > float(search_box["y"]) + 80.0:
+                            score -= 400.0
                     score += 240.0
                     if "최근 사용" in meta:
                         score += 120.0
+                    if "오래된 순" in meta or "최신순" in meta or "최신 순" in meta:
+                        score += 80.0
                     if score > best_score:
                         best = cand
                         best_sel = self._locator_selector_hint(cand) or sel
                         best_score = score
             if best is not None and best_score > -300.0:
                 return best, best_sel or ""
+            text_loc, text_sel = self._resolve_text_locator_any_frame(["최신순", "최신 순", "오래된 순", "최근 사용", "가장 많이 사용"], timeout_ms=350)
+            if text_loc is not None:
+                try:
+                    text_box = text_loc.bounding_box()
+                except Exception:
+                    text_box = None
+                if text_box and search_box:
+                    try:
+                        if float(text_box["x"]) >= float(search_box["x"]) + float(search_box["width"]) - 30.0 and abs(float(text_box["y"]) - float(search_box["y"])) <= 90.0:
+                            return text_loc, text_sel or "text-fallback"
+                    except Exception:
+                        pass
+                elif text_box:
+                    return text_loc, text_sel or "text-fallback"
             time.sleep(0.10)
         return None, None
 
