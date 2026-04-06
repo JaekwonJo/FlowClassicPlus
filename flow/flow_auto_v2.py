@@ -8034,7 +8034,7 @@ class FlowVisionApp:
             sort_box = sort_button.bounding_box()
         except Exception:
             sort_box = None
-        if menu_label in sort_meta or (order == "latest" and "최신 순" in sort_meta):
+        if order != "latest" and (menu_label in sort_meta or "오래된 순" in sort_meta):
             if search_input is not None:
                 try:
                     search_input.click(timeout=600)
