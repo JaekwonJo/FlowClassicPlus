@@ -7940,13 +7940,14 @@ class FlowVisionApp:
     def _asset_search_sort_menu_label(self, order):
         return "최신순" if self._normalize_asset_search_sort_order(order) == "latest" else "오래된 순"
 
-    def _resolve_prompt_reference_sort_option(self, order="oldest", timeout_sec=1.6):
+    def _resolve_prompt_reference_sort_option(self, order="oldest", timeout_sec=1.6, anchor_box=None):
         if not self.page:
             return None, None
         order = self._normalize_asset_search_sort_order(order)
         labels = ("최신순", "최신 순") if order == "latest" else ("오래된 순",)
         end_ts = time.time() + max(1.0, timeout_sec)
         while time.time() < end_ts:
+            matches = []
             for sel in (
                 "button",
                 "[role='button']",
@@ -7972,7 +7973,46 @@ class FlowVisionApp:
                     meta = self._locator_meta_text(cand)
                     if not any(label in meta for label in labels):
                         continue
-                    return cand, self._locator_selector_hint(cand) or sel
+                    matches.append(
+                        {
+                            "locator": cand,
+                            "selector": self._locator_selector_hint(cand) or sel,
+                            "meta": meta,
+                            "box": box,
+                            "sel": sel,
+                        }
+                    )
+            if matches:
+                if order == "latest":
+                    anchor_y = None
+                    anchor_h = 0.0
+                    try:
+                        if anchor_box:
+                            anchor_y = float(anchor_box.get("y"))
+                            anchor_h = float(anchor_box.get("height") or 0.0)
+                    except Exception:
+                        anchor_y = None
+                    preferred = []
+                    for item in matches:
+                        box = item.get("box") or {}
+                        try:
+                            cy = float(box.get("y") or 0.0) + (float(box.get("height") or 0.0) * 0.5)
+                        except Exception:
+                            cy = 0.0
+                        if anchor_y is not None and cy <= (anchor_y + anchor_h + 10.0):
+                            continue
+                        preferred.append(item)
+                    target_pool = preferred or matches
+                    best = max(
+                        target_pool,
+                        key=lambda item: (
+                            float((item.get("box") or {}).get("y") or 0.0),
+                            1 if str(item.get("sel") or "").lower() in ("[role='menuitem']", "li") else 0,
+                        ),
+                    )
+                    return best.get("locator"), best.get("selector") or ""
+                best = min(matches, key=lambda item: float((item.get("box") or {}).get("y") or 0.0))
+                return best.get("locator"), best.get("selector") or ""
             time.sleep(0.10)
         return None, None
 
@@ -7990,6 +8030,10 @@ class FlowVisionApp:
             sort_meta = self._locator_meta_text(sort_button)
         except Exception:
             sort_meta = ""
+        try:
+            sort_box = sort_button.bounding_box()
+        except Exception:
+            sort_box = None
         if menu_label in sort_meta or (order == "latest" and "최신 순" in sort_meta):
             if search_input is not None:
                 try:
@@ -8006,7 +8050,7 @@ class FlowVisionApp:
                 return search_input, False
         self.log(f"↕️ {log_prefix} 정렬 버튼 클릭: {sort_sel or '자동 탐색'}")
         self.actor.random_action_delay(f"{log_prefix} 정렬 메뉴 표시 대기", 0.08, 0.18)
-        order_button, order_sel = self._resolve_prompt_reference_sort_option(order=order, timeout_sec=1.4)
+        order_button, order_sel = self._resolve_prompt_reference_sort_option(order=order, timeout_sec=1.4, anchor_box=sort_box)
         if order_button is None:
             self.log(f"⚠️ `{order_label}` 항목을 찾지 못해 기본 정렬로 계속합니다.")
             return search_input, False
