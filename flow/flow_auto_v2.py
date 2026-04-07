@@ -548,6 +548,8 @@ class FlowVisionApp:
         self.initial_target = str(initial_target or "").strip().lower()
         self.cfg_path = Path(cfg_path) if cfg_path else (self.base / CONFIG_FILE)
         self.cfg = load_config_from_file(self.cfg_path)
+        self._loaded_project_profiles_snapshot = []
+        self._loaded_prompt_slots_snapshot = []
         if not str(self.cfg.get("config_label", "") or "").strip():
             self.cfg["config_label"] = config_display_name_from_path(self.cfg_path)
         if self.worker_mode:
@@ -618,6 +620,7 @@ class FlowVisionApp:
         self.pipeline_run_position = -1
         self.pipeline_active_output_dir = ""
         self.pipeline_runtime_steps_override = None
+        self._refresh_shared_list_snapshots()
         self.pipeline_runtime_source_name = ""
         self.pipeline_runtime_started_at = None
         self.pipeline_runtime_results = []
@@ -1507,6 +1510,10 @@ class FlowVisionApp:
 
     def save_config(self):
         try:
+            self._preserve_newer_main_shared_lists_before_save()
+        except Exception:
+            pass
+        try:
             self.cfg_path.write_text(json.dumps(self.cfg, indent=4, ensure_ascii=False), encoding='utf-8')
         except:
             pass
@@ -1514,6 +1521,57 @@ class FlowVisionApp:
             save_shared_settings_from_cfg(self.cfg, self.cfg_path.parent)
         except:
             pass
+        try:
+            self._refresh_shared_list_snapshots()
+        except Exception:
+            pass
+
+    def _refresh_shared_list_snapshots(self):
+        self._loaded_project_profiles_snapshot = copy.deepcopy(self.cfg.get("project_profiles", []) or [])
+        self._loaded_prompt_slots_snapshot = copy.deepcopy(self.cfg.get("prompt_slots", []) or [])
+
+    def _preserve_newer_main_shared_lists_before_save(self):
+        try:
+            if self.cfg_path.resolve() != (self.base / CONFIG_FILE).resolve():
+                return
+        except Exception:
+            if str(self.cfg_path) != str(self.base / CONFIG_FILE):
+                return
+        try:
+            latest_cfg = load_config_from_file(self.cfg_path)
+        except Exception:
+            return
+
+        loaded_profiles = copy.deepcopy(getattr(self, "_loaded_project_profiles_snapshot", []) or [])
+        loaded_slots = copy.deepcopy(getattr(self, "_loaded_prompt_slots_snapshot", []) or [])
+        current_profiles = copy.deepcopy(self.cfg.get("project_profiles", []) or [])
+        current_slots = copy.deepcopy(self.cfg.get("prompt_slots", []) or [])
+        disk_profiles = copy.deepcopy(latest_cfg.get("project_profiles", []) or [])
+        disk_slots = copy.deepcopy(latest_cfg.get("prompt_slots", []) or [])
+
+        if current_profiles == loaded_profiles and disk_profiles != loaded_profiles:
+            self.cfg["project_profiles"] = disk_profiles or [self._default_project_profile()]
+            self.cfg["active_project_profile"] = self._clamp_project_profile_index(
+                latest_cfg.get("active_project_profile", self.cfg.get("active_project_profile", 0)),
+                default=0,
+            )
+            try:
+                active_project = self.cfg["project_profiles"][self.cfg["active_project_profile"]]
+                self.cfg["start_url"] = str(active_project.get("url", "") or self.cfg.get("start_url", "")).strip()
+            except Exception:
+                pass
+
+        if current_slots == loaded_slots and disk_slots != loaded_slots:
+            self.cfg["prompt_slots"] = disk_slots or [{"name": "기본 슬롯", "file": "flow_prompts.txt"}]
+            self.cfg["active_prompt_slot"] = self._clamp_slot_index(
+                latest_cfg.get("active_prompt_slot", self.cfg.get("active_prompt_slot", 0)),
+                default=0,
+            )
+            try:
+                active_slot = self.cfg["prompt_slots"][self.cfg["active_prompt_slot"]]
+                self.cfg["prompts_file"] = str(active_slot.get("file", self.cfg.get("prompts_file", "flow_prompts.txt")) or self.cfg.get("prompts_file", "flow_prompts.txt"))
+            except Exception:
+                pass
 
     def _sync_worker_shared_lists_to_main_config(self):
         if self.worker_mode not in ("prompt", "asset", "download"):
@@ -1549,6 +1607,11 @@ class FlowVisionApp:
         try:
             main_cfg_path.write_text(json.dumps(main_cfg, indent=4, ensure_ascii=False), encoding="utf-8")
             save_shared_settings_from_cfg(main_cfg, main_cfg_path.parent)
+            try:
+                if str(self.cfg_path) == str(main_cfg_path):
+                    self._refresh_shared_list_snapshots()
+            except Exception:
+                pass
             return True
         except Exception as e:
             self.log(f"⚠️ 메인 공용 목록 저장 실패: {e}")
@@ -14197,10 +14260,19 @@ class FlowVisionApp:
         worker_idx = self._extract_worker_index(worker_name, default=1)
         runtime_slot_path = self._worker_slot_file(kind, worker_idx)
         config_name = sanitize_named_token(config_name or worker_name, fallback=meta["default_name"])
-        browser_profile_name = self._sanitize_browser_profile_name(browser_profile_name or worker_name)
         config_path = self._named_config_path(config_name)
 
         worker_cfg = load_config_from_file(config_path) if config_path.exists() else copy.deepcopy(self.cfg)
+        existing_browser_profile = str(worker_cfg.get("browser_profile_dir", "") or "").strip()
+        incoming_browser_profile = str(browser_profile_name or "").strip()
+        if incoming_browser_profile:
+            browser_profile_name = self._sanitize_browser_profile_name(incoming_browser_profile)
+            if config_path.exists() and existing_browser_profile:
+                default_profile_name = self._sanitize_browser_profile_name(worker_name)
+                if browser_profile_name == default_profile_name:
+                    browser_profile_name = existing_browser_profile
+        else:
+            browser_profile_name = existing_browser_profile or self._sanitize_browser_profile_name(worker_name)
         # 프로젝트 목록은 메인 설정을 공용으로 쓰기 때문에, 오래된 워커 설정이 있어도
         # 최신 메인 프로젝트 목록으로 다시 맞춘 뒤 인덱스를 안전하게 보정한다.
         main_cfg_path = self.base / CONFIG_FILE
@@ -14316,6 +14388,9 @@ class FlowVisionApp:
     def _open_worker_launcher(self, kind):
         meta = self._worker_mode_meta(kind)
         suggested_name = self._suggest_worker_bundle_name(kind)
+        suggested_config_name = sanitize_named_token(suggested_name, fallback="worker")
+        existing_config_path = self._named_config_path(suggested_config_name)
+        existing_worker_cfg = load_config_from_file(existing_config_path) if existing_config_path.exists() else {}
         win = tk.Toplevel(self.home_window or self.root)
         win.title(f"{meta['title']} 실행")
         win.configure(bg=self.color_bg)
@@ -14354,8 +14429,10 @@ class FlowVisionApp:
         form.grid_columnconfigure(1, weight=1)
 
         worker_name_var = tk.StringVar(value=suggested_name)
-        config_name_var = tk.StringVar(value=sanitize_named_token(suggested_name, fallback="worker"))
-        profile_name_var = tk.StringVar(value=sanitize_named_token(suggested_name, fallback="flow_human_profile_pw"))
+        config_name_var = tk.StringVar(value=suggested_config_name)
+        profile_name_var = tk.StringVar(
+            value=str(existing_worker_cfg.get("browser_profile_dir", "") or "").strip() or sanitize_named_token(suggested_name, fallback="flow_human_profile_pw")
+        )
 
         tk.Label(form, text="워커 이름", font=self.font_small, bg=self.color_bg, fg=self.color_text).grid(row=0, column=0, sticky="w", pady=(0, 8))
         worker_name_entry = tk.Entry(form, textvariable=worker_name_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=self.font_body)
@@ -15060,7 +15137,7 @@ class FlowVisionApp:
                     "prompt",
                     suggested_name,
                     suggested_name,
-                    suggested_name,
+                    None,
                     self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0),
                 )
                 self._advance_worker_bundle_name("prompt", suggested_name)
@@ -15074,7 +15151,7 @@ class FlowVisionApp:
                     "asset",
                     suggested_name,
                     suggested_name,
-                    suggested_name,
+                    None,
                     self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0),
                 )
                 self._advance_worker_bundle_name("asset", suggested_name)
@@ -15088,7 +15165,7 @@ class FlowVisionApp:
                     "download",
                     suggested_name,
                     suggested_name,
-                    suggested_name,
+                    None,
                     self._clamp_project_profile_index(self.cfg.get("active_project_profile", 0), default=0),
                 )
                 self._advance_worker_bundle_name("download", suggested_name)
