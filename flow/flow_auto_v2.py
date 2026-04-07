@@ -73,6 +73,7 @@ ES_DISPLAY_REQUIRED = 0x00000002
 APP_VERSION = "2026-03-18 Ver.01"
 APP_NAME = f"Flow Classic Plus - {APP_VERSION}"
 CONFIG_FILE = "flow_config.json"
+PROMPT_SLOT_REGISTRY_FILE = "flow_prompt_slots_registry.json"
 SHARED_SETTINGS_FILE = "flow_shared_settings.json"
 SHARED_SETTING_KEYS = (
     "work_break_every_count",
@@ -106,6 +107,7 @@ DEFAULT_CONFIG = {
     "afk_mode": False,
     "countdown_alert_enabled": True,
     "prompt_slots": [],
+    "removed_prompt_slot_files": [],
     "active_prompt_slot": 0,
     "sound_enabled": True,
     "project_profiles": [],
@@ -550,6 +552,7 @@ class FlowVisionApp:
         self.cfg = load_config_from_file(self.cfg_path)
         self._loaded_project_profiles_snapshot = []
         self._loaded_prompt_slots_snapshot = []
+        self._loaded_removed_prompt_slot_files_snapshot = []
         if not str(self.cfg.get("config_label", "") or "").strip():
             self.cfg["config_label"] = config_display_name_from_path(self.cfg_path)
         if self.worker_mode:
@@ -1522,6 +1525,10 @@ class FlowVisionApp:
         except:
             pass
         try:
+            self._save_prompt_slot_registry()
+        except Exception:
+            pass
+        try:
             self._refresh_shared_list_snapshots()
         except Exception:
             pass
@@ -1529,6 +1536,7 @@ class FlowVisionApp:
     def _refresh_shared_list_snapshots(self):
         self._loaded_project_profiles_snapshot = copy.deepcopy(self.cfg.get("project_profiles", []) or [])
         self._loaded_prompt_slots_snapshot = copy.deepcopy(self.cfg.get("prompt_slots", []) or [])
+        self._loaded_removed_prompt_slot_files_snapshot = list(self.cfg.get("removed_prompt_slot_files", []) or [])
 
     def _preserve_newer_main_shared_lists_before_save(self):
         try:
@@ -1544,10 +1552,13 @@ class FlowVisionApp:
 
         loaded_profiles = copy.deepcopy(getattr(self, "_loaded_project_profiles_snapshot", []) or [])
         loaded_slots = copy.deepcopy(getattr(self, "_loaded_prompt_slots_snapshot", []) or [])
+        loaded_removed = list(getattr(self, "_loaded_removed_prompt_slot_files_snapshot", []) or [])
         current_profiles = copy.deepcopy(self.cfg.get("project_profiles", []) or [])
         current_slots = copy.deepcopy(self.cfg.get("prompt_slots", []) or [])
+        current_removed = list(self.cfg.get("removed_prompt_slot_files", []) or [])
         disk_profiles = copy.deepcopy(latest_cfg.get("project_profiles", []) or [])
         disk_slots = copy.deepcopy(latest_cfg.get("prompt_slots", []) or [])
+        disk_removed = list(latest_cfg.get("removed_prompt_slot_files", []) or [])
 
         if current_profiles == loaded_profiles and disk_profiles != loaded_profiles:
             self.cfg["project_profiles"] = disk_profiles or [self._default_project_profile()]
@@ -1572,6 +1583,65 @@ class FlowVisionApp:
                 self.cfg["prompts_file"] = str(active_slot.get("file", self.cfg.get("prompts_file", "flow_prompts.txt")) or self.cfg.get("prompts_file", "flow_prompts.txt"))
             except Exception:
                 pass
+        if current_removed == loaded_removed and disk_removed != loaded_removed:
+            self.cfg["removed_prompt_slot_files"] = disk_removed
+
+    def _prompt_slot_registry_path(self):
+        return self.base / PROMPT_SLOT_REGISTRY_FILE
+
+    def _normalize_removed_prompt_slot_files(self):
+        raw = self.cfg.get("removed_prompt_slot_files", [])
+        normalized = []
+        seen = set()
+        if isinstance(raw, list):
+            for item in raw:
+                name = Path(str(item or "").strip()).name
+                if not name or name in seen:
+                    continue
+                if not SLOT_FILE_REGEX.match(name):
+                    continue
+                seen.add(name)
+                normalized.append(name)
+        if self.cfg.get("removed_prompt_slot_files") != normalized:
+            self.cfg["removed_prompt_slot_files"] = normalized
+            return True
+        return False
+
+    def _load_prompt_slot_registry(self):
+        path = self._prompt_slot_registry_path()
+        if not path.exists():
+            return {"slots": [], "removed": []}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {"slots": [], "removed": []}
+        slots = []
+        seen = set()
+        for item in list(data.get("slots", []) or []):
+            if not isinstance(item, dict):
+                continue
+            file_name = Path(str(item.get("file", "") or "").strip()).name
+            if not file_name or file_name in seen or not SLOT_FILE_REGEX.match(file_name):
+                continue
+            seen.add(file_name)
+            slot_name = str(item.get("name", "") or "").strip() or Path(file_name).stem
+            slots.append({"name": slot_name, "file": file_name})
+        removed = []
+        for item in list(data.get("removed", []) or []):
+            file_name = Path(str(item or "").strip()).name
+            if file_name and SLOT_FILE_REGEX.match(file_name) and file_name not in removed:
+                removed.append(file_name)
+        return {"slots": slots, "removed": removed}
+
+    def _save_prompt_slot_registry(self):
+        payload = {
+            "slots": copy.deepcopy(self.cfg.get("prompt_slots", []) or []),
+            "removed": list(self.cfg.get("removed_prompt_slot_files", []) or []),
+        }
+        try:
+            self._prompt_slot_registry_path().write_text(json.dumps(payload, indent=4, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
 
     def _sync_worker_shared_lists_to_main_config(self):
         if self.worker_mode not in ("prompt", "asset", "download"):
@@ -1584,8 +1654,10 @@ class FlowVisionApp:
 
         profiles = copy.deepcopy(self.cfg.get("project_profiles", []) or [self._default_project_profile()])
         slots = copy.deepcopy(self.cfg.get("prompt_slots", []) or [{"name": "기본 슬롯", "file": "flow_prompts.txt"}])
+        removed_slot_files = list(self.cfg.get("removed_prompt_slot_files", []) or [])
         main_cfg["project_profiles"] = profiles
         main_cfg["prompt_slots"] = slots
+        main_cfg["removed_prompt_slot_files"] = removed_slot_files
         main_cfg["active_project_profile"] = self._clamp_project_profile_index(
             self.cfg.get("active_project_profile", main_cfg.get("active_project_profile", 0)),
             default=0,
@@ -2540,6 +2612,64 @@ class FlowVisionApp:
 
     def _ensure_prompt_slots(self):
         changed = False
+        if self._normalize_removed_prompt_slot_files():
+            changed = True
+
+        registry = self._load_prompt_slot_registry()
+        registry_slots = list(registry.get("slots", []) or [])
+        registry_removed = list(registry.get("removed", []) or [])
+        if registry_removed and registry_removed != list(self.cfg.get("removed_prompt_slot_files", []) or []):
+            self.cfg["removed_prompt_slot_files"] = registry_removed
+            changed = True
+
+        existing_slots = list(self.cfg.get("prompt_slots", []) or [])
+        slot_map = {}
+        for item in existing_slots:
+            if not isinstance(item, dict):
+                continue
+            file_name = Path(str(item.get("file", "") or "").strip()).name
+            if not file_name or not SLOT_FILE_REGEX.match(file_name):
+                continue
+            slot_map[file_name] = {
+                "name": str(item.get("name", "") or "").strip() or Path(file_name).stem,
+                "file": file_name,
+            }
+        for item in registry_slots:
+            file_name = Path(str(item.get("file", "") or "").strip()).name
+            if not file_name:
+                continue
+            slot_map[file_name] = {
+                "name": str(item.get("name", "") or "").strip() or Path(file_name).stem,
+                "file": file_name,
+            }
+
+        removed_files = set(self.cfg.get("removed_prompt_slot_files", []) or [])
+        configured_ids = []
+        for file_name in slot_map:
+            m = SLOT_FILE_REGEX.match(file_name)
+            if m:
+                configured_ids.append(int(m.group(1)))
+        max_configured_id = max(configured_ids) if configured_ids else 0
+        recovered_any = False
+        for path in sorted(self.base.glob("flow_prompts_slot*.txt")):
+            file_name = path.name
+            m = SLOT_FILE_REGEX.match(file_name)
+            if not m or file_name in slot_map or file_name in removed_files:
+                continue
+            file_id = int(m.group(1))
+            if file_id < max_configured_id:
+                continue
+            slot_map[file_name] = {"name": f"복구 슬롯 {file_id}", "file": file_name}
+            recovered_any = True
+
+        normalized_slots = sorted(
+            slot_map.values(),
+            key=lambda item: int(SLOT_FILE_REGEX.match(str(item.get("file", "") or "")).group(1)) if SLOT_FILE_REGEX.match(str(item.get("file", "") or "")) else 10**9,
+        )
+        if normalized_slots and normalized_slots != list(self.cfg.get("prompt_slots", []) or []):
+            self.cfg["prompt_slots"] = normalized_slots
+            changed = True
+
         if "prompt_slots" not in self.cfg or not self.cfg["prompt_slots"]:
             self.cfg["prompt_slots"] = [{"name": "기본 슬롯", "file": "flow_prompts.txt"}]
             self.cfg["active_prompt_slot"] = 0
@@ -2571,6 +2701,8 @@ class FlowVisionApp:
 
         if changed:
             self.save_config()
+            if recovered_any:
+                self.log("🔧 누락된 프롬프트 파일을 목록에 자동 복구했습니다.")
 
     def _default_project_profile(self):
         return {
@@ -19892,10 +20024,12 @@ class FlowVisionApp:
         if not new_name: return
         
         # 파일명 생성 (중복 피하기)
+        existing_registered = {Path(str(s.get("file", "") or "").strip()).name for s in self.cfg.get("prompt_slots", []) or []}
+        existing_removed = set(self.cfg.get("removed_prompt_slot_files", []) or [])
         slot_id = 1
         while True:
             new_file = f"flow_prompts_slot_{slot_id}.txt"
-            if not any(s["file"] == new_file for s in self.cfg["prompt_slots"]):
+            if (new_file not in existing_registered) and (not (self.base / new_file).exists()) and (new_file not in existing_removed):
                 break
             slot_id += 1
             
@@ -19908,6 +20042,8 @@ class FlowVisionApp:
             
         # 설정 추가
         self.cfg["prompt_slots"].append({"name": new_name, "file": new_file})
+        removed_files = [name for name in list(self.cfg.get("removed_prompt_slot_files", []) or []) if name != new_file]
+        self.cfg["removed_prompt_slot_files"] = removed_files
         self.save_config()
         self._sync_worker_shared_lists_to_main_config()
         
@@ -19932,12 +20068,18 @@ class FlowVisionApp:
         if idx < 0: return
         
         slot_name = self.cfg["prompt_slots"][idx]["name"]
+        slot_file = Path(str(self.cfg["prompt_slots"][idx].get("file", "") or "").strip()).name
         if not messagebox.askyesno("슬롯 삭제", f"'{slot_name}' 슬롯을 삭제할까요?\n(실제 파일은 안전을 위해 삭제되지 않습니다)"):
             return
             
         # 설정 제거
         old_selected = self._normalize_relay_selected_slots(self.cfg.get("relay_selected_slots", []))
         self.cfg["prompt_slots"].pop(idx)
+        if slot_file:
+            removed_files = list(self.cfg.get("removed_prompt_slot_files", []) or [])
+            if slot_file not in removed_files:
+                removed_files.append(slot_file)
+            self.cfg["removed_prompt_slot_files"] = removed_files
         
         # 인덱스 조정
         if self.cfg["active_prompt_slot"] >= len(self.cfg["prompt_slots"]):
