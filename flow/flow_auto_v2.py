@@ -2798,6 +2798,21 @@ class FlowVisionApp:
     def _prompt_source_prefix(self):
         return (self.cfg.get("asset_loop_prefix") or "S").strip().upper() or "S"
 
+    def _compose_asset_tag_prompt(self, tag, body):
+        tag_text = str(tag or "").strip().upper()
+        body_text = str(body or "").strip()
+        if not tag_text:
+            return body_text
+        if not body_text:
+            return ""
+        prompt_label_pattern = re.compile(
+            rf"^\s*{re.escape(tag_text)}\s*(?:PROMPT|프롬프트)\s*:\s*",
+            re.IGNORECASE,
+        )
+        if prompt_label_pattern.match(body_text):
+            return body_text
+        return f"{tag_text} Prompt : {body_text}"
+
     def _parse_prompt_source_entries(self, raw_text):
         sep = self.cfg.get("prompts_separator", "|||")
         prefix = self._prompt_source_prefix()
@@ -3360,9 +3375,16 @@ class FlowVisionApp:
 
     def _parse_asset_prompt_entries(self, entries):
         prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
+        try:
+            pad_width = int(self.cfg.get("asset_loop_num_width", 0))
+        except (TypeError, ValueError):
+            pad_width = 0
+        pad_width = max(3, pad_width)
         tag_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*::\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
         prompt_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
         tag_only_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*$", re.IGNORECASE)
+        number_inline_pattern = re.compile(r"^\s*0*([1-9][0-9]*)\s*:\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
+        number_only_pattern = re.compile(r"^\s*0*([1-9][0-9]*)\s*$", re.IGNORECASE)
         tagged_prompts = {}
         common_prompt = ""
         idx = 0
@@ -3381,11 +3403,28 @@ class FlowVisionApp:
                 if body:
                     tagged_prompts[tag] = body
                 continue
+            number_inline_match = number_inline_pattern.match(raw_text)
+            if number_inline_match:
+                num = int(number_inline_match.group(1))
+                tag = f"{prefix}{str(num).zfill(pad_width)}".upper()
+                body = str(number_inline_match.group(2) or "").strip()
+                if body:
+                    tagged_prompts[tag] = self._compose_asset_tag_prompt(tag, body)
+                    continue
             tag_only_match = tag_only_pattern.match(raw_text)
             if tag_only_match and idx < len(source):
                 next_body = str(source[idx] or "").strip()
                 if next_body:
                     tagged_prompts[tag_only_match.group(1).strip().upper()] = next_body
+                    idx += 1
+                    continue
+            number_only_match = number_only_pattern.match(raw_text)
+            if number_only_match and idx < len(source):
+                next_body = str(source[idx] or "").strip()
+                if next_body:
+                    num = int(number_only_match.group(1))
+                    tag = f"{prefix}{str(num).zfill(pad_width)}".upper()
+                    tagged_prompts[tag] = self._compose_asset_tag_prompt(tag, next_body)
                     idx += 1
                     continue
             if not common_prompt:
