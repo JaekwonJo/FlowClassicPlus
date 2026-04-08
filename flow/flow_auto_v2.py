@@ -2805,12 +2805,21 @@ class FlowVisionApp:
             return body_text
         if not body_text:
             return ""
-        prompt_label_pattern = re.compile(
-            rf"^\s*{re.escape(tag_text)}\s*(?:PROMPT|프롬프트)\s*:\s*",
+        any_prompt_label_pattern = re.compile(
+            rf"^\s*[A-Z]+\s*0*[1-9][0-9]*\s*(?:PROMPT|프롬프트)\s*:\s*",
             re.IGNORECASE,
         )
-        if prompt_label_pattern.match(body_text):
+        if any_prompt_label_pattern.match(body_text):
             return body_text
+        tag_colon_pattern = re.compile(
+            rf"^\s*{re.escape(tag_text)}\s*:\s*(.*)\s*$",
+            re.IGNORECASE | re.DOTALL,
+        )
+        tag_colon_match = tag_colon_pattern.match(body_text)
+        if tag_colon_match:
+            body_text = str(tag_colon_match.group(1) or "").strip()
+            if not body_text:
+                return ""
         return f"{tag_text} Prompt : {body_text}"
 
     def _parse_prompt_source_entries(self, raw_text):
@@ -5781,6 +5790,8 @@ class FlowVisionApp:
                     continue
             else:
                 prompt = template_prompt
+            if prompt:
+                prompt = self._compose_asset_tag_prompt(tag, prompt)
             items.append({"tag": tag, "prompt": prompt, "number": n})
         self.asset_prompt_missing_numbers = missing_numbers
         return items
