@@ -167,6 +167,7 @@ DEFAULT_CONFIG = {
     "download_number_mode_enabled": False,
     "asset_manual_selection": "",
     "asset_start_selector": "",
+    "asset_end_selector": "",
     "asset_search_button_selector": "",
     "asset_search_input_selector": "",
     "prompt_manual_selection": "",
@@ -2798,6 +2799,35 @@ class FlowVisionApp:
     def _prompt_source_prefix(self):
         return (self.cfg.get("asset_loop_prefix") or "S").strip().upper() or "S"
 
+    def _parse_asset_scene_route_spec(self, raw_spec):
+        prefix = self._prompt_source_prefix()
+        try:
+            pad_width = int(self.cfg.get("asset_loop_num_width", 0))
+        except (TypeError, ValueError):
+            pad_width = 0
+        pad_width = max(3, pad_width)
+        text = str(raw_spec or "").strip()
+        if not text:
+            return None
+        match = re.match(
+            rf"^\s*(?:{re.escape(prefix)}\s*)?0*([1-9][0-9]*)\s*(?:>\s*(?:{re.escape(prefix)}\s*)?0*([1-9][0-9]*))?\s*$",
+            text,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        start_no = int(match.group(1))
+        end_no = int(match.group(2)) if match.group(2) else 0
+        start_tag = f"{prefix}{str(start_no).zfill(pad_width)}"
+        end_tag = f"{prefix}{str(end_no).zfill(pad_width)}" if end_no > 0 else ""
+        return {
+            "start_no": start_no,
+            "start_tag": start_tag,
+            "end_no": end_no if end_no > 0 else None,
+            "end_tag": end_tag,
+            "raw_spec": text,
+        }
+
     def _compose_asset_tag_prompt(self, tag, body):
         tag_text = str(tag or "").strip().upper()
         body_text = str(body or "").strip()
@@ -3395,6 +3425,7 @@ class FlowVisionApp:
         number_inline_pattern = re.compile(r"^\s*0*([1-9][0-9]*)\s*:\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
         number_only_pattern = re.compile(r"^\s*0*([1-9][0-9]*)\s*$", re.IGNORECASE)
         tagged_prompts = {}
+        tagged_end_tags = {}
         common_prompt = ""
         idx = 0
         source = list(entries or [])
@@ -3403,6 +3434,14 @@ class FlowVisionApp:
             idx += 1
             if not raw_text:
                 continue
+            route_inline_match = re.match(r"^\s*([^:\n]+?)\s*:\s*(.*)\s*$", raw_text, re.IGNORECASE | re.DOTALL)
+            if route_inline_match:
+                route_info = self._parse_asset_scene_route_spec(route_inline_match.group(1))
+                body = str(route_inline_match.group(2) or "").strip()
+                if route_info and body:
+                    tagged_prompts[route_info["start_tag"].upper()] = self._compose_asset_tag_prompt(route_info["start_tag"], body)
+                    tagged_end_tags[route_info["start_tag"].upper()] = str(route_info.get("end_tag") or "").strip().upper()
+                    continue
             match = tag_pattern.match(raw_text)
             if not match:
                 match = prompt_pattern.match(raw_text)
@@ -3419,6 +3458,15 @@ class FlowVisionApp:
                 body = str(number_inline_match.group(2) or "").strip()
                 if body:
                     tagged_prompts[tag] = self._compose_asset_tag_prompt(tag, body)
+                    continue
+            route_only_info = self._parse_asset_scene_route_spec(raw_text)
+            if route_only_info and idx < len(source):
+                next_body = str(source[idx] or "").strip()
+                if next_body:
+                    start_tag = route_only_info["start_tag"].upper()
+                    tagged_prompts[start_tag] = self._compose_asset_tag_prompt(route_only_info["start_tag"], next_body)
+                    tagged_end_tags[start_tag] = str(route_only_info.get("end_tag") or "").strip().upper()
+                    idx += 1
                     continue
             tag_only_match = tag_only_pattern.match(raw_text)
             if tag_only_match and idx < len(source):
@@ -3441,6 +3489,7 @@ class FlowVisionApp:
         mode = "tagged" if tagged_prompts else ("sequential" if source else "empty")
         return {
             "tagged_prompts": tagged_prompts,
+            "tagged_end_tags": tagged_end_tags,
             "common_prompt": common_prompt,
             "mode": mode,
         }
@@ -3476,6 +3525,7 @@ class FlowVisionApp:
                     "file_name": "",
                     "entries": [],
                     "tagged_prompts": {},
+                    "tagged_end_tags": {},
                     "common_prompt": "",
                     "mode": "empty",
                 }
@@ -3490,6 +3540,7 @@ class FlowVisionApp:
             "file_name": file_name,
             "entries": entries,
             "tagged_prompts": parsed.get("tagged_prompts", {}),
+            "tagged_end_tags": parsed.get("tagged_end_tags", {}),
             "common_prompt": parsed.get("common_prompt", ""),
             "mode": parsed.get("mode", "empty"),
         }
@@ -5772,9 +5823,11 @@ class FlowVisionApp:
             num_txt = str(n).zfill(pad_width)
             tag = f"{prefix}{num_txt}"
             template_prompt = template.replace("{tag}", tag).strip()
+            end_tag = ""
             if use_prompt_slot:
                 if slot_data.get("mode") == "tagged":
                     prompt = str((slot_data.get("tagged_prompts", {}) or {}).get(tag.upper(), "") or "").strip()
+                    end_tag = str((slot_data.get("tagged_end_tags", {}) or {}).get(tag.upper(), "") or "").strip()
                     if not prompt:
                         prompt = str(slot_data.get("common_prompt", "") or "").strip()
                 else:
@@ -5792,7 +5845,7 @@ class FlowVisionApp:
                 prompt = template_prompt
             if prompt:
                 prompt = self._compose_asset_tag_prompt(tag, prompt)
-            items.append({"tag": tag, "prompt": prompt, "number": n})
+            items.append({"tag": tag, "prompt": prompt, "number": n, "end_tag": end_tag})
         self.asset_prompt_missing_numbers = missing_numbers
         return items
 
@@ -6755,6 +6808,25 @@ class FlowVisionApp:
                 seen.add(x)
         return uniq
 
+    def _asset_end_button_candidates(self):
+        cands = []
+        cands.extend(self._normalize_candidate_list(self.cfg.get("asset_end_selector", "")))
+        cands.extend([
+            "button:has-text('종료')",
+            "[role='button']:has-text('종료')",
+            "button:has-text('끝')",
+            "[role='button']:has-text('끝')",
+            "button:has-text('End')",
+            "[role='button']:has-text('End')",
+        ])
+        seen = set()
+        uniq = []
+        for x in cands:
+            if x not in seen:
+                uniq.append(x)
+                seen.add(x)
+        return uniq
+
     def _resolve_asset_sidebar_button(self, timeout_sec=4):
         if not self.page:
             return None, None
@@ -7451,6 +7523,96 @@ class FlowVisionApp:
                 return
             time.sleep(0.18)
 
+    def _fill_asset_search_tag(self, asset_tag, search_input=None, search_input_sel="", *, log_prefix="Step2", raise_if_missing=True):
+        if (not self.page) or (not asset_tag):
+            return False
+
+        if search_input is None:
+            search_input, search_input_sel = self._resolve_asset_search_input_locator(timeout_sec=2.0)
+            if search_input is None:
+                focus_input, _focus_sel = self._resolve_focused_asset_search_input()
+                if focus_input is not None:
+                    try:
+                        focus_input.click(timeout=1200)
+                    except Exception:
+                        pass
+                    try:
+                        self.page.keyboard.press("Control+A")
+                        self.page.keyboard.press("Backspace")
+                    except Exception:
+                        pass
+                    try:
+                        focus_input.fill(asset_tag)
+                    except Exception:
+                        try:
+                            focus_input.type(asset_tag, delay=random.randint(25, 70))
+                        except Exception:
+                            focus_input = None
+                    if focus_input is not None:
+                        self.page.keyboard.press("Enter")
+                        self.log(f"✅ {log_prefix} 에셋 검색 입력 완료(포커스 폴백): {asset_tag}")
+                        self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.3, 1.0)
+                        self._wait_asset_search_resolution(asset_tag)
+                        return True
+                ok_dom, reason_dom = self._direct_fill_asset_search_via_dom(asset_tag)
+                if ok_dom:
+                    self.page.keyboard.press("Enter")
+                    self.log(f"✅ {log_prefix} 에셋 검색 입력 완료(DOM 폴백): {asset_tag}")
+                    self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.3, 1.0)
+                    self._wait_asset_search_resolution(asset_tag)
+                    return True
+                if raise_if_missing:
+                    raise RuntimeError(f"{log_prefix} 실패: 에셋 검색 입력창을 찾지 못했습니다. (dom={reason_dom})")
+                return False
+
+        search_input = self._ensure_asset_search_sort_preference(search_input=search_input)
+        try:
+            search_input.click(timeout=1500)
+        except Exception:
+            pass
+        try:
+            self.page.keyboard.press("Control+A")
+            self.page.keyboard.press("Backspace")
+        except Exception:
+            pass
+        try:
+            search_input.fill(asset_tag)
+        except Exception:
+            try:
+                search_input.type(asset_tag, delay=random.randint(25, 70))
+            except Exception:
+                if raise_if_missing:
+                    raise RuntimeError("에셋 검색 입력에 실패했습니다.")
+                return False
+
+        self.actor.random_action_delay("에셋 검색어 입력 후 대기", 0.1, 0.5)
+        self.page.keyboard.press("Enter")
+        self.log(f"✅ {log_prefix} 에셋 검색 입력 완료: {asset_tag} | {search_input_sel or '자동 탐색'}")
+        self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.2, 1.0)
+        self._wait_asset_search_resolution(asset_tag)
+        return True
+
+    def _run_asset_loop_endstep(self, asset_tag):
+        if (not self.page) or (not asset_tag):
+            return
+        self.log(f"🏁 S반복 종료이미지 준비 시작: {asset_tag}")
+        end_locator, end_selector = self._resolve_best_locator_with_scroll(
+            self._asset_end_button_candidates(),
+            timeout_ms=2200,
+            prefer_enabled=False,
+            ratios=(0.0, 0.10, 0.18, 0.28),
+        )
+        if end_locator is None:
+            end_locator, end_selector = self._resolve_text_locator_any_frame(["종료", "끝", "End"], timeout_ms=1200)
+        if end_locator is None:
+            raise RuntimeError("종료 이미지 버튼을 찾지 못했습니다. 종료 버튼 selector 또는 문구를 확인해주세요.")
+        if not self._click_with_actor_fallback(end_locator, "종료 버튼"):
+            raise RuntimeError("종료 이미지 버튼 클릭에 실패했습니다.")
+        self.log(f"🏁 종료 버튼 클릭: {end_selector or '텍스트 탐색'}")
+        self.actor.random_action_delay("종료 이미지 검색창 표시 대기", 0.4, 1.2)
+        search_input, search_input_sel = self._resolve_asset_search_input_locator(timeout_sec=2.0)
+        self._fill_asset_search_tag(asset_tag, search_input=search_input, search_input_sel=search_input_sel, log_prefix="Step3")
+
     def _recover_after_missing_asset_search(self, asset_tag=""):
         if not self.page or self.page.is_closed():
             return
@@ -7476,7 +7638,7 @@ class FlowVisionApp:
         except Exception as refresh_e:
             self.log(f"⚠️ 에셋 없음 후 초기화 실패(계속 진행): {refresh_e}")
 
-    def _run_asset_loop_prestep(self, asset_tag):
+    def _run_asset_loop_prestep(self, asset_tag, end_asset_tag=""):
         if (not self.page) or (not asset_tag):
             return
 
@@ -7503,28 +7665,9 @@ class FlowVisionApp:
         # 2-0) 에셋 검색 버튼 없이 바로 검색 입력칸이 열리는 UI 대응
         direct_input, direct_sel = self._resolve_asset_search_input_locator(timeout_sec=1.6)
         if direct_input is not None:
-            direct_input = self._ensure_asset_search_sort_preference(search_input=direct_input)
-            try:
-                direct_input.click(timeout=1200)
-            except Exception:
-                pass
-            try:
-                self.page.keyboard.press("Control+A")
-                self.page.keyboard.press("Backspace")
-            except Exception:
-                pass
-            try:
-                direct_input.fill(asset_tag)
-            except Exception:
-                try:
-                    direct_input.type(asset_tag, delay=random.randint(25, 70))
-                except Exception:
-                    direct_input = None
-            if direct_input is not None:
-                self.page.keyboard.press("Enter")
-                self.log(f"✅ Step2 에셋 검색 입력 완료(직접입력): {asset_tag} | {direct_sel or '자동 탐색'}")
-                self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.2, 1.0)
-                self._wait_asset_search_resolution(asset_tag)
+            if self._fill_asset_search_tag(asset_tag, search_input=direct_input, search_input_sel=direct_sel, log_prefix="Step2", raise_if_missing=False):
+                if end_asset_tag:
+                    self._run_asset_loop_endstep(end_asset_tag)
                 return
 
         search_candidates = self._asset_search_button_candidates() + [
@@ -7558,64 +7701,9 @@ class FlowVisionApp:
                 self.actor.random_action_delay("에셋 검색 클릭 후 대기", 0.4, 1.6)
 
         search_input, search_input_sel = self._resolve_asset_search_input_locator(timeout_sec=2.0)
-        if search_input is None:
-            focus_input, _focus_sel = self._resolve_focused_asset_search_input()
-            if focus_input is not None:
-                focus_input = self._ensure_asset_search_sort_preference(search_input=focus_input)
-                try:
-                    focus_input.click(timeout=1200)
-                except Exception:
-                    pass
-                try:
-                    self.page.keyboard.press("Control+A")
-                    self.page.keyboard.press("Backspace")
-                except Exception:
-                    pass
-                try:
-                    focus_input.fill(asset_tag)
-                except Exception:
-                    try:
-                        focus_input.type(asset_tag, delay=random.randint(25, 70))
-                    except Exception:
-                        focus_input = None
-                if focus_input is not None:
-                    self.page.keyboard.press("Enter")
-                    self.log(f"✅ Step2 에셋 검색 입력 완료(포커스 폴백): {asset_tag}")
-                    self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.3, 1.0)
-                    self._wait_asset_search_resolution(asset_tag)
-                    return
-            ok_dom, reason_dom = self._direct_fill_asset_search_via_dom(asset_tag)
-            if ok_dom:
-                self.page.keyboard.press("Enter")
-                self.log(f"✅ Step2 에셋 검색 입력 완료(DOM 폴백): {asset_tag}")
-                self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.3, 1.0)
-                self._wait_asset_search_resolution(asset_tag)
-                return
-            raise RuntimeError(f"Step2 실패: 에셋 검색 입력창을 찾지 못했습니다. (dom={reason_dom})")
-
-        search_input = self._ensure_asset_search_sort_preference(search_input=search_input)
-        try:
-            search_input.click(timeout=1500)
-        except Exception:
-            pass
-        try:
-            self.page.keyboard.press("Control+A")
-            self.page.keyboard.press("Backspace")
-        except Exception:
-            pass
-        try:
-            search_input.fill(asset_tag)
-        except Exception:
-            try:
-                search_input.type(asset_tag, delay=random.randint(25, 70))
-            except Exception:
-                raise RuntimeError("에셋 검색 입력에 실패했습니다.")
-
-        self.actor.random_action_delay("에셋 검색어 입력 후 대기", 0.1, 0.5)
-        self.page.keyboard.press("Enter")
-        self.log(f"✅ Step2 에셋 검색 입력 완료: {asset_tag} | {search_input_sel or '자동 탐색'}")
-        self.actor.random_action_delay("에셋 검색 Enter 후 대기", 0.2, 1.0)
-        self._wait_asset_search_resolution(asset_tag)
+        self._fill_asset_search_tag(asset_tag, search_input=search_input, search_input_sel=search_input_sel, log_prefix="Step2")
+        if end_asset_tag:
+            self._run_asset_loop_endstep(end_asset_tag)
 
     def _prompt_reference_search_input_candidates(self):
         cands = []
@@ -10860,7 +10948,7 @@ class FlowVisionApp:
         self.lbl_asset_prompt_source_status.pack(anchor="w", pady=(0, 6))
         tk.Label(
             asset_f,
-            text="예: S004::개별 프롬프트 또는 S004 ||| 실제 본문 / 태그 없는 프롬프트는 공통 fallback",
+            text="예: S004::개별 프롬프트 / 004 ||| 본문 / 002>003 ||| 본문(시작+종료 이미지 연결)",
             bg=self.color_bg,
             fg=self.color_text_sec,
             font=self.font_small,
@@ -10953,6 +11041,12 @@ class FlowVisionApp:
         self.entry_asset_start_selector = tk.Entry(asset_f, textvariable=self.asset_start_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
         self.entry_asset_start_selector.pack(fill="x", ipady=3, pady=(2, 4))
         self.entry_asset_start_selector.bind("<FocusOut>", self.on_option_toggle)
+
+        tk.Label(asset_f, text="종료 버튼 selector(선택)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
+        self.asset_end_selector_var = tk.StringVar(value=self.cfg.get("asset_end_selector", ""))
+        self.entry_asset_end_selector = tk.Entry(asset_f, textvariable=self.asset_end_selector_var, bg=self.color_input_bg, fg=self.color_input_fg, insertbackground=self.color_input_fg, font=("Consolas", 10))
+        self.entry_asset_end_selector.pack(fill="x", ipady=3, pady=(2, 4))
+        self.entry_asset_end_selector.bind("<FocusOut>", self.on_option_toggle)
 
         tk.Label(asset_f, text="에셋 검색 버튼 selector(선택)", bg=self.color_bg, font=("Malgun Gothic", 9)).pack(anchor="w")
         self.asset_search_btn_selector_var = tk.StringVar(value=self.cfg.get("asset_search_button_selector", ""))
@@ -13350,14 +13444,17 @@ class FlowVisionApp:
                 })
         elif mode == "asset":
             for idx, item in enumerate(list(self.asset_loop_items or []), start=1):
+                start_tag = str(item.get("tag", "") or "").strip()
+                end_tag = str(item.get("end_tag", "") or "").strip()
+                token = f"{start_tag}>{end_tag}" if start_tag and end_tag else start_tag
                 items.append({
                     "seq": idx,
-                    "token": str(item.get("tag", "") or "").strip(),
+                    "token": token,
                     "prompt": str(item.get("prompt", "") or "").strip(),
                     "status": "pending",
                     "detail": "보류 중",
                     "source_no": item.get("number"),
-                    "asset_tag": str(item.get("tag", "") or "").strip(),
+                    "asset_tag": start_tag,
                 })
         return items
 
@@ -15776,6 +15873,7 @@ class FlowVisionApp:
         self.cfg["asset_loop_prompt_template"] = asset_template or "{tag} : Naturally Seamless Loop animation."
         self.cfg["asset_manual_selection"] = self.asset_manual_selection_var.get().strip() if hasattr(self, "asset_manual_selection_var") else str(self.cfg.get("asset_manual_selection", "") or "").strip()
         self.cfg["asset_start_selector"] = self.asset_start_selector_var.get().strip() if hasattr(self, "asset_start_selector_var") else self.cfg.get("asset_start_selector", "")
+        self.cfg["asset_end_selector"] = self.asset_end_selector_var.get().strip() if hasattr(self, "asset_end_selector_var") else self.cfg.get("asset_end_selector", "")
         self.cfg["asset_search_button_selector"] = self.asset_search_btn_selector_var.get().strip() if hasattr(self, "asset_search_btn_selector_var") else self.cfg.get("asset_search_button_selector", "")
         self.cfg["asset_search_input_selector"] = self.asset_search_input_selector_var.get().strip() if hasattr(self, "asset_search_input_selector_var") else self.cfg.get("asset_search_input_selector", "")
         self.cfg["prompt_manual_selection"] = self.prompt_manual_selection_var.get().strip() if hasattr(self, "prompt_manual_selection_var") else str(self.cfg.get("prompt_manual_selection", "") or "").strip()
@@ -19502,6 +19600,7 @@ class FlowVisionApp:
             self.log(f"⚠️ 휴식 체크 오류: {e}")
 
         asset_tag = None
+        asset_end_tag = ""
         source_no = None
         combined_download_enabled = self._combined_worker_download_enabled()
         prompt = ""
@@ -19531,6 +19630,7 @@ class FlowVisionApp:
             if self.cfg.get("asset_loop_enabled"):
                 if 0 <= self.index < len(self.asset_loop_items):
                     asset_tag = self.asset_loop_items[self.index].get("tag")
+                    asset_end_tag = str(self.asset_loop_items[self.index].get("end_tag", "") or "").strip()
                     source_no = self.asset_loop_items[self.index].get("number")
                 if not asset_tag:
                     m = re.match(r"^\s*([A-Za-z]+[0-9]+)\s*:", prompt)
@@ -19568,8 +19668,9 @@ class FlowVisionApp:
                         )
                     self.asset_video_ready_for_run = True
                 if asset_tag:
-                    self.update_status_label(f"🔁 에셋 준비 중... ({asset_tag})", self.color_info)
-                    self._run_asset_loop_prestep(asset_tag)
+                    route_label = f"{asset_tag}>{asset_end_tag}" if asset_end_tag else asset_tag
+                    self.update_status_label(f"🔁 에셋 준비 중... ({route_label})", self.color_info)
+                    self._run_asset_loop_prestep(asset_tag, end_asset_tag=asset_end_tag)
 
             queue_token = self._combined_worker_download_tag(source_no=source_no, asset_tag=asset_tag)
             if combined_download_enabled:
