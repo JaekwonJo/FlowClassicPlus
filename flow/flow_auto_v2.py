@@ -11,6 +11,8 @@ import traceback
 import copy
 import subprocess
 import argparse
+import shutil
+import socket
 from pathlib import Path
 from datetime import datetime, timedelta
 import importlib 
@@ -100,6 +102,7 @@ DEFAULT_CONFIG = {
     "new_project_selector": "",
     "browser_headless": False,
     "browser_channel": "chrome",
+    "browser_launch_mode": "managed",
     "browser_profile_dir": "flow_human_profile_pw",
     "input_area": None,  # 구버전 호환용(미사용)
     "submit_area": None,  # 구버전 호환용(미사용)
@@ -238,6 +241,12 @@ DEFAULT_CONFIG = {
     "ref_img4_area": None,
     "ref_img5_area": None
 }
+
+BROWSER_LAUNCH_MODE_LABELS = {
+    "managed": "자동화 크롬",
+    "edge_human": "MS Edge 사람형",
+}
+BROWSER_LAUNCH_MODE_VALUES = {label: key for key, label in BROWSER_LAUNCH_MODE_LABELS.items()}
 
 MAX_SCENE_NUMBER = 999
 
@@ -579,8 +588,11 @@ class FlowVisionApp:
         self.alert_window = None
         self.relay_progress = 0 
         self.playwright = None
+        self.browser_session_owner = None
         self.browser_context = None
         self.page = None
+        self.browser_external_proc = None
+        self.browser_debug_port = None
         self.action_log_path = None
         self.action_log_fp = None
         self.session_report_path = None
@@ -607,6 +619,7 @@ class FlowVisionApp:
         self.completion_summary_output_copy_paths = []
         self.retry_error_log = []
         self.pending_periodic_refresh = None
+        self.periodic_refresh_next_count = None
         self.worker_queue_items = []
         self.worker_runtime_slot_path = None
         self.worker_launch_registry = {}
@@ -765,7 +778,9 @@ class FlowVisionApp:
         self._ensure_pipeline_steps()
         self._ensure_pipeline_presets()
         if self.worker_mode in ("prompt", "asset", "download"):
-            self.cfg["browser_channel"] = "chrome"
+            self.cfg["browser_launch_mode"] = self._normalize_browser_launch_mode(self.cfg.get("browser_launch_mode", "managed"))
+            if self.cfg["browser_launch_mode"] == "edge_human":
+                self.cfg["browser_channel"] = "msedge"
             self._register_worker_runtime_slot()
         self._build_ui()
         self.on_reload()
@@ -1992,6 +2007,96 @@ class FlowVisionApp:
     def _sanitize_browser_profile_name(self, name):
         return sanitize_named_token(name, fallback="flow_human_profile_pw")
 
+    def _normalize_browser_launch_mode(self, raw_mode):
+        mode = str(raw_mode or self.cfg.get("browser_launch_mode", "managed") or "managed").strip().lower()
+        if mode not in BROWSER_LAUNCH_MODE_LABELS:
+            mode = "managed"
+        return mode
+
+    def _browser_launch_mode_label(self, raw_mode):
+        return BROWSER_LAUNCH_MODE_LABELS.get(self._normalize_browser_launch_mode(raw_mode), BROWSER_LAUNCH_MODE_LABELS["managed"])
+
+    def _browser_launch_mode_choices(self):
+        return tuple(BROWSER_LAUNCH_MODE_LABELS.values())
+
+    def _find_free_local_port(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
+            return int(sock.getsockname()[1])
+
+    def _resolve_msedge_executable(self):
+        candidates = [
+            shutil.which("msedge.exe"),
+            shutil.which("msedge"),
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        ]
+        for item in candidates:
+            if not item:
+                continue
+            try:
+                path = Path(item)
+                if path.exists():
+                    return str(path)
+            except Exception:
+                continue
+        return ""
+
+    def _launch_edge_human_browser(self, profile_path, start_url, win_w, win_h, browser_pos_x, browser_pos_y):
+        edge_exe = self._resolve_msedge_executable()
+        if not edge_exe:
+            raise RuntimeError("MS Edge 실행 파일을 찾지 못했습니다.")
+
+        debug_port = self._find_free_local_port()
+        launch_url = str(start_url or "about:blank").strip() or "about:blank"
+        cmd = [
+            edge_exe,
+            f"--remote-debugging-port={debug_port}",
+            f"--user-data-dir={str(profile_path)}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--new-window",
+            f"--window-position={browser_pos_x},{browser_pos_y}",
+            f"--window-size={win_w},{win_h}",
+            launch_url,
+        ]
+        popen_kwargs = {"cwd": str(self.base)}
+        creationflags = 0
+        if os.name == "nt":
+            for flag_name in ("CREATE_NEW_PROCESS_GROUP",):
+                creationflags |= int(getattr(subprocess, flag_name, 0) or 0)
+        if creationflags:
+            popen_kwargs["creationflags"] = creationflags
+
+        self.browser_external_proc = subprocess.Popen(cmd, **popen_kwargs)
+        self.browser_debug_port = debug_port
+
+        deadline = time.time() + 15.0
+        last_error = None
+        browser = None
+        while time.time() < deadline:
+            try:
+                browser = self.playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{debug_port}")
+                if browser:
+                    break
+            except Exception as e:
+                last_error = e
+                time.sleep(0.35)
+        if browser is None:
+            raise RuntimeError(f"MS Edge 사람형 연결 실패: {last_error or 'CDP 연결 안 됨'}")
+
+        self.browser_session_owner = browser
+        contexts = []
+        try:
+            contexts = list(browser.contexts or [])
+        except Exception:
+            contexts = []
+        self.browser_context = contexts[0] if contexts else browser.new_context(
+            viewport={"width": max(320, int(win_w * 0.92)), "height": max(240, int(win_h * 0.86))}
+        )
+        return self.browser_context
+
     def on_create_new_browser_profile(self):
         if getattr(self, "running", False) or getattr(self, "relay_running", False):
             messagebox.showwarning("안내", "자동화 실행 중에는 새 브라우저 프로필을 만들 수 없습니다.\n먼저 중지 후 시도해주세요.")
@@ -2104,6 +2209,12 @@ class FlowVisionApp:
             return
         if self.playwright is None:
             self.playwright = sync_playwright().start()
+        if self.browser_session_owner:
+            try:
+                self.browser_session_owner.close()
+            except Exception:
+                pass
+            self.browser_session_owner = None
         if self.browser_context:
             try:
                 self.browser_context.close()
@@ -2122,6 +2233,7 @@ class FlowVisionApp:
                 pass
 
         channel = (self.cfg.get("browser_channel") or "chrome").strip() or None
+        launch_mode = self._normalize_browser_launch_mode(self.cfg.get("browser_launch_mode", "managed"))
         headless = bool(self.cfg.get("browser_headless", False))
         win_w, win_h, viewport_w, viewport_h = self._compute_browser_window_size()
         browser_pos_x, browser_pos_y = self._worker_window_origin(win_w, win_h, kind="browser") if self.worker_mode in ("prompt", "asset", "download") else (24, 24)
@@ -2140,19 +2252,38 @@ class FlowVisionApp:
                 ],
             )
 
-        try:
-            self.browser_context = _launch_with(profile_path, channel)
-        except Exception as e1:
-            # 1차 폴백: 채널 미지정(Playwright Chromium)
-            self.log(f"⚠️ 브라우저 실행 1차 실패, Chromium 폴백 시도: {e1}")
+        if launch_mode == "edge_human":
             try:
-                self.browser_context = _launch_with(profile_path, None)
-            except Exception as e2:
-                # 2차 폴백: 임시 프로필 디렉토리
-                runtime_profile = self.base / f"flow_human_profile_pw_runtime_{int(time.time())}"
-                runtime_profile.mkdir(parents=True, exist_ok=True)
-                self.log(f"⚠️ 브라우저 실행 2차 실패, 임시 프로필 폴백 시도: {e2}")
-                self.browser_context = _launch_with(runtime_profile, None)
+                self.browser_context = self._launch_edge_human_browser(
+                    profile_path=profile_path,
+                    start_url=self.cfg.get("start_url", ""),
+                    win_w=win_w,
+                    win_h=win_h,
+                    browser_pos_x=browser_pos_x,
+                    browser_pos_y=browser_pos_y,
+                )
+                self.log("🌐 MS Edge 사람형 세션 연결 완료")
+            except Exception as e:
+                self.log(f"⚠️ MS Edge 사람형 연결 실패, 기존 자동화 크롬으로 폴백: {e}")
+                launch_mode = "managed"
+
+        if launch_mode != "edge_human":
+            try:
+                self.browser_context = _launch_with(profile_path, channel)
+                self.browser_session_owner = self.browser_context
+            except Exception as e1:
+                # 1차 폴백: 채널 미지정(Playwright Chromium)
+                self.log(f"⚠️ 브라우저 실행 1차 실패, Chromium 폴백 시도: {e1}")
+                try:
+                    self.browser_context = _launch_with(profile_path, None)
+                    self.browser_session_owner = self.browser_context
+                except Exception as e2:
+                    # 2차 폴백: 임시 프로필 디렉토리
+                    runtime_profile = self.base / f"flow_human_profile_pw_runtime_{int(time.time())}"
+                    runtime_profile.mkdir(parents=True, exist_ok=True)
+                    self.log(f"⚠️ 브라우저 실행 2차 실패, 임시 프로필 폴백 시도: {e2}")
+                    self.browser_context = _launch_with(runtime_profile, None)
+                    self.browser_session_owner = self.browser_context
 
         self.page = self._pick_primary_browser_page()
         if self.page is None:
@@ -2190,12 +2321,21 @@ class FlowVisionApp:
 
     def _shutdown_browser(self):
         try:
-            if self.browser_context:
-                self.browser_context.close()
+            if self.browser_session_owner:
+                self.browser_session_owner.close()
         except Exception:
             pass
+        self.browser_session_owner = None
         self.browser_context = None
         self.page = None
+
+        if self.browser_external_proc:
+            try:
+                self.browser_external_proc.terminate()
+            except Exception:
+                pass
+        self.browser_external_proc = None
+        self.browser_debug_port = None
 
         try:
             if self.playwright:
@@ -10546,6 +10686,21 @@ class FlowVisionApp:
         self.combo_browser_channel.pack(side="left")
         self.combo_browser_channel.bind("<<ComboboxSelected>>", self.on_option_toggle)
 
+        tk.Label(browser_f, text="실행 모드:", bg=self.color_bg, font=self.font_small).pack(side="left", padx=(10, 4))
+        self.browser_launch_mode_var = tk.StringVar(
+            value=self._browser_launch_mode_label(self.cfg.get("browser_launch_mode", "managed"))
+        )
+        self.combo_browser_launch_mode = ttk.Combobox(
+            browser_f,
+            textvariable=self.browser_launch_mode_var,
+            state="readonly",
+            width=14,
+            font=self.font_small,
+            values=self._browser_launch_mode_choices(),
+        )
+        self.combo_browser_launch_mode.pack(side="left")
+        self.combo_browser_launch_mode.bind("<<ComboboxSelected>>", self.on_option_toggle)
+
         browser_profile_f = tk.Frame(left_card, bg=self.color_bg)
         browser_profile_f.pack(fill="x", pady=(0, 8))
         ttk.Button(browser_profile_f, text="🆕 새 브라우저 프로필 만들기", command=self.on_create_new_browser_profile).pack(side="left")
@@ -10690,7 +10845,7 @@ class FlowVisionApp:
         tk.Label(break_f, text="분", bg=self.color_bg, font=self.font_small).grid(row=2, column=2, sticky="w", pady=(6, 0))
         tk.Label(
             break_f,
-            text="※ 실제 휴식은 설정값 기준으로 ±30% 랜덤 적용됩니다. 다운로드는 휴식 없이 계속 진행합니다.",
+            text="※ 실제 휴식은 설정값 기준으로 횟수/시간 모두 ±30% 랜덤 적용됩니다. 다운로드는 휴식 없이 계속 진행합니다.",
             bg=self.color_bg,
             fg=self.color_text_sec,
             font=("Malgun Gothic", 9),
@@ -10756,7 +10911,7 @@ class FlowVisionApp:
         tk.Label(refresh_f, text="초 랜덤", bg=self.color_bg, font=self.font_small).grid(row=2, column=4, sticky="w", pady=(6, 0))
         tk.Label(
             refresh_f,
-            text="※ 프롬프트/S반복 성공 후에만 새로고침합니다. 다운로드 자동화에는 적용되지 않습니다.",
+            text="※ 프롬프트/S반복 성공 후에만 새로고침합니다. 개수 목표/대기시간 모두 ±30% 랜덤 적용되며, 다운로드 자동화에는 적용되지 않습니다.",
             bg=self.color_bg,
             fg=self.color_text_sec,
             font=("Malgun Gothic", 9),
@@ -12373,6 +12528,9 @@ class FlowVisionApp:
         self.worker_prompt_slot_var = tk.StringVar(value=slot_names[active_slot_idx] if slot_names else "")
         self.worker_prompt_count_var = tk.StringVar(value=str(self.cfg.get("prompt_variant_count", "x1") or "x1").strip().lower() or "x1")
         self.worker_prompt_quality_var = tk.StringVar(value=str(self.cfg.get("download_image_quality", "4K") or "4K").strip().upper() or "4K")
+        self.worker_prompt_browser_mode_var = tk.StringVar(
+            value=self._browser_launch_mode_label(self.cfg.get("browser_launch_mode", "managed"))
+        )
         self.worker_prompt_output_dir_var = tk.StringVar(value=str(self.cfg.get("download_output_dir", "") or self._resolve_download_output_dir()))
         prompt_download_wait = int(self.cfg.get("prompt_combined_download_wait_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
         prompt_next_wait = int(self.cfg.get("prompt_combined_next_interval_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
@@ -12444,6 +12602,16 @@ class FlowVisionApp:
             font=self.font_mono_small,
         ).grid(row=0, column=0, sticky="ew", padx=(0, 6), ipady=2)
         ttk.Button(prompt_output_wrap, text="폴더 선택", command=lambda: self._pick_download_output_dir_for_var(self.worker_prompt_output_dir_var)).grid(row=0, column=1, sticky="e")
+        tk.Label(basic_box, text="브라우저 모드", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=7, column=0, sticky="w", padx=12, pady=(0, 12))
+        self.combo_worker_prompt_browser_mode = ttk.Combobox(
+            basic_box,
+            textvariable=self.worker_prompt_browser_mode_var,
+            state="readonly",
+            values=self._browser_launch_mode_choices(),
+            font=self.font_body,
+            width=14,
+        )
+        self.combo_worker_prompt_browser_mode.grid(row=7, column=1, sticky="w", padx=(0, 12), pady=(0, 12))
 
         number_box = tk.Frame(content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         number_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
@@ -12585,6 +12753,9 @@ class FlowVisionApp:
         self.worker_asset_project_var = tk.StringVar(value=project_values[active_project_idx] if project_values else "기본 프로젝트")
         self.worker_asset_count_var = tk.StringVar(value=str(self.cfg.get("asset_prompt_variant_count", "x1") or "x1").strip().lower() or "x1")
         self.worker_asset_quality_var = tk.StringVar(value=str(self.cfg.get("download_video_quality", "1080P") or "1080P").strip().upper() or "1080P")
+        self.worker_asset_browser_mode_var = tk.StringVar(
+            value=self._browser_launch_mode_label(self.cfg.get("browser_launch_mode", "managed"))
+        )
         self.worker_asset_output_dir_var = tk.StringVar(value=str(self.cfg.get("download_output_dir", "") or self._resolve_download_output_dir()))
         asset_download_wait = int(self.cfg.get("asset_combined_download_wait_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
         asset_next_wait = int(self.cfg.get("asset_combined_next_interval_seconds", self.cfg.get("interval_seconds", 180) or 180) or 180)
@@ -12663,6 +12834,16 @@ class FlowVisionApp:
             font=self.font_mono_small,
         ).grid(row=0, column=0, sticky="ew", padx=(0, 6), ipady=2)
         ttk.Button(asset_output_wrap, text="폴더 선택", command=lambda: self._pick_download_output_dir_for_var(self.worker_asset_output_dir_var)).grid(row=0, column=1, sticky="e")
+        tk.Label(asset_basic_box, text="브라우저 모드", font=self.font_small, bg=self.color_panel_soft, fg=self.color_text).grid(row=5, column=0, sticky="w", padx=12, pady=(0, 12))
+        self.combo_worker_asset_browser_mode = ttk.Combobox(
+            asset_basic_box,
+            textvariable=self.worker_asset_browser_mode_var,
+            state="readonly",
+            values=self._browser_launch_mode_choices(),
+            font=self.font_body,
+            width=14,
+        )
+        self.combo_worker_asset_browser_mode.grid(row=5, column=1, sticky="w", padx=(0, 12), pady=(0, 12))
 
         asset_number_box = tk.Frame(asset_content, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
         asset_number_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
@@ -12995,6 +13176,7 @@ class FlowVisionApp:
             self.worker_prompt_slot_var,
             self.worker_prompt_count_var,
             self.worker_prompt_quality_var,
+            self.worker_prompt_browser_mode_var,
             self.worker_prompt_output_dir_var,
             self.worker_prompt_download_wait_var,
             self.worker_prompt_next_interval_var,
@@ -13009,6 +13191,7 @@ class FlowVisionApp:
             self.worker_asset_project_var,
             self.worker_asset_count_var,
             self.worker_asset_quality_var,
+            self.worker_asset_browser_mode_var,
             self.worker_asset_output_dir_var,
             self.worker_asset_download_wait_var,
             self.worker_asset_next_interval_var,
@@ -13853,6 +14036,7 @@ class FlowVisionApp:
         self.worker_prompt_summary_var.set(
             f"프로젝트: {self.worker_project_var.get().strip() or '-'} | 파일: {slot_text} | 생성: {count_text} | 대상: {target} | "
             f"생성대기: {self.worker_prompt_download_wait_var.get().strip() or '-'}초+랜덤 | 다음대기: {self.worker_prompt_next_interval_var.get().strip() or '-'}초±랜덤 | "
+            f"브라우저: {self.worker_prompt_browser_mode_var.get().strip() or self._browser_launch_mode_label(self.cfg.get('browser_launch_mode', 'managed'))} | "
             f"다운로드: 이미지 {download_quality} | 저장: {folder_text or '(기본 폴더)'}"
         )
         self._refresh_worker_prompt_slot_info()
@@ -13946,7 +14130,17 @@ class FlowVisionApp:
         self.cfg["download_output_dir"] = str(self.worker_prompt_output_dir_var.get() or "").strip() if hasattr(self, "worker_prompt_output_dir_var") else str(self.cfg.get("download_output_dir", "") or "").strip()
         self.cfg["prompt_media_mode"] = "image"
         self.cfg["current_media_state"] = "image"
-        self.cfg["browser_channel"] = "chrome"
+        self.cfg["browser_launch_mode"] = self._normalize_browser_launch_mode(
+            BROWSER_LAUNCH_MODE_VALUES.get(
+                str(self.worker_prompt_browser_mode_var.get() or "").strip(),
+                self.cfg.get("browser_launch_mode", "managed"),
+            )
+        )
+        self.cfg["browser_channel"] = "msedge" if self.cfg["browser_launch_mode"] == "edge_human" else "chrome"
+        if hasattr(self, "browser_channel_var"):
+            self.browser_channel_var.set(self.cfg["browser_channel"])
+        if hasattr(self, "browser_launch_mode_var"):
+            self.browser_launch_mode_var.set(self._browser_launch_mode_label(self.cfg["browser_launch_mode"]))
         if hasattr(self, "download_image_quality_var"):
             try:
                 self.download_image_quality_var.set(self.cfg["download_image_quality"])
@@ -13994,7 +14188,8 @@ class FlowVisionApp:
         self.worker_asset_summary_var.set(
             f"프로젝트: {self.worker_asset_project_var.get().strip() or '-'} | 생성: {self.worker_asset_count_var.get().strip() or 'x1'} | 대상: {target} | "
             f"생성대기: {self.worker_asset_download_wait_var.get().strip() or '-'}초+랜덤 | 다음대기: {self.worker_asset_next_interval_var.get().strip() or '-'}초±랜덤 | "
-            f"정렬: {self.worker_asset_sort_order_var.get().strip() or '오래된 순'} | 프롬프트: {prompt_file_text} | 다운로드: 영상 {download_quality}"
+            f"정렬: {self.worker_asset_sort_order_var.get().strip() or '오래된 순'} | 브라우저: {self.worker_asset_browser_mode_var.get().strip() or self._browser_launch_mode_label(self.cfg.get('browser_launch_mode', 'managed'))} | "
+            f"프롬프트: {prompt_file_text} | 다운로드: 영상 {download_quality}"
             f"{' + 실패시 이미지 폴백' if bool(self.worker_asset_fallback_image_var.get()) else ''} | 저장: {folder_text or '(기본 폴더)'}"
         )
         self._refresh_worker_preview_progress()
@@ -14084,7 +14279,17 @@ class FlowVisionApp:
         self.cfg["download_output_dir"] = str(self.worker_asset_output_dir_var.get() or "").strip() if hasattr(self, "worker_asset_output_dir_var") else str(self.cfg.get("download_output_dir", "") or "").strip()
         self.cfg["asset_prompt_media_mode"] = "video"
         self.cfg["current_media_state"] = "video"
-        self.cfg["browser_channel"] = "chrome"
+        self.cfg["browser_launch_mode"] = self._normalize_browser_launch_mode(
+            BROWSER_LAUNCH_MODE_VALUES.get(
+                str(self.worker_asset_browser_mode_var.get() or "").strip(),
+                self.cfg.get("browser_launch_mode", "managed"),
+            )
+        )
+        self.cfg["browser_channel"] = "msedge" if self.cfg["browser_launch_mode"] == "edge_human" else "chrome"
+        if hasattr(self, "browser_channel_var"):
+            self.browser_channel_var.set(self.cfg["browser_channel"])
+        if hasattr(self, "browser_launch_mode_var"):
+            self.browser_launch_mode_var.set(self._browser_launch_mode_label(self.cfg["browser_launch_mode"]))
         if hasattr(self, "download_video_quality_var"):
             try:
                 self.download_video_quality_var.set(self.cfg["download_video_quality"])
@@ -14245,7 +14450,8 @@ class FlowVisionApp:
         self.cfg["download_number_mode_enabled"] = True
         self.cfg["download_output_dir"] = output_dir
         self.cfg["current_media_state"] = "image" if download_mode == "image" else "video"
-        self.cfg["browser_channel"] = "chrome"
+        self.cfg["browser_launch_mode"] = self._normalize_browser_launch_mode(self.cfg.get("browser_launch_mode", "managed"))
+        self.cfg["browser_channel"] = "msedge" if self.cfg["browser_launch_mode"] == "edge_human" else self.cfg.get("browser_channel", "chrome")
         if download_mode == "image":
             self.cfg["download_image_quality"] = quality
         else:
@@ -14569,7 +14775,10 @@ class FlowVisionApp:
         worker_cfg["worker_mode"] = kind
         worker_cfg["worker_name"] = worker_name
         worker_cfg["browser_profile_dir"] = browser_profile_name
-        worker_cfg["browser_channel"] = "chrome"
+        worker_cfg["browser_channel"] = str(worker_cfg.get("browser_channel", self.cfg.get("browser_channel", "chrome")) or "chrome").strip() or "chrome"
+        worker_cfg["browser_launch_mode"] = self._normalize_browser_launch_mode(
+            worker_cfg.get("browser_launch_mode", self.cfg.get("browser_launch_mode", "managed"))
+        )
         profiles = worker_cfg.get("project_profiles", []) or []
         try:
             project_index = int(project_index)
@@ -15991,6 +16200,12 @@ class FlowVisionApp:
         self.cfg["new_project_selector"] = self.new_project_selector_var.get().strip() if hasattr(self, "new_project_selector_var") else self.cfg.get("new_project_selector", "")
         self.cfg["browser_headless"] = self.browser_headless_var.get() if hasattr(self, "browser_headless_var") else self.cfg.get("browser_headless", False)
         self.cfg["browser_channel"] = self.browser_channel_var.get().strip() if hasattr(self, "browser_channel_var") else self.cfg.get("browser_channel", "chrome")
+        self.cfg["browser_launch_mode"] = self._normalize_browser_launch_mode(
+            BROWSER_LAUNCH_MODE_VALUES.get(
+                str(self.browser_launch_mode_var.get() or "").strip() if hasattr(self, "browser_launch_mode_var") else "",
+                self.cfg.get("browser_launch_mode", "managed"),
+            )
+        )
         self._refresh_browser_profile_ui()
         self.cfg["browser_window_scale_percent"] = self._clamp_percent(self.browser_window_scale_var.get() if hasattr(self, "browser_window_scale_var") else self.cfg.get("browser_window_scale_percent", 100), default=100, minimum=50, maximum=150)
         self.cfg["browser_zoom_percent"] = self._clamp_percent(self.browser_zoom_var.get() if hasattr(self, "browser_zoom_var") else self.cfg.get("browser_zoom_percent", 100), default=100, minimum=50, maximum=150)
@@ -18805,6 +19020,26 @@ class FlowVisionApp:
         self.cfg["periodic_refresh_wait_min_seconds"] = wait_min
         self.cfg["periodic_refresh_wait_max_seconds"] = wait_max
 
+    def _randomized_periodic_refresh_count(self):
+        self._normalize_periodic_refresh_config()
+        base_count = int(self.cfg.get("periodic_refresh_every_count", 2) or 2)
+        random_ratio = float(self.cfg.get("work_break_random_ratio", 0.30) or 0.30)
+        randomized = int(round(base_count * random.uniform(max(0.1, 1.0 - random_ratio), 1.0 + random_ratio)))
+        return max(1, min(999, randomized))
+
+    def _randomized_periodic_refresh_wait_seconds(self):
+        self._normalize_periodic_refresh_config()
+        wait_min = int(self.cfg.get("periodic_refresh_wait_min_seconds", 3) or 3)
+        wait_max = int(self.cfg.get("periodic_refresh_wait_max_seconds", 5) or 5)
+        base_wait = random.uniform(wait_min, wait_max)
+        random_ratio = float(self.cfg.get("work_break_random_ratio", 0.30) or 0.30)
+        randomized = base_wait * random.uniform(max(0.1, 1.0 - random_ratio), 1.0 + random_ratio)
+        return max(1.0, min(30.0, randomized))
+
+    def _reset_periodic_refresh_schedule(self):
+        self.pending_periodic_refresh = None
+        self.periodic_refresh_next_count = None
+
     def _maybe_periodic_refresh(self, completed_count, mode_label="작업"):
         self._normalize_periodic_refresh_config()
         if not bool(self.cfg.get("periodic_refresh_enabled", False)):
@@ -18817,13 +19052,19 @@ class FlowVisionApp:
             completed_count = 0
         if completed_count < 1:
             return
-        every_count = int(self.cfg.get("periodic_refresh_every_count", 2) or 2)
-        if every_count < 1 or (completed_count % every_count) != 0:
+        if self.periodic_refresh_next_count is None:
+            randomized_count = self._randomized_periodic_refresh_count()
+            self.periodic_refresh_next_count = randomized_count
+            self.log(f"🔄 다음 주기적 새로고침 목표: {self.periodic_refresh_next_count}개 (기준 {randomized_count}개)")
+        if completed_count < int(self.periodic_refresh_next_count or 0):
             return
         self.pending_periodic_refresh = {
             "completed_count": completed_count,
             "mode_label": str(mode_label or "작업"),
+            "scheduled_target": int(self.periodic_refresh_next_count or completed_count),
         }
+        next_randomized_count = self._randomized_periodic_refresh_count()
+        self.periodic_refresh_next_count = completed_count + next_randomized_count
         self.log(f"🔄 주기적 새로고침 예약 ({mode_label} {completed_count}개 처리 후, 다음 작업 직전 실행)")
 
     def _run_pending_periodic_refresh(self):
@@ -18836,9 +19077,7 @@ class FlowVisionApp:
         if not self.page or self.page.is_closed():
             return
         self._normalize_periodic_refresh_config()
-        wait_min = int(self.cfg.get("periodic_refresh_wait_min_seconds", 3) or 3)
-        wait_max = int(self.cfg.get("periodic_refresh_wait_max_seconds", 5) or 5)
-        wait_sec = random.uniform(wait_min, wait_max)
+        wait_sec = self._randomized_periodic_refresh_wait_seconds()
         completed_count = int(pending.get("completed_count", 0) or 0)
         mode_label = str(pending.get("mode_label", "작업") or "작업").strip()
         self.log(f"🔄 주기적 새로고침 실행 ({mode_label} {completed_count}개 처리 후, 다음 작업 직전)")
@@ -18870,6 +19109,7 @@ class FlowVisionApp:
         self.current_run_mode = mode
         self.asset_video_ready_for_run = False
         self.asset_search_sort_applied_order = ""
+        self._reset_periodic_refresh_schedule()
         if mode in ("prompt", "asset"):
             use_asset = (mode == "asset")
             self.cfg["asset_loop_enabled"] = use_asset
@@ -18908,6 +19148,7 @@ class FlowVisionApp:
             return
         run_mode = self.current_run_mode or ("asset" if self.cfg.get("asset_loop_enabled") else "prompt")
         is_download_mode = (run_mode == "download")
+        self._reset_periodic_refresh_schedule()
         # 시작 직전 UI 최신값을 cfg에 먼저 반영해야
         # 다운로드 개별 번호/시작끝 범위가 바로 실행 대상에 들어간다.
         if self.worker_mode in ("prompt", "asset", "download"):
