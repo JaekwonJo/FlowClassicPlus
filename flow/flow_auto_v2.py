@@ -103,6 +103,8 @@ DEFAULT_CONFIG = {
     "browser_headless": False,
     "browser_channel": "chrome",
     "browser_launch_mode": "managed",
+    "prompt_worker_settings_collapsed": False,
+    "asset_worker_settings_collapsed": False,
     "browser_profile_dir": "flow_human_profile_pw",
     "input_area": None,  # 구버전 호환용(미사용)
     "submit_area": None,  # 구버전 호환용(미사용)
@@ -12541,9 +12543,11 @@ class FlowVisionApp:
         self.worker_prompt_range_end_var = tk.StringVar(value=defaults["end"])
         self.worker_prompt_manual_var = tk.StringVar(value=defaults["manual"])
         self.worker_prompt_summary_var = tk.StringVar()
+        self.worker_prompt_settings_toggle_var = tk.StringVar()
 
         content = tk.Frame(self.prompt_worker_simple, bg=self.color_card)
         content.pack(fill="x")
+        self.prompt_worker_content = content
         content.grid_columnconfigure(0, weight=1, uniform="prompt_block")
         content.grid_columnconfigure(1, weight=1, uniform="prompt_block")
 
@@ -12727,6 +12731,12 @@ class FlowVisionApp:
         self.btn_worker_prompt_pause.pack(side="left", padx=(6, 0))
         self.btn_worker_prompt_resume = ttk.Button(action_row, text="▶ 재개", command=self.on_resume, state="disabled")
         self.btn_worker_prompt_resume.pack(side="left", padx=(6, 0))
+        self.btn_worker_prompt_toggle = ttk.Button(
+            action_row,
+            textvariable=self.worker_prompt_settings_toggle_var,
+            command=lambda: self._toggle_worker_settings_panel("prompt"),
+        )
+        self.btn_worker_prompt_toggle.pack(side="left", padx=(8, 0))
         ttk.Button(action_row, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(8, 0))
         ttk.Button(action_row, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         ttk.Button(action_row, text="💾 저장", command=lambda: self._save_active_worker_compact_options(manual=True)).pack(side="left", padx=(6, 0))
@@ -12770,9 +12780,11 @@ class FlowVisionApp:
         self.worker_asset_use_prompt_file_var = tk.BooleanVar(value=bool(self.cfg.get("asset_use_prompt_slot", False)))
         self.worker_asset_prompt_file_var = tk.StringVar(value=str(self.cfg.get("asset_prompt_file", "") or "").strip())
         self.worker_asset_summary_var = tk.StringVar()
+        self.worker_asset_settings_toggle_var = tk.StringVar()
 
         asset_content = tk.Frame(self.asset_worker_simple, bg=self.color_card)
         asset_content.pack(fill="x")
+        self.asset_worker_content = asset_content
         asset_content.grid_columnconfigure(0, weight=1, uniform="asset_block")
         asset_content.grid_columnconfigure(1, weight=1, uniform="asset_block")
 
@@ -12979,6 +12991,12 @@ class FlowVisionApp:
         self.btn_worker_asset_pause.pack(side="left", padx=(6, 0))
         self.btn_worker_asset_resume = ttk.Button(asset_action_row, text="▶ 재개", command=self.on_resume, state="disabled")
         self.btn_worker_asset_resume.pack(side="left", padx=(6, 0))
+        self.btn_worker_asset_toggle = ttk.Button(
+            asset_action_row,
+            textvariable=self.worker_asset_settings_toggle_var,
+            command=lambda: self._toggle_worker_settings_panel("asset"),
+        )
+        self.btn_worker_asset_toggle.pack(side="left", padx=(8, 0))
         ttk.Button(asset_action_row, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(8, 0))
         ttk.Button(asset_action_row, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         ttk.Button(asset_action_row, text="💾 저장", command=lambda: self._save_active_worker_compact_options(manual=True)).pack(side="left", padx=(6, 0))
@@ -13226,6 +13244,8 @@ class FlowVisionApp:
         self._refresh_download_worker_quality_options()
         self._refresh_download_worker_compact_summary()
         self._refresh_worker_queue_panel()
+        self._set_worker_settings_collapsed("prompt", self._worker_settings_collapsed("prompt"), persist=False)
+        self._set_worker_settings_collapsed("asset", self._worker_settings_collapsed("asset"), persist=False)
         if self.worker_mode in ("prompt", "asset", "download"):
             try:
                 self.worker_compact_head.pack_forget()
@@ -13280,6 +13300,58 @@ class FlowVisionApp:
                     getattr(self, btn_name).config(state=stop_state)
                 except Exception:
                     pass
+
+    def _worker_settings_collapsed_key(self, kind):
+        return {
+            "prompt": "prompt_worker_settings_collapsed",
+            "asset": "asset_worker_settings_collapsed",
+        }.get(str(kind or "").strip().lower(), "")
+
+    def _worker_settings_collapsed(self, kind):
+        key = self._worker_settings_collapsed_key(kind)
+        if not key:
+            return False
+        return bool(self.cfg.get(key, False))
+
+    def _set_worker_settings_collapsed(self, kind, collapsed, persist=True):
+        kind = str(kind or "").strip().lower()
+        collapsed = bool(collapsed)
+        key = self._worker_settings_collapsed_key(kind)
+        if key:
+            self.cfg[key] = collapsed
+
+        if kind == "prompt":
+            content = getattr(self, "prompt_worker_content", None)
+            toggle_var = getattr(self, "worker_prompt_settings_toggle_var", None)
+        elif kind == "asset":
+            content = getattr(self, "asset_worker_content", None)
+            toggle_var = getattr(self, "worker_asset_settings_toggle_var", None)
+        else:
+            content = None
+            toggle_var = None
+
+        if toggle_var is not None:
+            toggle_var.set("⚙ 설정 펼치기" if collapsed else "⚙ 설정 접기")
+
+        if content is not None:
+            try:
+                if collapsed:
+                    if content.winfo_manager():
+                        content.pack_forget()
+                else:
+                    if not content.winfo_manager():
+                        content.pack(fill="x", before=getattr(self, f"{kind}_worker_summary_box", None))
+            except Exception:
+                pass
+
+        if persist:
+            try:
+                self.save_config()
+            except Exception:
+                pass
+
+    def _toggle_worker_settings_panel(self, kind):
+        self._set_worker_settings_collapsed(kind, not self._worker_settings_collapsed(kind), persist=True)
 
     def _build_worker_queue_panel(self, parent, kind):
         panel = tk.Frame(parent, bg=self.color_panel_soft, highlightbackground=self.color_accent, highlightthickness=1)
@@ -14170,6 +14242,7 @@ class FlowVisionApp:
     def _start_prompt_worker_from_compact(self):
         if not self._apply_prompt_worker_compact_to_cfg(show_errors=True):
             return
+        self._set_worker_settings_collapsed("prompt", True, persist=True)
         self.on_start_prompt()
 
     def _refresh_asset_worker_compact_summary(self, *_args):
@@ -14332,6 +14405,7 @@ class FlowVisionApp:
     def _start_asset_worker_from_compact(self):
         if not self._apply_asset_worker_compact_to_cfg(show_errors=True):
             return
+        self._set_worker_settings_collapsed("asset", True, persist=True)
         self.on_start_asset()
 
     def _refresh_download_worker_quality_options(self, *_args):
