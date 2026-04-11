@@ -3022,26 +3022,46 @@ class FlowVisionApp:
                     source_tag = self._normalize_reference_asset_tag(prompt_label_match.group(1))
                     prompt_text = chunk.strip()
                 else:
-                    lines = chunk.splitlines()
-                    if lines:
-                        first_line = str(lines[0] or "").strip()
-                        first_match = re.match(
-                            rf"^\s*({re.escape(prefix)}\s*0*[1-9][0-9]*)\s*$",
-                            first_line,
-                            re.IGNORECASE,
-                        )
-                        if first_match:
-                            source_tag = self._normalize_reference_asset_tag(first_match.group(1))
-                            prompt_text = "\n".join(lines[1:]).strip()
-                        else:
-                            first_prompt_match = re.match(
-                                rf"^\s*({re.escape(prefix)}\s*0*[1-9][0-9]*)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$",
+                    number_prompt_match = re.match(
+                        r"^\s*0*([1-9][0-9]*)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$",
+                        chunk,
+                        re.IGNORECASE | re.DOTALL,
+                    )
+                    if number_prompt_match:
+                        source_no = int(number_prompt_match.group(1))
+                        source_tag = f"{prefix}{source_no:03d}"
+                        prompt_text = chunk.strip()
+                    else:
+                        lines = chunk.splitlines()
+                        if lines:
+                            first_line = str(lines[0] or "").strip()
+                            first_match = re.match(
+                                rf"^\s*({re.escape(prefix)}\s*0*[1-9][0-9]*)\s*$",
                                 first_line,
                                 re.IGNORECASE,
                             )
-                            if first_prompt_match:
-                                source_tag = self._normalize_reference_asset_tag(first_prompt_match.group(1))
-                                prompt_text = chunk.strip()
+                            if first_match:
+                                source_tag = self._normalize_reference_asset_tag(first_match.group(1))
+                                prompt_text = "\n".join(lines[1:]).strip()
+                            else:
+                                first_prompt_match = re.match(
+                                    rf"^\s*({re.escape(prefix)}\s*0*[1-9][0-9]*)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$",
+                                    first_line,
+                                    re.IGNORECASE,
+                                )
+                                if first_prompt_match:
+                                    source_tag = self._normalize_reference_asset_tag(first_prompt_match.group(1))
+                                    prompt_text = chunk.strip()
+                                else:
+                                    first_number_prompt_match = re.match(
+                                        r"^\s*0*([1-9][0-9]*)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$",
+                                        first_line,
+                                        re.IGNORECASE,
+                                    )
+                                    if first_number_prompt_match:
+                                        source_no = int(first_number_prompt_match.group(1))
+                                        source_tag = f"{prefix}{source_no:03d}"
+                                        prompt_text = chunk.strip()
 
             if source_tag:
                 num_match = re.match(r"^[A-Z]+\s*0*([1-9][0-9]*)$", source_tag, re.IGNORECASE)
