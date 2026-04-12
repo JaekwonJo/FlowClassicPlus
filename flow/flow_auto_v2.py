@@ -8737,7 +8737,7 @@ class FlowVisionApp:
 
     def _split_prompt_inline_reference_parts(self, prompt_text):
         text = str(prompt_text or "")
-        pattern = re.compile(r"@(S?\d{3,4})\b", re.IGNORECASE)
+        pattern = re.compile(r"@(S?\d{3,4})(?!\d)", re.IGNORECASE)
         parts = []
         cursor = 0
         for match in pattern.finditer(text):
@@ -20091,7 +20091,7 @@ class FlowVisionApp:
             if len(typed_text.strip()) < max(4, min(24, len(prompt.strip()) // 6)):
                 raise RuntimeError("프롬프트 입력이 실제 입력창에 반영되지 않았습니다.")
 
-            has_inline_prompt_refs = bool(re.search(r"@(S?\d{3,4})\b", str(prompt or ""), re.IGNORECASE))
+            has_inline_prompt_refs = bool(re.search(r"@(S?\d{3,4})(?!\d)", str(prompt or ""), re.IGNORECASE))
             self.update_status_label("✅ 입력 완료!", self.color_success)
             if has_inline_prompt_refs:
                 self.log("ℹ️ inline 레퍼런스 프롬프트는 검토 대기를 생략합니다.")
