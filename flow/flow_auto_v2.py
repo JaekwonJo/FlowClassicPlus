@@ -3004,6 +3004,25 @@ class FlowVisionApp:
             source_tag = ""
             prompt_text = chunk.strip()
 
+            route_prompt_match = re.match(
+                r"^\s*([^:\n]+?)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$",
+                chunk,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if route_prompt_match:
+                route_info = self._parse_asset_scene_route_spec(route_prompt_match.group(1))
+                if route_info:
+                    source_no = int(route_info.get("start_no") or idx)
+                    source_tag = str(route_info.get("start_tag") or "").strip().upper()
+                    prompt_text = chunk.strip()
+                    entries.append({
+                        "source_no": source_no,
+                        "source_tag": source_tag,
+                        "prompt": prompt_text,
+                        "index": idx,
+                    })
+                    continue
+
             inline_match = re.match(
                 rf"^\s*({re.escape(prefix)}\s*0*[1-9][0-9]*)\s*::\s*(.*)\s*$",
                 chunk,
