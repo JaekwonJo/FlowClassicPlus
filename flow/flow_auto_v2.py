@@ -3671,7 +3671,7 @@ class FlowVisionApp:
         entries = self._parse_prompt_source_entries(self.cfg.get("prompts_separator", "|||").join(prompts))
         numbers = [entry.get("source_no") for entry in entries if entry.get("source_no")]
         if numbers:
-            return f"{file_name} | 총 {len(entries)}개 | {min(numbers)}~{max(numbers)}"
+            return f"{file_name} | 총 {len(entries)}개 | {self._format_prompt_slot_number_list(numbers)}"
         return f"{file_name} | 총 {len(prompts)}개 | 1~{len(prompts)}"
 
     def _asset_prompt_slot_data(self):
@@ -14760,6 +14760,20 @@ class FlowVisionApp:
             numbers.append(value)
         return numbers
 
+    def _format_prompt_slot_number_list(self, numbers):
+        formatted = []
+        seen = set()
+        for value in numbers or []:
+            try:
+                num = int(value)
+            except Exception:
+                continue
+            if num < 1 or num in seen:
+                continue
+            seen.add(num)
+            formatted.append(f"{num:03d}")
+        return ",".join(formatted) if formatted else "-"
+
     def _prompt_worker_selection_defaults(self, slot_idx):
         numbers = self._prompt_slot_numbers_for_index(slot_idx)
         start_value = str(numbers[0] if numbers else 1)
@@ -15149,7 +15163,7 @@ class FlowVisionApp:
                     selected_idx = active_slot_idx
                 numbers = self._prompt_slot_numbers_for_index(selected_idx)
                 if numbers:
-                    base = f"이 파일 번호: {numbers[0]} ~ {numbers[-1]} | 총 {len(numbers)}개"
+                    base = f"이 파일 번호: {self._format_prompt_slot_number_list(numbers)} | 총 {len(numbers)}개"
                 else:
                     base = "이 파일 번호: 아직 읽지 못했음"
                 mode = number_mode_var.get()
