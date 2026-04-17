@@ -773,6 +773,10 @@ class FlowVisionApp:
         self.style.map("ActionCompact.TButton", background=[('active', '#1B78D0'), ('disabled', '#5A6982')])
         self.style.configure("ControlCompact.TButton", background="#294162", foreground=self.color_text, borderwidth=1, font=self.font_body_bold, padding=4)
         self.style.map("ControlCompact.TButton", background=[('active', '#37557D')], foreground=[('active', self.color_text)])
+        self.style.configure("WorkerStart.TButton", background="#2FB86F", foreground="white", borderwidth=1, font=(self.font_ui_family, 13, "bold"), padding=7)
+        self.style.map("WorkerStart.TButton", background=[('active', '#239457'), ('disabled', '#5A6982')], foreground=[('disabled', '#DDE7F5')])
+        self.style.configure("WorkerToggle.TButton", background="#F2A93B", foreground="#1C1406", borderwidth=1, font=(self.font_ui_family, 12, "bold"), padding=6)
+        self.style.map("WorkerToggle.TButton", background=[('active', '#D68D1B'), ('disabled', '#7B6A48')], foreground=[('active', '#120E04'), ('disabled', '#F3E9D1')])
 
         self._ensure_prompt_slots()
         self._ensure_project_profiles()
@@ -886,6 +890,8 @@ class FlowVisionApp:
         self.style.configure("Action.TButton", background=self.color_accent, foreground="white", font=(self.font_ui_family, action_size, "bold"), padding=max(8, int(10 * scale)))
         self.style.configure("ActionCompact.TButton", background=self.color_accent, foreground="white", font=(self.font_ui_family, max(11, action_size - 2), "bold"), padding=max(5, int(6 * scale)))
         self.style.configure("ControlCompact.TButton", background="#294162", foreground=self.color_text, borderwidth=1, font=(self.font_ui_family, max(10, self._font_px("body") - 1), "bold"), padding=max(3, int(4 * scale)))
+        self.style.configure("WorkerStart.TButton", background="#2FB86F", foreground="white", borderwidth=1, font=(self.font_ui_family, max(11, action_size - 2), "bold"), padding=max(6, int(7 * scale)))
+        self.style.configure("WorkerToggle.TButton", background="#F2A93B", foreground="#1C1406", borderwidth=1, font=(self.font_ui_family, max(10, self._font_px("body")), "bold"), padding=max(5, int(6 * scale)))
 
     def _display_mode_labels(self):
         return {
@@ -12774,13 +12780,19 @@ class FlowVisionApp:
             action_row,
             textvariable=self.worker_prompt_settings_toggle_var,
             command=lambda: self._toggle_worker_settings_panel("prompt"),
+            style="WorkerToggle.TButton",
         )
         self.btn_worker_prompt_toggle.pack(side="left", padx=(8, 0))
         ttk.Button(action_row, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(8, 0))
         ttk.Button(action_row, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         ttk.Button(action_row, text="💾 저장", command=lambda: self._save_active_worker_compact_options(manual=True)).pack(side="left", padx=(6, 0))
         ttk.Button(action_row, text="🤖 작업봇 창 열기", command=self._open_prompt_worker_bot_from_compact).pack(side="right")
-        self.btn_worker_prompt_start = ttk.Button(action_row, text="▶ 이미지 생성+다운로드 시작", command=self._start_prompt_worker_from_compact)
+        self.btn_worker_prompt_start = ttk.Button(
+            action_row,
+            text="▶ 이미지 생성+다운로드 시작",
+            command=self._start_prompt_worker_from_compact,
+            style="WorkerStart.TButton",
+        )
         self.btn_worker_prompt_start.pack(side="right", padx=(0, 8))
 
         self.lbl_worker_prompt_help = tk.Label(
@@ -13034,13 +13046,19 @@ class FlowVisionApp:
             asset_action_row,
             textvariable=self.worker_asset_settings_toggle_var,
             command=lambda: self._toggle_worker_settings_panel("asset"),
+            style="WorkerToggle.TButton",
         )
         self.btn_worker_asset_toggle.pack(side="left", padx=(8, 0))
         ttk.Button(asset_action_row, text="새 프로필", command=self.on_create_new_browser_profile).pack(side="left", padx=(8, 0))
         ttk.Button(asset_action_row, text="이름 변경", command=self.on_rename_browser_profile).pack(side="left", padx=(6, 0))
         ttk.Button(asset_action_row, text="💾 저장", command=lambda: self._save_active_worker_compact_options(manual=True)).pack(side="left", padx=(6, 0))
         ttk.Button(asset_action_row, text="🤖 작업봇 창 열기", command=self._open_asset_worker_bot_from_compact).pack(side="right")
-        self.btn_worker_asset_start = ttk.Button(asset_action_row, text="▶ S생성+다운로드 시작", command=self._start_asset_worker_from_compact)
+        self.btn_worker_asset_start = ttk.Button(
+            asset_action_row,
+            text="▶ S생성+다운로드 시작",
+            command=self._start_asset_worker_from_compact,
+            style="WorkerStart.TButton",
+        )
         self.btn_worker_asset_start.pack(side="right", padx=(0, 8))
 
         self.lbl_worker_asset_help = tk.Label(
