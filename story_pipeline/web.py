@@ -46,11 +46,17 @@ class GeminiWebRunner:
         profile_dir: Path,
         log: Callable[[str], None],
         wait_timeout_ms: int = 300000,
+        send_wait_seconds: float = 2.0,
+        poll_interval_seconds: float = 2.0,
+        stable_rounds_required: int = 2,
     ):
         self.start_url = start_url
         self.profile_dir = profile_dir
         self.log = log
         self.wait_timeout_ms = wait_timeout_ms
+        self.send_wait_seconds = max(0.0, float(send_wait_seconds))
+        self.poll_interval_seconds = max(0.5, float(poll_interval_seconds))
+        self.stable_rounds_required = max(1, int(stable_rounds_required))
         self.playwright = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
@@ -214,12 +220,19 @@ class GeminiWebRunner:
         self.log(f"📨 Gemini 전송 시작 | {step_label or '-'}")
         self._set_editor_text(prompt)
         self._submit()
+        self.log(
+            "⏱ 응답 대기 설정 | 입력후 "
+            f"{self.send_wait_seconds:.1f}초 | 확인간격 {self.poll_interval_seconds:.1f}초 | "
+            f"안정 {self.stable_rounds_required}회 | 최대 {self.wait_timeout_ms / 1000.0:.1f}초"
+        )
         result = self._wait_for_new_response(baseline)
         self.log(f"📥 Gemini 응답 확보 | {step_label or '-'}")
         return result
 
     def _wait_for_new_response(self, baseline: str) -> str:
         deadline = time.time() + (self.wait_timeout_ms / 1000.0)
+        if self.send_wait_seconds > 0:
+            time.sleep(self.send_wait_seconds)
         stable_count = 0
         last_text = ""
         while time.time() < deadline:
@@ -230,7 +243,7 @@ class GeminiWebRunner:
                 else:
                     stable_count = 0
                     last_text = current
-                if stable_count >= 2:
+                if stable_count >= self.stable_rounds_required:
                     return current
-            time.sleep(2.0)
+            time.sleep(self.poll_interval_seconds)
         raise RuntimeError("Gemini 응답 대기 시간이 초과되었습니다.")

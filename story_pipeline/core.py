@@ -65,6 +65,10 @@ class PipelineConfig:
     end_scene: int = 15
     batch_size: int = 15
     micro_batch_size: int = 5
+    send_wait_seconds: float = 2.0
+    poll_interval_seconds: float = 2.0
+    stable_rounds_required: int = 2
+    max_wait_seconds: float = 300.0
     reset_chat_each_batch: bool = True
     open_notepad_live: bool = True
     manual_is_baked_into_gem: bool = True

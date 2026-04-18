@@ -1,4 +1,4 @@
 @echo off
 cd /d "%~dp0"
-start "" wscript.exe //nologo "%~dp0\6_스토리_프롬프트_파이프라인_실행.vbs"
+start "" wscript.exe //nologo "%~dp0story_prompt_pipeline_run.vbs"
 exit /b
