@@ -26,7 +26,7 @@ class StoryPromptPipelineApp:
     def __init__(self, instance_name: str = "story_worker1") -> None:
         self.instance_name = sanitize_instance_name(instance_name)
         self.root = tk.Tk()
-        self.root.title(f"똑똑즈 스토리 프롬프트 파이프라인 - {self.instance_name}")
+        self.root.title(f"똑똑즈 자동화 파이프라인 - ttz_worker ({self.instance_name})")
         self.root.geometry("1120x860")
         self.root.configure(bg="#10233D")
 
@@ -266,7 +266,9 @@ class StoryPromptPipelineApp:
             pipeline = StoryPipeline(cfg=self.cfg, runner=self.runner, log=self.log, stop_event=self.stop_event)
             paths = pipeline.run()
             self.log(f"📁 세션 폴더: {paths.session_root}")
-            self.log(f"📝 실시간 누적 파일: {paths.final_live_txt}")
+            self.log(f"📝 통합 누적 파일: {paths.final_live_txt}")
+            self.log(f"🖼 이미지 전용 파일: {paths.final_image_txt}")
+            self.log(f"🎬 비디오 전용 파일: {paths.final_video_txt}")
         except Exception as exc:
             self.log(f"❌ 자동화 실패: {exc}")
             self.log(traceback.format_exc().strip())

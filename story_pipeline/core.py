@@ -109,6 +109,8 @@ class BatchWindow:
 class SessionPaths:
     session_root: Path
     final_live_txt: Path
+    final_image_txt: Path
+    final_video_txt: Path
     manifest_json: Path
     raw_dir: Path
     reports_dir: Path
@@ -125,9 +127,19 @@ class LiveOutputWriter:
         self.raw_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         self.final_live_txt = self.session_root / f"validated_prompts_{scene_range_label}.txt"
+        self.final_image_txt = self.session_root / f"validated_image_prompts_{scene_range_label}.txt"
+        self.final_video_txt = self.session_root / f"validated_video_prompts_{scene_range_label}.txt"
         self.manifest_json = self.session_root / "session_manifest.json"
         self.final_live_txt.write_text(
             f"# 검증 통과 프롬프트 누적 저장\n# 세션: {stamp}\n# 범위: {scene_range_label}\n\n",
+            encoding="utf-8",
+        )
+        self.final_image_txt.write_text(
+            f"# 검증 통과 이미지 프롬프트 누적 저장\n# 세션: {stamp}\n# 범위: {scene_range_label}\n\n",
+            encoding="utf-8",
+        )
+        self.final_video_txt.write_text(
+            f"# 검증 통과 비디오 프롬프트 누적 저장\n# 세션: {stamp}\n# 범위: {scene_range_label}\n\n",
             encoding="utf-8",
         )
         self._manifest: Dict[str, object] = {
@@ -135,6 +147,8 @@ class LiveOutputWriter:
             "scene_range": scene_range_label,
             "steps": [],
             "final_live_txt": str(self.final_live_txt),
+            "final_image_txt": str(self.final_image_txt),
+            "final_video_txt": str(self.final_video_txt),
         }
         self._flush_manifest()
 
@@ -165,12 +179,27 @@ class LiveOutputWriter:
             f.write(f"\n# ===== {title} =====\n")
             f.write(content.strip())
             f.write("\n")
+        blocks = PromptValidator().parse_blocks(content)
+        image_lines = [block.render() for block in blocks if block.prompt_type == "image"]
+        video_lines = [block.render() for block in blocks if block.prompt_type == "video"]
+        if image_lines:
+            with self.final_image_txt.open("a", encoding="utf-8") as f:
+                f.write(f"\n# ===== {title} =====\n")
+                f.write("\n\n".join(image_lines).strip())
+                f.write("\n")
+        if video_lines:
+            with self.final_video_txt.open("a", encoding="utf-8") as f:
+                f.write(f"\n# ===== {title} =====\n")
+                f.write("\n\n".join(video_lines).strip())
+                f.write("\n")
 
     @property
     def paths(self) -> SessionPaths:
         return SessionPaths(
             session_root=self.session_root,
             final_live_txt=self.final_live_txt,
+            final_image_txt=self.final_image_txt,
+            final_video_txt=self.final_video_txt,
             manifest_json=self.manifest_json,
             raw_dir=self.raw_dir,
             reports_dir=self.reports_dir,
