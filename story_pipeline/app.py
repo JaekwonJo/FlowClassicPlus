@@ -8,7 +8,7 @@ from queue import Empty, Queue
 from typing import Optional
 
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from .core import DEFAULT_LIBRARY_PATH, DEFAULT_MANUAL_PATH, DEFAULT_SCENE_PATH, DEFAULT_STEP_MACRO_PATH
@@ -27,8 +27,9 @@ class StoryPromptPipelineApp:
         self.instance_name = sanitize_instance_name(instance_name)
         self.root = tk.Tk()
         self.root.title(f"똑똑즈 자동화 파이프라인 - ttz_worker ({self.instance_name})")
-        self.root.geometry("1120x860")
-        self.root.configure(bg="#10233D")
+        self.root.geometry("860x620")
+        self.root.minsize(820, 580)
+        self.root.configure(bg="#ECE7DF")
 
         self.queue: Queue[str] = Queue()
         self.worker_thread: threading.Thread | None = None
@@ -75,6 +76,7 @@ class StoryPromptPipelineApp:
 
     def _read_ui_into_cfg(self) -> None:
         self.cfg.instance_name = self.instance_name
+        self.cfg.pipeline_mode = self.var_pipeline_mode.get().strip() or "manual_style"
         self.cfg.manual_path = self.var_manual_path.get().strip() or str(DEFAULT_MANUAL_PATH)
         self.cfg.step_macro_path = self.var_step_macro_path.get().strip() or str(DEFAULT_STEP_MACRO_PATH)
         self.cfg.library_path = self.var_library_path.get().strip() or str(DEFAULT_LIBRARY_PATH)
@@ -96,6 +98,7 @@ class StoryPromptPipelineApp:
         if path:
             variable.set(path)
             self._save_config()
+            self._refresh_compact_labels()
 
     def _browse_dir(self, variable: tk.StringVar, title: str) -> None:
         current = variable.get().strip()
@@ -103,6 +106,41 @@ class StoryPromptPipelineApp:
         if path:
             variable.set(path)
             self._save_config()
+            self._refresh_compact_labels()
+
+    def _edit_url(self) -> None:
+        current = self.var_gemini_url.get().strip()
+        value = simpledialog.askstring("Gem URL", "실제 Gem 채팅 URL을 넣어주세요.", initialvalue=current, parent=self.root)
+        if value:
+            self.var_gemini_url.set(value.strip())
+            self._save_config()
+            self._refresh_compact_labels()
+
+    def _short_text(self, raw: str, mode: str = "path") -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return "-"
+        if mode == "url":
+            text = text.replace("https://", "").replace("http://", "")
+            if len(text) > 42:
+                return text[:39] + "..."
+            return text
+        name = Path(text).name or text
+        if len(name) > 32:
+            return name[:29] + "..."
+        return name
+
+    def _refresh_compact_labels(self) -> None:
+        if hasattr(self, "lbl_step_macro_value"):
+            self.lbl_step_macro_value.config(text=self._short_text(self.var_step_macro_path.get()))
+        if hasattr(self, "lbl_scene_file_value"):
+            self.lbl_scene_file_value.config(text=self._short_text(self.var_scene_file_path.get()))
+        if hasattr(self, "lbl_url_value"):
+            self.lbl_url_value.config(text=self._short_text(self.var_gemini_url.get(), mode="url"))
+        if hasattr(self, "lbl_output_value"):
+            self.lbl_output_value.config(text=self._short_text(self.var_output_root.get()))
+        if hasattr(self, "lbl_worker_name"):
+            self.lbl_worker_name.config(text=f"ttz_worker | {self.instance_name}")
 
     def _build_ui(self) -> None:
         style = ttk.Style()
@@ -110,26 +148,21 @@ class StoryPromptPipelineApp:
             style.theme_use("clam")
         except Exception:
             pass
-        style.configure("TLabel", background="#10233D", foreground="#F5F7FB")
-        style.configure("TLabelframe", background="#132A47", foreground="#F5F7FB")
-        style.configure("TLabelframe.Label", background="#132A47", foreground="#F5F7FB")
-        style.configure("TButton", padding=6)
+        style.configure("TLabel", background="#ECE7DF", foreground="#23302B")
+        style.configure("TLabelframe", background="#F7F2EA", foreground="#23302B")
+        style.configure("TLabelframe.Label", background="#F7F2EA", foreground="#23302B")
+        style.configure("TButton", padding=6, font=("맑은 고딕", 10))
+        style.configure("Primary.TButton", padding=8, font=("맑은 고딕", 10, "bold"))
+        style.configure("Secondary.TButton", padding=7, font=("맑은 고딕", 10))
 
-        outer = tk.Frame(self.root, bg="#10233D")
+        outer = tk.Frame(self.root, bg="#ECE7DF")
         outer.pack(fill="both", expand=True, padx=12, pady=12)
-
-        top = tk.Frame(outer, bg="#10233D")
-        top.pack(fill="x")
-
-        left = tk.Frame(top, bg="#10233D")
-        left.pack(side="left", fill="both", expand=True)
-        right = tk.Frame(top, bg="#10233D")
-        right.pack(side="left", fill="y", padx=(12, 0))
 
         self.var_manual_path = tk.StringVar(value=self.cfg.manual_path)
         self.var_step_macro_path = tk.StringVar(value=self.cfg.step_macro_path)
         self.var_library_path = tk.StringVar(value=self.cfg.library_path)
         self.var_scene_file_path = tk.StringVar(value=self.cfg.scene_file_path)
+        self.var_pipeline_mode = tk.StringVar(value=self.cfg.pipeline_mode)
         self.var_gemini_url = tk.StringVar(value=self.cfg.gemini_url)
         self.var_browser_profile_dir = tk.StringVar(value=self.cfg.browser_profile_dir)
         self.var_output_root = tk.StringVar(value=self.cfg.output_root)
@@ -141,81 +174,74 @@ class StoryPromptPipelineApp:
         self.var_open_notepad = tk.BooleanVar(value=self.cfg.open_notepad_live)
         self.var_manual_baked = tk.BooleanVar(value=self.cfg.manual_is_baked_into_gem)
 
-        file_box = ttk.LabelFrame(left, text="기본 파일")
-        file_box.pack(fill="x", pady=(0, 10))
+        header = tk.Frame(outer, bg="#ECE7DF")
+        header.pack(fill="x", pady=(0, 10))
+        self.lbl_worker_name = tk.Label(header, text="", bg="#ECE7DF", fg="#1F6F5F", font=("맑은 고딕", 16, "bold"))
+        self.lbl_worker_name.pack(side="left")
+        tk.Label(header, text="manual_style", bg="#DDE9E5", fg="#1F6F5F", font=("맑은 고딕", 9, "bold"), padx=10, pady=4).pack(side="right")
 
-        def add_file_row(parent, row, label, variable, browse_title, directory=False):
-            tk.Label(parent, text=label, bg="#132A47", fg="#F5F7FB").grid(row=row, column=0, sticky="w", padx=10, pady=6)
-            entry = tk.Entry(parent, textvariable=variable, bg="#F4F7FB", fg="#111", insertbackground="#111")
-            entry.grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=6, ipady=3)
-            cmd = (lambda v=variable, t=browse_title: self._browse_dir(v, t)) if directory else (lambda v=variable, t=browse_title: self._browse_file(v, t))
-            ttk.Button(parent, text="선택", command=cmd).grid(row=row, column=2, padx=(0, 10), pady=6)
+        top_card = tk.Frame(outer, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1)
+        top_card.pack(fill="x", pady=(0, 10))
+        top_card.grid_columnconfigure(1, weight=1)
+
+        def compact_row(parent, row, title, value_attr, action_text, action_cmd):
+            tk.Label(parent, text=title, bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).grid(row=row, column=0, sticky="w", padx=12, pady=8)
+            label = tk.Label(parent, text="-", bg="#EFE8DD", fg="#1E2B28", anchor="w", padx=10, pady=8, font=("맑은 고딕", 10))
+            label.grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=8)
+            ttk.Button(parent, text=action_text, command=action_cmd, style="Secondary.TButton").grid(row=row, column=2, padx=(0, 12), pady=8)
+            setattr(self, value_attr, label)
+
+        compact_row(top_card, 0, "Step 매크로", "lbl_step_macro_value", "파일 선택", lambda: self._browse_file(self.var_step_macro_path, "Step 매크로 선택"))
+        compact_row(top_card, 1, "장면 분할", "lbl_scene_file_value", "파일 선택", lambda: self._browse_file(self.var_scene_file_path, "장면 분할 파일 선택"))
+        compact_row(top_card, 2, "Gem URL", "lbl_url_value", "URL 설정", self._edit_url)
+        compact_row(top_card, 3, "출력 폴더", "lbl_output_value", "폴더 선택", lambda: self._browse_dir(self.var_output_root, "출력 폴더 선택"))
+
+        middle = tk.Frame(outer, bg="#ECE7DF")
+        middle.pack(fill="x", pady=(0, 10))
+
+        left_card = tk.Frame(middle, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1)
+        left_card.pack(side="left", fill="both", expand=True)
+        right_card = tk.Frame(middle, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1)
+        right_card.pack(side="left", fill="y", padx=(10, 0))
+
+        tk.Label(left_card, text="작업 범위", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 6))
+        tk.Label(left_card, text="시작", bg="#F7F2EA", fg="#23302B").grid(row=1, column=0, sticky="w", padx=(12, 6), pady=6)
+        start_entry = tk.Entry(left_card, textvariable=self.var_start_scene, width=10, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        start_entry.grid(row=1, column=1, sticky="w", pady=6)
+        tk.Label(left_card, text="끝", bg="#F7F2EA", fg="#23302B").grid(row=1, column=2, sticky="w", padx=(18, 6), pady=6)
+        end_entry = tk.Entry(left_card, textvariable=self.var_end_scene, width=10, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        end_entry.grid(row=1, column=3, sticky="w", pady=6)
+
+        tk.Label(left_card, text="배치", bg="#F7F2EA", fg="#23302B").grid(row=2, column=0, sticky="w", padx=(12, 6), pady=6)
+        batch_entry = tk.Entry(left_card, textvariable=self.var_batch_size, width=10, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        batch_entry.grid(row=2, column=1, sticky="w", pady=6)
+        tk.Label(left_card, text="마이크로", bg="#F7F2EA", fg="#23302B").grid(row=2, column=2, sticky="w", padx=(18, 6), pady=6)
+        micro_entry = tk.Entry(left_card, textvariable=self.var_micro_batch_size, width=10, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        micro_entry.grid(row=2, column=3, sticky="w", pady=6)
+
+        for entry in (start_entry, end_entry, batch_entry, micro_entry):
             entry.bind("<FocusOut>", lambda _e: self._save_config())
 
-        file_box.columnconfigure(1, weight=1)
-        add_file_row(file_box, 0, "Gems 매뉴얼", self.var_manual_path, "Gems 매뉴얼 선택")
-        add_file_row(file_box, 1, "Step 매크로", self.var_step_macro_path, "Step 매크로 선택")
-        add_file_row(file_box, 2, "미장센 라이브러리", self.var_library_path, "미장센 라이브러리 선택")
-        add_file_row(file_box, 3, "장면 분할 파일", self.var_scene_file_path, "장면 분할 파일 선택")
+        opt_wrap = tk.Frame(left_card, bg="#F7F2EA")
+        opt_wrap.grid(row=3, column=0, columnspan=4, sticky="ew", padx=12, pady=(8, 10))
+        ttk.Checkbutton(opt_wrap, text="새 채팅", variable=self.var_reset_chat, command=self._save_config).pack(side="left")
+        ttk.Checkbutton(opt_wrap, text="메모장 저장", variable=self.var_open_notepad, command=self._save_config).pack(side="left", padx=(16, 0))
 
-        run_box = ttk.LabelFrame(left, text="실행 설정")
-        run_box.pack(fill="x", pady=(0, 10))
-        run_box.columnconfigure(1, weight=1)
-        add_file_row(run_box, 0, "Gem URL", self.var_gemini_url, "Gem URL", directory=False)
-        add_file_row(run_box, 1, "브라우저 프로필 폴더", self.var_browser_profile_dir, "브라우저 프로필 폴더", directory=True)
-        add_file_row(run_box, 2, "출력 폴더", self.var_output_root, "출력 폴더", directory=True)
-
-        range_box = ttk.LabelFrame(left, text="범위 / 분할")
-        range_box.pack(fill="x", pady=(0, 10))
-        for idx in range(8):
-            range_box.columnconfigure(idx, weight=1 if idx % 2 == 1 else 0)
-
-        items = [
-            ("시작 번호", self.var_start_scene),
-            ("끝 번호", self.var_end_scene),
-            ("배치 크기", self.var_batch_size),
-            ("마이크로배치", self.var_micro_batch_size),
-        ]
-        for idx, (label, variable) in enumerate(items):
-            row = idx // 2
-            col = (idx % 2) * 4
-            tk.Label(range_box, text=label, bg="#132A47", fg="#F5F7FB").grid(row=row, column=col, sticky="w", padx=(10, 6), pady=8)
-            entry = tk.Entry(range_box, textvariable=variable, width=12, bg="#F4F7FB", fg="#111", insertbackground="#111")
-            entry.grid(row=row, column=col + 1, sticky="ew", padx=(0, 12), pady=8, ipady=3)
-            entry.bind("<FocusOut>", lambda _e: self._save_config())
-
-        opt_box = ttk.LabelFrame(left, text="자동화 옵션")
-        opt_box.pack(fill="x", pady=(0, 10))
-        ttk.Checkbutton(opt_box, text="배치마다 새 채팅 시도", variable=self.var_reset_chat, command=self._save_config).pack(anchor="w", padx=10, pady=(8, 4))
-        ttk.Checkbutton(opt_box, text="검증 통과 파일 메모장으로 열기", variable=self.var_open_notepad, command=self._save_config).pack(anchor="w", padx=10, pady=4)
-        ttk.Checkbutton(opt_box, text="Gem 안에 매뉴얼이 이미 들어 있음", variable=self.var_manual_baked, command=self._save_config).pack(anchor="w", padx=10, pady=(4, 8))
-
-        action_box = ttk.LabelFrame(right, text="실행")
-        action_box.pack(fill="x")
-        ttk.Button(action_box, text="🌐 브라우저만 열기", command=self.on_open_browser).pack(fill="x", padx=10, pady=(10, 6))
-        ttk.Button(action_box, text="▶ Step5~7 자동화 시작", command=self.on_start).pack(fill="x", padx=10, pady=6)
-        ttk.Button(action_box, text="⏹ 중지 요청", command=self.on_stop).pack(fill="x", padx=10, pady=6)
-        ttk.Button(action_box, text="📂 출력 폴더 열기", command=self.on_open_output_dir).pack(fill="x", padx=10, pady=(6, 10))
-
-        status_box = ttk.LabelFrame(right, text="설명")
-        status_box.pack(fill="x", pady=(10, 0))
-        help_text = (
-            f"현재 워커 이름: {self.instance_name}\n"
-            f"현재 워커 설정파일: {self._config_path()}\n\n"
-            "1. Step0~4는 지금처럼 직접 진행합니다.\n"
-            "2. Gem URL은 Step5~7을 돌릴 Gem 채팅 주소를 넣습니다.\n"
-            "3. 한 번 시작하면 Step5 -> Step6 -> Step7 -> 검증 통과분 즉시 저장으로 진행됩니다.\n"
-            "4. 최종 통과 프롬프트는 세션 폴더의 validated_prompts_*.txt 에 계속 누적됩니다.\n"
-            "5. 여러 워커를 동시에 돌릴 때는 워커 이름을 다르게 열어야 프로필이 안 꼬입니다."
-        )
-        tk.Label(status_box, text=help_text, justify="left", wraplength=290, bg="#132A47", fg="#D5E2F0").pack(fill="x", padx=10, pady=10)
+        btn_wrap = tk.Frame(right_card, bg="#F7F2EA")
+        btn_wrap.pack(fill="both", expand=True, padx=12, pady=12)
+        tk.Label(btn_wrap, text="실행", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).pack(anchor="w", pady=(0, 8))
+        tk.Button(btn_wrap, text="브라우저", command=self.on_open_browser, bg="#1F6F5F", fg="white", relief="flat", font=("맑은 고딕", 10, "bold"), padx=12, pady=10).pack(fill="x", pady=(0, 8))
+        tk.Button(btn_wrap, text="시작", command=self.on_start, bg="#C66A2B", fg="white", relief="flat", font=("맑은 고딕", 10, "bold"), padx=12, pady=10).pack(fill="x", pady=8)
+        tk.Button(btn_wrap, text="중지", command=self.on_stop, bg="#6F3B2A", fg="white", relief="flat", font=("맑은 고딕", 10, "bold"), padx=12, pady=10).pack(fill="x", pady=8)
+        tk.Button(btn_wrap, text="폴더", command=self.on_open_output_dir, bg="#5E7A74", fg="white", relief="flat", font=("맑은 고딕", 10, "bold"), padx=12, pady=10).pack(fill="x", pady=(8, 0))
 
         log_box = ttk.LabelFrame(outer, text="실행 로그")
         log_box.pack(fill="both", expand=True)
-        self.txt_log = ScrolledText(log_box, height=24, bg="#09111E", fg="#E7F0FF", insertbackground="#E7F0FF")
+        self.txt_log = ScrolledText(log_box, height=16, bg="#16211E", fg="#F6F3EA", insertbackground="#F6F3EA", relief="flat")
         self.txt_log.pack(fill="both", expand=True, padx=8, pady=8)
         self.txt_log.insert("end", "스토리 자동화 준비 완료\n")
         self.txt_log.configure(state="disabled")
+        self._refresh_compact_labels()
 
     def log(self, text: str) -> None:
         self.queue.put(text)

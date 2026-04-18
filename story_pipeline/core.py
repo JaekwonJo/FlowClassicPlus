@@ -53,6 +53,7 @@ class Scene:
 @dataclass
 class PipelineConfig:
     instance_name: str = "story_worker1"
+    pipeline_mode: str = "manual_style"
     manual_path: str = str(DEFAULT_MANUAL_PATH)
     step_macro_path: str = str(DEFAULT_STEP_MACRO_PATH)
     library_path: str = str(DEFAULT_LIBRARY_PATH)
@@ -304,6 +305,20 @@ class PromptComposer:
             f"{scene_chunk}\n"
         )
 
+    def build_manual_style_step6_prompt(self, micro_scenes: Sequence[Scene]) -> str:
+        section = self.source.step_sections[6]["body"]
+        scene_chunk = self._render_scene_chunk(micro_scenes)
+        return (
+            "[자동화 실행 모드]\n"
+            "- 현재 Gem 안에는 이미 매뉴얼과 지식 파일이 들어가 있다고 가정합니다.\n"
+            "- 지금부터는 사용자가 하던 방식 그대로 Step 6만 수행하세요.\n"
+            "- 아래 장면 묶음에 대한 이미지 프롬프트와 비디오 프롬프트를 작성하세요.\n\n"
+            "[Step 6 원문]\n"
+            f"{section}\n\n"
+            "[이번 장면 묶음]\n"
+            f"{scene_chunk}\n"
+        )
+
     def build_step6_prompt(self, batch: BatchWindow, micro_scenes: Sequence[Scene], step5_plan: str) -> str:
         section = self.source.step_sections[6]["body"]
         scene_chunk = self._render_scene_chunk(micro_scenes)
@@ -354,6 +369,10 @@ class PromptComposer:
             "[Step 6 초안]\n"
             f"{draft_text.strip()}\n"
         )
+
+    def build_manual_style_step7_prompt(self) -> str:
+        section = self.source.step_sections[7]["body"]
+        return section.strip()
 
     def build_repair_prompt(self, micro_scenes: Sequence[Scene], broken_text: str, errors: Sequence[str]) -> str:
         scene_chunk = self._render_scene_chunk(micro_scenes)
@@ -521,6 +540,7 @@ class StoryPipeline:
         self.runner.open_browser()
         self.log(f"🧠 스토리 자동화 세션 시작 | 범위 {scene_range_label}")
         self.log(f"📝 검증 통과 프롬프트는 계속 저장됩니다: {writer.final_live_txt}")
+        self.log(f"🎛️ 실행 모드: {self.cfg.pipeline_mode}")
 
         for batch in windows:
             self._check_stop()
@@ -529,19 +549,24 @@ class StoryPipeline:
                 self.runner.reset_conversation()
                 self.log("🧹 새 채팅 기준으로 배치 시작")
 
-            step5_prompt = self.composer.build_step5_prompt(batch)
-            step5_text = self.runner.send_prompt(step5_prompt, step_label=f"{batch.label}_step5")
-            writer.write_raw(f"{batch.label}_step5.txt", step5_text)
-            writer.append_manifest_step(
-                {"batch": batch.label, "step": 5, "raw_file": f"{batch.label}_step5.txt"}
-            )
+            step5_text = ""
+            if self.cfg.pipeline_mode == "step5_step7":
+                step5_prompt = self.composer.build_step5_prompt(batch)
+                step5_text = self.runner.send_prompt(step5_prompt, step_label=f"{batch.label}_step5")
+                writer.write_raw(f"{batch.label}_step5.txt", step5_text)
+                writer.append_manifest_step(
+                    {"batch": batch.label, "step": 5, "raw_file": f"{batch.label}_step5.txt"}
+                )
 
             for micro_index, micro_scenes in enumerate(batch.micro_batches, start=1):
                 self._check_stop()
                 micro_label = f"{micro_scenes[0].label}_{micro_scenes[-1].label}"
                 self.log(f"🎬 Step6 생성 시작 | {micro_label}")
 
-                step6_prompt = self.composer.build_step6_prompt(batch, micro_scenes, step5_text)
+                if self.cfg.pipeline_mode == "manual_style":
+                    step6_prompt = self.composer.build_manual_style_step6_prompt(micro_scenes)
+                else:
+                    step6_prompt = self.composer.build_step6_prompt(batch, micro_scenes, step5_text)
                 step6_text = self.runner.send_prompt(step6_prompt, step_label=f"{micro_label}_step6")
                 writer.write_raw(f"{micro_label}_step6_draft.txt", step6_text)
 
@@ -555,7 +580,10 @@ class StoryPipeline:
                 else:
                     self.log(f"⚠️ Step6 1차 형식 이슈 {len(draft_validation.errors)}개 | {micro_label}")
 
-                step7_prompt = self.composer.build_step7_prompt(micro_scenes, step6_text, draft_validation.errors)
+                if self.cfg.pipeline_mode == "manual_style":
+                    step7_prompt = self.composer.build_manual_style_step7_prompt()
+                else:
+                    step7_prompt = self.composer.build_step7_prompt(micro_scenes, step6_text, draft_validation.errors)
                 step7_text = self.runner.send_prompt(step7_prompt, step_label=f"{micro_label}_step7")
                 writer.write_raw(f"{micro_label}_step7_review.txt", step7_text)
 
