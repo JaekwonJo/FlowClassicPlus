@@ -29,9 +29,10 @@ def resolve_local_path(raw: str | Path) -> Path:
     text = str(raw or "").strip()
     if not text:
         return Path("")
-    if os.name == "nt" and re.match(r"^/mnt/[a-zA-Z]/", text):
-        drive = text[5].upper()
-        tail = text[7:].replace("/", "\\")
+    normalized = re.sub(r"/+", "/", text.replace("\\", "/"))
+    if os.name == "nt" and re.match(r"^/mnt/[a-zA-Z]/", normalized):
+        drive = normalized[5].upper()
+        tail = normalized[7:].replace("/", "\\")
         return Path(f"{drive}:\\{tail}")
     return Path(text)
 
@@ -80,6 +81,8 @@ class PipelineConfig:
     poll_interval_seconds: float = 2.0
     stable_rounds_required: int = 2
     max_wait_seconds: float = 300.0
+    human_typing_enabled: bool = True
+    typing_speed_level: int = 5
     reset_chat_each_batch: bool = True
     open_notepad_live: bool = True
     manual_is_baked_into_gem: bool = True

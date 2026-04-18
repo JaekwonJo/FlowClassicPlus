@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import time
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -49,6 +50,8 @@ class GeminiWebRunner:
         send_wait_seconds: float = 2.0,
         poll_interval_seconds: float = 2.0,
         stable_rounds_required: int = 2,
+        human_typing_enabled: bool = True,
+        typing_speed_level: int = 5,
     ):
         self.start_url = start_url
         self.profile_dir = profile_dir
@@ -57,6 +60,8 @@ class GeminiWebRunner:
         self.send_wait_seconds = max(0.0, float(send_wait_seconds))
         self.poll_interval_seconds = max(0.5, float(poll_interval_seconds))
         self.stable_rounds_required = max(1, int(stable_rounds_required))
+        self.human_typing_enabled = bool(human_typing_enabled)
+        self.typing_speed_level = max(1, min(20, int(typing_speed_level)))
         self.playwright = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
@@ -167,6 +172,40 @@ class GeminiWebRunner:
         texts.sort(key=len)
         return texts[-1]
 
+    def _human_type_text(self, editor, text: str, tag_name: str) -> None:
+        assert self.page is not None
+        speed = max(1, min(20, int(self.typing_speed_level)))
+        speed_factor = 1.0 / max(0.6, speed / 4.0)
+        for ch in str(text or ""):
+            try:
+                if ch == "\n":
+                    if tag_name == "textarea":
+                        editor.press("Shift+Enter")
+                    else:
+                        self.page.keyboard.press("Shift+Enter")
+                else:
+                    if tag_name == "textarea":
+                        editor.type(ch, delay=1)
+                    else:
+                        self.page.keyboard.type(ch, delay=1)
+            except Exception:
+                self.page.keyboard.insert_text(ch)
+
+            if ch in (" ", "\t"):
+                base_min, base_max = 0.010, 0.040
+            elif ch == "\n":
+                base_min, base_max = 0.080, 0.180
+            elif ch in (".", ",", "!", "?", ":", ";"):
+                base_min, base_max = 0.030, 0.090
+            else:
+                base_min, base_max = 0.018, 0.065
+
+            delay = random.uniform(base_min, base_max) * speed_factor
+            time.sleep(max(0.003, min(delay, 0.22)))
+
+        if self.human_typing_enabled and len(text) > 40:
+            time.sleep(random.uniform(0.08, 0.22))
+
     def _set_editor_text(self, text: str) -> None:
         assert self.page is not None
         editor = self._find_editor(timeout_ms=3000)
@@ -177,6 +216,23 @@ class GeminiWebRunner:
         except Exception:
             tag_name = ""
         editor.click()
+        if self.human_typing_enabled:
+            try:
+                if tag_name == "textarea":
+                    editor.fill("")
+                else:
+                    editor.evaluate(
+                        """(el) => {
+                            el.focus();
+                            el.innerHTML = "";
+                            el.dispatchEvent(new Event("input", {bubbles: true}));
+                        }"""
+                    )
+            except Exception:
+                pass
+            self.log(f"⌨️ 사람형 타이핑 입력 | 속도 x{self.typing_speed_level}")
+            self._human_type_text(editor, text, tag_name)
+            return
         if tag_name == "textarea":
             editor.fill(text)
             return

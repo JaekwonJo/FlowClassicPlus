@@ -96,6 +96,8 @@ class StoryPromptPipelineApp:
         self.cfg.poll_interval_seconds = float(self.var_poll_interval_seconds.get() or 2.0)
         self.cfg.stable_rounds_required = int(self.var_stable_rounds_required.get() or 2)
         self.cfg.max_wait_seconds = float(self.var_max_wait_seconds.get() or 300.0)
+        self.cfg.human_typing_enabled = bool(self.var_human_typing.get())
+        self.cfg.typing_speed_level = int(self.var_typing_speed_level.get() or 5)
         self.cfg.reset_chat_each_batch = bool(self.var_reset_chat.get())
         self.cfg.open_notepad_live = bool(self.var_open_notepad.get())
         self.cfg.manual_is_baked_into_gem = bool(self.var_manual_baked.get())
@@ -236,6 +238,8 @@ class StoryPromptPipelineApp:
         self.var_poll_interval_seconds = tk.StringVar(value=str(self.cfg.poll_interval_seconds))
         self.var_stable_rounds_required = tk.StringVar(value=str(self.cfg.stable_rounds_required))
         self.var_max_wait_seconds = tk.StringVar(value=str(self.cfg.max_wait_seconds))
+        self.var_human_typing = tk.BooleanVar(value=self.cfg.human_typing_enabled)
+        self.var_typing_speed_level = tk.StringVar(value=str(self.cfg.typing_speed_level))
         self.var_reset_chat = tk.BooleanVar(value=self.cfg.reset_chat_each_batch)
         self.var_open_notepad = tk.BooleanVar(value=self.cfg.open_notepad_live)
         self.var_manual_baked = tk.BooleanVar(value=self.cfg.manual_is_baked_into_gem)
@@ -303,13 +307,17 @@ class StoryPromptPipelineApp:
         tk.Label(left_card, text="최대 대기", bg="#F7F2EA", fg="#23302B").grid(row=3, column=2, sticky="w", padx=(14, 6), pady=4)
         max_wait_entry = tk.Entry(left_card, textvariable=self.var_max_wait_seconds, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         max_wait_entry.grid(row=3, column=3, sticky="w", pady=4)
+        tk.Label(left_card, text="타이핑 속도", bg="#F7F2EA", fg="#23302B").grid(row=3, column=4, sticky="w", padx=(16, 6), pady=4)
+        typing_speed_entry = tk.Entry(left_card, textvariable=self.var_typing_speed_level, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        typing_speed_entry.grid(row=3, column=5, sticky="w", pady=4)
 
-        for entry in (start_entry, end_entry, batch_entry, micro_entry, send_wait_entry, poll_entry, stable_entry, max_wait_entry):
+        for entry in (start_entry, end_entry, batch_entry, micro_entry, send_wait_entry, poll_entry, stable_entry, max_wait_entry, typing_speed_entry):
             entry.bind("<FocusOut>", lambda _e: self._save_config())
 
         opt_wrap = tk.Frame(left_card, bg="#F7F2EA")
         opt_wrap.grid(row=4, column=0, columnspan=6, sticky="ew", padx=12, pady=(6, 8))
-        self._make_toggle_button(opt_wrap, self.var_reset_chat, "새 채팅").pack(side="left")
+        self._make_toggle_button(opt_wrap, self.var_human_typing, "인간형 타이핑").pack(side="left")
+        self._make_toggle_button(opt_wrap, self.var_reset_chat, "새 채팅").pack(side="left", padx=(10, 0))
         self._make_toggle_button(opt_wrap, self.var_open_notepad, "메모장 저장").pack(side="left", padx=(10, 0))
 
         btn_wrap = tk.Frame(right_card, bg="#F7F2EA")
@@ -373,6 +381,8 @@ class StoryPromptPipelineApp:
             send_wait_seconds=self.cfg.send_wait_seconds,
             poll_interval_seconds=self.cfg.poll_interval_seconds,
             stable_rounds_required=self.cfg.stable_rounds_required,
+            human_typing_enabled=self.cfg.human_typing_enabled,
+            typing_speed_level=self.cfg.typing_speed_level,
         )
 
     def _sync_runner_config(self) -> None:
@@ -385,6 +395,8 @@ class StoryPromptPipelineApp:
         self.runner.send_wait_seconds = max(0.0, float(self.cfg.send_wait_seconds))
         self.runner.poll_interval_seconds = max(0.5, float(self.cfg.poll_interval_seconds))
         self.runner.stable_rounds_required = max(1, int(self.cfg.stable_rounds_required))
+        self.runner.human_typing_enabled = bool(self.cfg.human_typing_enabled)
+        self.runner.typing_speed_level = max(1, min(20, int(self.cfg.typing_speed_level)))
 
     def on_open_browser(self) -> None:
         try:
@@ -412,6 +424,9 @@ class StoryPromptPipelineApp:
             "⏱ 대기 설정 | 입력후 "
             f"{self.cfg.send_wait_seconds:.1f}초 | 확인간격 {self.cfg.poll_interval_seconds:.1f}초 | "
             f"안정 {self.cfg.stable_rounds_required}회 | 최대 {self.cfg.max_wait_seconds:.1f}초"
+        )
+        self.log(
+            f"⌨️ 입력 설정 | 인간형 {'ON' if self.cfg.human_typing_enabled else 'OFF'} | 속도 x{self.cfg.typing_speed_level}"
         )
         self.worker_thread = threading.Thread(target=self._run_pipeline_thread, daemon=True)
         self.worker_thread.start()
