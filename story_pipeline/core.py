@@ -25,6 +25,17 @@ DEFAULT_SCENE_PATH = Path(
 )
 
 
+def resolve_local_path(raw: str | Path) -> Path:
+    text = str(raw or "").strip()
+    if not text:
+        return Path("")
+    if os.name == "nt" and re.match(r"^/mnt/[a-zA-Z]/", text):
+        drive = text[5].upper()
+        tail = text[7:].replace("/", "\\")
+        return Path(f"{drive}:\\{tail}")
+    return Path(text)
+
+
 PROMPT_BLOCK_RE = re.compile(
     r"^(S\d{3}(?:>S\d{3})*)\s+Prompt\s*:\s*(.*?)\s*\|\|\|\s*$",
     re.IGNORECASE | re.MULTILINE | re.DOTALL,
@@ -214,10 +225,14 @@ class LiveOutputWriter:
 class StoryPromptSource:
     def __init__(self, cfg: PipelineConfig):
         self.cfg = cfg
-        self.manual_text = Path(cfg.manual_path).read_text(encoding="utf-8")
-        self.step_macro_text = Path(cfg.step_macro_path).read_text(encoding="utf-8")
-        self.library_text = Path(cfg.library_path).read_text(encoding="utf-8")
-        self.scene_file_text = Path(cfg.scene_file_path).read_text(encoding="utf-8")
+        self.manual_text = ""
+        if not cfg.manual_is_baked_into_gem:
+            self.manual_text = resolve_local_path(cfg.manual_path).read_text(encoding="utf-8")
+        self.step_macro_text = resolve_local_path(cfg.step_macro_path).read_text(encoding="utf-8")
+        self.library_text = ""
+        if not cfg.manual_is_baked_into_gem:
+            self.library_text = resolve_local_path(cfg.library_path).read_text(encoding="utf-8")
+        self.scene_file_text = resolve_local_path(cfg.scene_file_path).read_text(encoding="utf-8")
         self.step_sections = self._extract_step_sections(self.step_macro_text)
         self.scenes = self._parse_scenes(self.scene_file_text)
 
