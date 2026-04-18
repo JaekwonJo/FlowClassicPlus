@@ -1,0 +1,580 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+import threading
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+
+
+DEFAULT_MANUAL_PATH = Path(
+    "/mnt/c/Users/jaekw/Pictures/똑똑즈 스토리/똑똑즈 스토리 기획/똑똑즈 스토리 이미지 Gems매뉴얼.txt"
+)
+DEFAULT_STEP_MACRO_PATH = Path(
+    "/mnt/c/Users/jaekw/Pictures/똑똑즈 스토리/똑똑즈 스토리 기획/[똑똑즈 스토리 Step 0~9 최종 매크로 v1].txt"
+)
+DEFAULT_LIBRARY_PATH = Path(
+    "/mnt/c/Users/jaekw/Pictures/똑똑즈 스토리/똑똑즈 스토리 기획/똑똑즈 스토리 시네마틱 미장센 & 질감 마스터 라이브러리 업데이트.txt"
+)
+DEFAULT_SCENE_PATH = Path(
+    "/mnt/c/Users/jaekw/Pictures/똑똑즈 스토리/똑똑즈 스토리 기획/0418_금성대군1부_대본_장면분할.txt"
+)
+
+
+PROMPT_BLOCK_RE = re.compile(
+    r"^(S\d{3}(?:>S\d{3})*)\s+Prompt\s*:\s*(.*?)\s*\|\|\|\s*$",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+SCENE_LINE_RE = re.compile(
+    r"^\[S(?P<number>\d{3})\]\s*(?P<body>.*?)(?:\s*\(약\s*[\d.]+초\))?\s*$"
+)
+STEP_SECTION_RE = re.compile(
+    r"^🛑\s*Step\s*(?P<num>\d+)\s*:\s*(?P<title>.+?)\s*$",
+    re.MULTILINE,
+)
+
+
+def now_stamp() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+@dataclass
+class Scene:
+    number: int
+    label: str
+    text: str
+    raw_line: str
+
+
+@dataclass
+class PipelineConfig:
+    instance_name: str = "story_worker1"
+    manual_path: str = str(DEFAULT_MANUAL_PATH)
+    step_macro_path: str = str(DEFAULT_STEP_MACRO_PATH)
+    library_path: str = str(DEFAULT_LIBRARY_PATH)
+    scene_file_path: str = str(DEFAULT_SCENE_PATH)
+    gemini_url: str = "https://gemini.google.com/app"
+    browser_profile_dir: str = ""
+    output_root: str = ""
+    start_scene: int = 1
+    end_scene: int = 15
+    batch_size: int = 15
+    micro_batch_size: int = 5
+    reset_chat_each_batch: bool = True
+    open_notepad_live: bool = True
+    manual_is_baked_into_gem: bool = True
+
+
+@dataclass
+class PromptBlock:
+    header: str
+    body: str
+    start_number: int
+    numbers: List[int]
+    prompt_type: str
+
+    @property
+    def key(self) -> Tuple[int, str]:
+        return (self.start_number, self.prompt_type)
+
+    def render(self) -> str:
+        return f"{self.header} Prompt : {self.body.strip()} |||"
+
+
+@dataclass
+class ValidationResult:
+    ok: bool
+    errors: List[str] = field(default_factory=list)
+    blocks: List[PromptBlock] = field(default_factory=list)
+
+
+@dataclass
+class BatchWindow:
+    batch_index: int
+    scenes: List[Scene]
+    micro_batches: List[List[Scene]]
+
+    @property
+    def label(self) -> str:
+        if not self.scenes:
+            return "empty"
+        return f"S{self.scenes[0].number:03d}_S{self.scenes[-1].number:03d}"
+
+
+@dataclass
+class SessionPaths:
+    session_root: Path
+    final_live_txt: Path
+    manifest_json: Path
+    raw_dir: Path
+    reports_dir: Path
+
+
+class LiveOutputWriter:
+    def __init__(self, output_root: Path, scene_range_label: str):
+        self.output_root = output_root
+        self.output_root.mkdir(parents=True, exist_ok=True)
+        stamp = now_stamp()
+        self.session_root = self.output_root / f"{stamp}_{scene_range_label}"
+        self.raw_dir = self.session_root / "raw"
+        self.reports_dir = self.session_root / "reports"
+        self.raw_dir.mkdir(parents=True, exist_ok=True)
+        self.reports_dir.mkdir(parents=True, exist_ok=True)
+        self.final_live_txt = self.session_root / f"validated_prompts_{scene_range_label}.txt"
+        self.manifest_json = self.session_root / "session_manifest.json"
+        self.final_live_txt.write_text(
+            f"# 검증 통과 프롬프트 누적 저장\n# 세션: {stamp}\n# 범위: {scene_range_label}\n\n",
+            encoding="utf-8",
+        )
+        self._manifest: Dict[str, object] = {
+            "created_at": stamp,
+            "scene_range": scene_range_label,
+            "steps": [],
+            "final_live_txt": str(self.final_live_txt),
+        }
+        self._flush_manifest()
+
+    def _flush_manifest(self) -> None:
+        self.manifest_json.write_text(
+            json.dumps(self._manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def append_manifest_step(self, item: Dict[str, object]) -> None:
+        steps = list(self._manifest.get("steps", []))
+        steps.append(item)
+        self._manifest["steps"] = steps
+        self._flush_manifest()
+
+    def write_raw(self, name: str, content: str) -> Path:
+        path = self.raw_dir / name
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def write_report(self, name: str, data: Dict[str, object]) -> Path:
+        path = self.reports_dir / name
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
+    def append_validated_prompts(self, title: str, content: str) -> None:
+        with self.final_live_txt.open("a", encoding="utf-8") as f:
+            f.write(f"\n# ===== {title} =====\n")
+            f.write(content.strip())
+            f.write("\n")
+
+    @property
+    def paths(self) -> SessionPaths:
+        return SessionPaths(
+            session_root=self.session_root,
+            final_live_txt=self.final_live_txt,
+            manifest_json=self.manifest_json,
+            raw_dir=self.raw_dir,
+            reports_dir=self.reports_dir,
+        )
+
+
+class StoryPromptSource:
+    def __init__(self, cfg: PipelineConfig):
+        self.cfg = cfg
+        self.manual_text = Path(cfg.manual_path).read_text(encoding="utf-8")
+        self.step_macro_text = Path(cfg.step_macro_path).read_text(encoding="utf-8")
+        self.library_text = Path(cfg.library_path).read_text(encoding="utf-8")
+        self.scene_file_text = Path(cfg.scene_file_path).read_text(encoding="utf-8")
+        self.step_sections = self._extract_step_sections(self.step_macro_text)
+        self.scenes = self._parse_scenes(self.scene_file_text)
+
+    def _extract_step_sections(self, text: str) -> Dict[int, Dict[str, str]]:
+        matches = list(STEP_SECTION_RE.finditer(text))
+        result: Dict[int, Dict[str, str]] = {}
+        for idx, match in enumerate(matches):
+            start = match.end()
+            end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+            num = int(match.group("num"))
+            result[num] = {
+                "title": match.group("title").strip(),
+                "body": text[start:end].strip(),
+            }
+        return result
+
+    def _parse_scenes(self, text: str) -> List[Scene]:
+        scenes: List[Scene] = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            match = SCENE_LINE_RE.match(line)
+            if not match:
+                continue
+            number = int(match.group("number"))
+            scenes.append(
+                Scene(
+                    number=number,
+                    label=f"S{number:03d}",
+                    text=match.group("body").strip(),
+                    raw_line=line,
+                )
+            )
+        return scenes
+
+    def scene_slice(self, start_num: int, end_num: int) -> List[Scene]:
+        return [scene for scene in self.scenes if start_num <= scene.number <= end_num]
+
+    def build_windows(self, start_num: int, end_num: int, batch_size: int, micro_batch_size: int) -> List[BatchWindow]:
+        selected = self.scene_slice(start_num, end_num)
+        windows: List[BatchWindow] = []
+        for batch_index, base_idx in enumerate(range(0, len(selected), batch_size), start=1):
+            batch_scenes = selected[base_idx : base_idx + batch_size]
+            micro_batches = [
+                batch_scenes[micro_idx : micro_idx + micro_batch_size]
+                for micro_idx in range(0, len(batch_scenes), micro_batch_size)
+            ]
+            windows.append(BatchWindow(batch_index=batch_index, scenes=batch_scenes, micro_batches=micro_batches))
+        return windows
+
+
+class PromptComposer:
+    def __init__(self, source: StoryPromptSource):
+        self.source = source
+
+    @staticmethod
+    def _render_scene_chunk(scenes: Sequence[Scene]) -> str:
+        return "\n".join(f"[{scene.label}] {scene.text}" for scene in scenes)
+
+    def _manual_sync_block(self) -> str:
+        if self.source.cfg.manual_is_baked_into_gem:
+            return (
+                "[매뉴얼 상태]\n"
+                "- 현재 Gem 안에 매뉴얼이 이미 들어가 있다고 가정합니다.\n"
+                "- 아래 작업에서는 장면/라이브러리/Step 원문만 기준으로 삼아 주세요.\n"
+            )
+        return (
+            "[매뉴얼 전문]\n"
+            f"{self.source.manual_text.strip()}\n"
+            "[매뉴얼 끝]\n"
+        )
+
+    def build_step5_prompt(self, batch: BatchWindow) -> str:
+        section = self.source.step_sections[5]["body"]
+        scene_chunk = self._render_scene_chunk(batch.scenes)
+        return (
+            "[자동화 실행 모드]\n"
+            "- 당신은 지금 Step 5만 수행합니다.\n"
+            "- 프롬프트는 아직 만들지 말고, 기획 요약만 출력하세요.\n"
+            "- 이 배치는 이후 Step 6과 Step 7 자동화의 기준이 되므로 번호를 정확히 지켜 주세요.\n\n"
+            f"{self._manual_sync_block()}\n"
+            "[미장센 라이브러리]\n"
+            f"{self.source.library_text.strip()}\n\n"
+            "[Step 5 원문]\n"
+            f"{section}\n\n"
+            f"[이번 배치 범위]\n{batch.scenes[0].label} ~ {batch.scenes[-1].label}\n\n"
+            "[장면 대본]\n"
+            f"{scene_chunk}\n"
+        )
+
+    def build_step6_prompt(self, batch: BatchWindow, micro_scenes: Sequence[Scene], step5_plan: str) -> str:
+        section = self.source.step_sections[6]["body"]
+        scene_chunk = self._render_scene_chunk(micro_scenes)
+        return (
+            "[자동화 실행 모드]\n"
+            "- 당신은 지금 Step 6만 수행합니다.\n"
+            "- 아래 Step 5 기획안을 참고해 이번 마이크로배치 장면만 처리하세요.\n"
+            "- 이번 출력은 이미지 프롬프트 + 비디오 프롬프트를 모두 포함해야 합니다.\n"
+            "- 번호 누락 금지, 다른 인삿말 금지.\n\n"
+            f"{self._manual_sync_block()}\n"
+            "[미장센 라이브러리]\n"
+            f"{self.source.library_text.strip()}\n\n"
+            "[Step 5 기획안]\n"
+            f"{step5_plan.strip()}\n\n"
+            "[Step 6 원문]\n"
+            f"{section}\n\n"
+            f"[이번 마이크로배치 범위]\n{micro_scenes[0].label} ~ {micro_scenes[-1].label}\n\n"
+            "[장면 대본]\n"
+            f"{scene_chunk}\n\n"
+            "[출력 추가 규칙]\n"
+            "- 오직 프롬프트 본문만 출력하세요.\n"
+            "- 각 프롬프트는 반드시 `S### Prompt : ... |||` 또는 `S###>S### Prompt : ... |||` 형식입니다.\n"
+        )
+
+    def build_step7_prompt(self, micro_scenes: Sequence[Scene], draft_text: str, code_validation_errors: Sequence[str]) -> str:
+        section = self.source.step_sections[7]["body"]
+        scene_chunk = self._render_scene_chunk(micro_scenes)
+        error_block = "\n".join(f"- {item}" for item in code_validation_errors) if code_validation_errors else "- 코드 검수 1차 통과"
+        return (
+            "[자동화 실행 모드]\n"
+            "- 당신은 지금 Step 7 검수자입니다.\n"
+            "- 아래 체크리스트를 바탕으로 초안을 검수하고, 최종적으로 이번 묶음 전체 프롬프트를 다시 완성본으로 출력하세요.\n"
+            "- 사람이 읽는 설명도 좋지만, 자동화 파이프라인이 읽어야 하므로 아래 출력 형식을 절대 깨지 마세요.\n\n"
+            "[반드시 지킬 출력 형식]\n"
+            "[검수요약]\n"
+            "한두 줄 요약\n"
+            "[문제번호]\n"
+            "문제가 있으면 번호와 이유, 없으면 '없음'\n"
+            "[최종프롬프트]\n"
+            "이번 묶음의 이미지/비디오 프롬프트를 전부 다시 출력\n"
+            "[끝]\n\n"
+            "[Step 7 원문]\n"
+            f"{section}\n\n"
+            "[이번 묶음 장면]\n"
+            f"{scene_chunk}\n\n"
+            "[코드 1차 검수 결과]\n"
+            f"{error_block}\n\n"
+            "[Step 6 초안]\n"
+            f"{draft_text.strip()}\n"
+        )
+
+    def build_repair_prompt(self, micro_scenes: Sequence[Scene], broken_text: str, errors: Sequence[str]) -> str:
+        scene_chunk = self._render_scene_chunk(micro_scenes)
+        error_block = "\n".join(f"- {item}" for item in errors)
+        return (
+            "[자동화 복구 모드]\n"
+            "- 바로 직전 검수 결과가 기계 파싱에 실패했습니다.\n"
+            "- 설명을 줄이고 최종 프롬프트 블록만 정확히 다시 써 주세요.\n"
+            "- 아래 형식을 절대 깨지 마세요.\n\n"
+            "[출력 형식]\n"
+            "[최종프롬프트]\n"
+            "S### Prompt : ... |||\n"
+            "[끝]\n\n"
+            "[이번 묶음 장면]\n"
+            f"{scene_chunk}\n\n"
+            "[현재 오류]\n"
+            f"{error_block}\n\n"
+            "[잘못된 응답]\n"
+            f"{broken_text.strip()}\n"
+        )
+
+
+class PromptValidator:
+    VIDEO_HINTS = (
+        "absolutely preserve 3D text sharp",
+        "no character transition",
+        "camera work",
+        "starting @s",
+        "ending @s",
+    )
+
+    def parse_blocks(self, text: str) -> List[PromptBlock]:
+        blocks: List[PromptBlock] = []
+        for match in PROMPT_BLOCK_RE.finditer(text):
+            header = match.group(1).strip()
+            body = match.group(2).strip()
+            number_matches = [int(item[1:]) for item in re.findall(r"S\d{3}", header)]
+            prompt_type = self._classify_block(body)
+            blocks.append(
+                PromptBlock(
+                    header=header,
+                    body=body,
+                    start_number=number_matches[0],
+                    numbers=number_matches,
+                    prompt_type=prompt_type,
+                )
+            )
+        return blocks
+
+    def _classify_block(self, body: str) -> str:
+        lowered = body.lower()
+        if any(hint in lowered for hint in self.VIDEO_HINTS):
+            return "video"
+        return "image"
+
+    def extract_final_prompt_text(self, text: str) -> str:
+        marker = re.search(r"\[최종프롬프트\](.*?)(?:\n\[끝\]|\Z)", text, re.DOTALL)
+        if marker:
+            return marker.group(1).strip()
+        return text.strip()
+
+    def validate(self, text: str, expected_scenes: Sequence[Scene]) -> ValidationResult:
+        errors: List[str] = []
+        blocks = self.parse_blocks(text)
+        if not blocks:
+            return ValidationResult(ok=False, errors=["프롬프트 블록을 하나도 찾지 못했습니다."], blocks=[])
+
+        expected_numbers = [scene.number for scene in expected_scenes]
+        grouped: Dict[Tuple[int, str], PromptBlock] = {}
+        duplicate_keys: List[Tuple[int, str]] = []
+        for block in blocks:
+            if block.key in grouped:
+                duplicate_keys.append(block.key)
+            grouped[block.key] = block
+
+        for key in duplicate_keys:
+            errors.append(f"S{key[0]:03d} {key[1]} 프롬프트가 중복되었습니다.")
+
+        for number in expected_numbers:
+            if (number, "image") not in grouped:
+                errors.append(f"S{number:03d} 이미지 프롬프트가 없습니다.")
+            if (number, "video") not in grouped:
+                errors.append(f"S{number:03d} 비디오 프롬프트가 없습니다.")
+
+        allowed_numbers = set(expected_numbers)
+        for block in blocks:
+            if block.start_number not in allowed_numbers:
+                errors.append(f"{block.header} 는 현재 묶음 범위를 벗어났습니다.")
+
+        for block in blocks:
+            rendered = block.render()
+            if "|||" not in rendered:
+                errors.append(f"{block.header} 종료 구분자 `|||` 가 없습니다.")
+            if block.prompt_type == "image" and "@S" not in block.body:
+                errors.append(f"{block.header} 이미지 프롬프트에 캐릭터 태그가 보이지 않습니다.")
+            if block.prompt_type == "video" and "absolutely preserve 3D text sharp" not in block.body.lower():
+                errors.append(f"{block.header} 비디오 방어벽 문구가 없습니다.")
+
+        return ValidationResult(ok=not errors, errors=errors, blocks=blocks)
+
+    def normalize_text(self, blocks: Sequence[PromptBlock], expected_scenes: Sequence[Scene]) -> str:
+        order = {scene.number: idx for idx, scene in enumerate(expected_scenes)}
+        normalized = sorted(
+            list(blocks),
+            key=lambda item: (order.get(item.start_number, 9999), 0 if item.prompt_type == "image" else 1),
+        )
+        return "\n\n".join(block.render() for block in normalized)
+
+    def merge_partial_with_draft(self, reviewed: ValidationResult, draft: ValidationResult, expected_scenes: Sequence[Scene]) -> str:
+        merged: Dict[Tuple[int, str], PromptBlock] = {block.key: block for block in draft.blocks}
+        for block in reviewed.blocks:
+            merged[block.key] = block
+        return self.normalize_text(list(merged.values()), expected_scenes)
+
+
+class StoryPipeline:
+    def __init__(
+        self,
+        cfg: PipelineConfig,
+        runner,
+        log: Callable[[str], None],
+        stop_event: threading.Event,
+    ):
+        self.cfg = cfg
+        self.runner = runner
+        self.log = log
+        self.stop_event = stop_event
+        self.source = StoryPromptSource(cfg)
+        self.composer = PromptComposer(self.source)
+        self.validator = PromptValidator()
+
+    def _check_stop(self) -> None:
+        if self.stop_event.is_set():
+            raise RuntimeError("사용자 중지 요청")
+
+    def _open_live_file_if_needed(self, path: Path) -> None:
+        if not self.cfg.open_notepad_live:
+            return
+        try:
+            if hasattr(os, "startfile"):
+                os.startfile(str(path))  # type: ignore[attr-defined]
+                return
+        except Exception:
+            pass
+        try:
+            import subprocess
+
+            subprocess.Popen(["cmd.exe", "/c", "start", "notepad.exe", str(path)])
+        except Exception:
+            pass
+
+    def run(self) -> SessionPaths:
+        windows = self.source.build_windows(
+            start_num=self.cfg.start_scene,
+            end_num=self.cfg.end_scene,
+            batch_size=self.cfg.batch_size,
+            micro_batch_size=self.cfg.micro_batch_size,
+        )
+        if not windows:
+            raise ValueError("선택한 범위에서 장면을 찾지 못했습니다.")
+
+        scene_range_label = f"S{windows[0].scenes[0].number:03d}_S{windows[-1].scenes[-1].number:03d}"
+        writer = LiveOutputWriter(Path(self.cfg.output_root), scene_range_label)
+        self._open_live_file_if_needed(writer.final_live_txt)
+        self.runner.open_browser()
+        self.log(f"🧠 스토리 자동화 세션 시작 | 범위 {scene_range_label}")
+        self.log(f"📝 검증 통과 프롬프트는 계속 저장됩니다: {writer.final_live_txt}")
+
+        for batch in windows:
+            self._check_stop()
+            self.log(f"📦 배치 {batch.batch_index} 시작 | {batch.label}")
+            if self.cfg.reset_chat_each_batch:
+                self.runner.reset_conversation()
+                self.log("🧹 새 채팅 기준으로 배치 시작")
+
+            step5_prompt = self.composer.build_step5_prompt(batch)
+            step5_text = self.runner.send_prompt(step5_prompt, step_label=f"{batch.label}_step5")
+            writer.write_raw(f"{batch.label}_step5.txt", step5_text)
+            writer.append_manifest_step(
+                {"batch": batch.label, "step": 5, "raw_file": f"{batch.label}_step5.txt"}
+            )
+
+            for micro_index, micro_scenes in enumerate(batch.micro_batches, start=1):
+                self._check_stop()
+                micro_label = f"{micro_scenes[0].label}_{micro_scenes[-1].label}"
+                self.log(f"🎬 Step6 생성 시작 | {micro_label}")
+
+                step6_prompt = self.composer.build_step6_prompt(batch, micro_scenes, step5_text)
+                step6_text = self.runner.send_prompt(step6_prompt, step_label=f"{micro_label}_step6")
+                writer.write_raw(f"{micro_label}_step6_draft.txt", step6_text)
+
+                draft_validation = self.validator.validate(step6_text, micro_scenes)
+                writer.write_report(
+                    f"{micro_label}_step6_validation.json",
+                    {"ok": draft_validation.ok, "errors": draft_validation.errors},
+                )
+                if draft_validation.ok:
+                    self.log(f"✅ Step6 1차 형식 검수 통과 | {micro_label}")
+                else:
+                    self.log(f"⚠️ Step6 1차 형식 이슈 {len(draft_validation.errors)}개 | {micro_label}")
+
+                step7_prompt = self.composer.build_step7_prompt(micro_scenes, step6_text, draft_validation.errors)
+                step7_text = self.runner.send_prompt(step7_prompt, step_label=f"{micro_label}_step7")
+                writer.write_raw(f"{micro_label}_step7_review.txt", step7_text)
+
+                final_candidate = self.validator.extract_final_prompt_text(step7_text)
+                final_validation = self.validator.validate(final_candidate, micro_scenes)
+                if not final_validation.ok:
+                    merged_candidate = self.validator.merge_partial_with_draft(final_validation, draft_validation, micro_scenes)
+                    merged_validation = self.validator.validate(merged_candidate, micro_scenes)
+                    if merged_validation.ok:
+                        final_candidate = merged_candidate
+                        final_validation = merged_validation
+
+                if not final_validation.ok:
+                    self.log(f"🩹 Step7 결과 보정 시도 | {micro_label}")
+                    repair_prompt = self.composer.build_repair_prompt(micro_scenes, step7_text, final_validation.errors)
+                    repair_text = self.runner.send_prompt(repair_prompt, step_label=f"{micro_label}_repair")
+                    writer.write_raw(f"{micro_label}_repair.txt", repair_text)
+                    repaired_candidate = self.validator.extract_final_prompt_text(repair_text)
+                    repaired_validation = self.validator.validate(repaired_candidate, micro_scenes)
+                    if repaired_validation.ok:
+                        final_candidate = repaired_candidate
+                        final_validation = repaired_validation
+
+                if not final_validation.ok:
+                    writer.write_report(
+                        f"{micro_label}_final_validation_failed.json",
+                        {"ok": False, "errors": final_validation.errors},
+                    )
+                    raise RuntimeError(f"{micro_label} 최종 검수 결과를 기계적으로 확정하지 못했습니다: {' | '.join(final_validation.errors)}")
+
+                normalized_final = self.validator.normalize_text(final_validation.blocks, micro_scenes)
+                writer.append_validated_prompts(micro_label, normalized_final)
+                writer.write_raw(f"{micro_label}_final_validated.txt", normalized_final)
+                writer.write_report(
+                    f"{micro_label}_final_validation.json",
+                    {"ok": True, "errors": [], "count": len(final_validation.blocks)},
+                )
+                writer.append_manifest_step(
+                    {
+                        "batch": batch.label,
+                        "micro_label": micro_label,
+                        "step": "validated",
+                        "scene_start": micro_scenes[0].number,
+                        "scene_end": micro_scenes[-1].number,
+                        "final_file": f"{micro_label}_final_validated.txt",
+                    }
+                )
+                self.log(f"💾 검증 통과 즉시 저장 | {micro_label}")
+
+        self.log("🏁 전체 자동화 흐름 완료")
+        return writer.paths
