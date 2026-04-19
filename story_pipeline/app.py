@@ -16,6 +16,7 @@ from tkinter.scrolledtext import ScrolledText
 
 from .core import DEFAULT_LIBRARY_PATH, DEFAULT_MANUAL_PATH, DEFAULT_SCENE_PATH, DEFAULT_STEP_MACRO_PATH
 from .core import PipelineConfig, StoryPipeline
+from .core import SCENE_LINE_RE, resolve_local_path
 from .web import GeminiWebRunner
 
 
@@ -266,6 +267,55 @@ class StoryPromptPipelineApp:
             return name[:29] + "..."
         return name
 
+    def _scene_label(self, number: int) -> str:
+        return f"S{max(0, int(number)):03d}"
+
+    def _detect_scene_file_bounds(self) -> tuple[int | None, int | None]:
+        raw_path = ""
+        if hasattr(self, "var_scene_file_path"):
+            raw_path = self.var_scene_file_path.get().strip()
+        elif getattr(self.cfg, "scene_file_path", ""):
+            raw_path = str(self.cfg.scene_file_path).strip()
+        if not raw_path:
+            return (None, None)
+        try:
+            path = resolve_local_path(raw_path)
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            return (None, None)
+        numbers: list[int] = []
+        for raw_line in text.splitlines():
+            match = SCENE_LINE_RE.match(raw_line.strip())
+            if match:
+                numbers.append(int(match.group("number")))
+        if not numbers:
+            return (None, None)
+        return (min(numbers), max(numbers))
+
+    def _refresh_scene_range_labels(self) -> None:
+        if not hasattr(self, "var_scene_file_summary"):
+            return
+        start_all, end_all = self._detect_scene_file_bounds()
+        if start_all is None or end_all is None:
+            self.var_scene_file_summary.set("이 파일 전체: 장면 번호를 읽지 못했습니다.")
+        else:
+            self.var_scene_file_summary.set(
+                f"이 파일 전체: {self._scene_label(start_all)} ~ {self._scene_label(end_all)}"
+            )
+
+        start_text = self.var_start_scene.get().strip() if hasattr(self, "var_start_scene") else ""
+        end_text = self.var_end_scene.get().strip() if hasattr(self, "var_end_scene") else ""
+        try:
+            start_num = int(start_text or 1)
+            end_num = int(end_text or start_num)
+            if end_num < start_num:
+                start_num, end_num = end_num, start_num
+            self.var_scene_run_summary.set(
+                f"이번 실행: {self._scene_label(start_num)} ~ {self._scene_label(end_num)}"
+            )
+        except Exception:
+            self.var_scene_run_summary.set("이번 실행: 시작/끝 번호를 확인해 주세요.")
+
     def _refresh_compact_labels(self) -> None:
         if hasattr(self, "lbl_worker_name"):
             self.lbl_worker_name.config(text=f"ttz_worker | {self.instance_name}")
@@ -275,6 +325,7 @@ class StoryPromptPipelineApp:
             )
         if hasattr(self, "btn_open_output_dir"):
             self.btn_open_output_dir.config(text="결과 폴더")
+        self._refresh_scene_range_labels()
 
     def _refresh_hud_compact_summary(self) -> None:
         headline = self.var_hud_detail.get().strip() or self.var_hud_status.get().strip() or "준비 완료"
@@ -485,6 +536,8 @@ class StoryPromptPipelineApp:
         self.var_hud_elapsed = tk.StringVar()
         self.var_hud_headline = tk.StringVar()
         self.var_hud_subline = tk.StringVar()
+        self.var_scene_file_summary = tk.StringVar()
+        self.var_scene_run_summary = tk.StringVar()
 
         header = tk.Frame(outer, bg="#ECE7DF")
         header.pack(fill="x", pady=(0, 8))
@@ -522,6 +575,8 @@ class StoryPromptPipelineApp:
         tk.Button(tool_buttons, text="Gem URL", command=self._edit_url, **tool_btn_opts).pack(side="left", padx=6)
         self.btn_open_output_dir = tk.Button(tool_buttons, text="결과 폴더", command=lambda: self._browse_dir(self.var_output_root, "결과 저장 폴더 선택"), **tool_btn_opts)
         self.btn_open_output_dir.pack(side="left", padx=6)
+        tk.Label(tool_card, textvariable=self.var_scene_file_summary, bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 8)).pack(anchor="w", padx=12, pady=(0, 2))
+        tk.Label(tool_card, textvariable=self.var_scene_run_summary, bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 8, "bold")).pack(anchor="w", padx=12, pady=(0, 10))
 
         action_card = tk.Frame(outer, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1)
         action_card.pack(fill="x", pady=(0, 8))
@@ -563,7 +618,7 @@ class StoryPromptPipelineApp:
         send_wait_entry.grid(row=3, column=1, sticky="w", pady=4)
 
         for entry in (start_entry, end_entry, micro_entry, pre_input_entry, send_wait_entry):
-            entry.bind("<FocusOut>", lambda _e: self._save_config())
+            entry.bind("<FocusOut>", lambda _e: (self._save_config(), self._refresh_compact_labels()))
 
         opt_wrap = tk.Frame(left_card, bg="#F7F2EA")
         opt_wrap.grid(row=4, column=0, columnspan=4, sticky="ew", padx=12, pady=(8, 10))
