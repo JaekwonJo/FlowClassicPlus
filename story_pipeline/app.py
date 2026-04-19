@@ -243,6 +243,8 @@ class StoryPromptPipelineApp:
         self.cfg.poll_interval_seconds = float(self.var_poll_interval_seconds.get() or 2.0)
         self.cfg.stable_rounds_required = int(self.var_stable_rounds_required.get() or 2)
         self.cfg.max_wait_seconds = float(self.var_max_wait_seconds.get() or 300.0)
+        self.cfg.rest_every_micro_batches = int(self.var_rest_every_micro_batches.get() or 0)
+        self.cfg.rest_seconds = float(self.var_rest_seconds.get() or 0.0)
         self.cfg.human_typing_enabled = False
         self.cfg.typing_speed_level = int(self.var_typing_speed_level.get() or 5)
         self.cfg.reset_chat_each_batch = bool(self.var_reset_chat.get())
@@ -328,93 +330,6 @@ class StoryPromptPipelineApp:
         except Exception as exc:
             messagebox.showerror("새 브라우저 만들기 실패", f"새 프로필 생성 중 오류가 났습니다.\n{exc}", parent=self.root)
 
-    def _open_wait_settings_dialog(self) -> None:
-        dialog = tk.Toplevel(self.root)
-        dialog.title("대기 설정")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        dialog.configure(bg="#F7F2EA")
-        dialog.resizable(False, False)
-
-        fields = [
-            ("창 뜬 뒤 기다림(초)", self.var_pre_input_delay_seconds),
-            ("제출 후 대기(초)", self.var_send_wait_seconds),
-            ("몇 초마다 확인(초)", self.var_poll_interval_seconds),
-            ("같은 응답 몇 번 확인", self.var_stable_rounds_required),
-            ("응답 최대 대기(초)", self.var_max_wait_seconds),
-        ]
-        local_vars: list[tk.StringVar] = []
-        for row, (label_text, source_var) in enumerate(fields):
-            tk.Label(dialog, text=label_text, bg="#F7F2EA", fg="#23302B", font=("맑은 고딕", 9)).grid(
-                row=row, column=0, sticky="w", padx=14, pady=(12 if row == 0 else 6, 0)
-            )
-            local_var = tk.StringVar(value=source_var.get())
-            local_vars.append(local_var)
-            tk.Entry(
-                dialog,
-                textvariable=local_var,
-                width=10,
-                bg="#FFFFFF",
-                fg="#111",
-                insertbackground="#111",
-                relief="flat",
-            ).grid(row=row, column=1, sticky="w", padx=(10, 14), pady=(12 if row == 0 else 6, 0))
-
-        tk.Label(
-            dialog,
-            text="설명: 300초는 꼭 기다린다는 뜻이 아니라,\n그 시간 안에 응답이 안 오면 실패로 보는 최대 제한입니다.",
-            bg="#F7F2EA",
-            fg="#6B6D63",
-            justify="left",
-            font=("맑은 고딕", 8),
-        ).grid(row=len(fields), column=0, columnspan=2, sticky="w", padx=14, pady=(12, 0))
-
-        btn_row = tk.Frame(dialog, bg="#F7F2EA")
-        btn_row.grid(row=len(fields) + 1, column=0, columnspan=2, sticky="e", padx=14, pady=14)
-
-        def _save_and_close() -> None:
-            (
-                self.var_pre_input_delay_seconds,
-                self.var_send_wait_seconds,
-                self.var_poll_interval_seconds,
-                self.var_stable_rounds_required,
-                self.var_max_wait_seconds,
-            ) = local_vars
-            self._save_config()
-            self._refresh_compact_labels()
-            dialog.destroy()
-            self.log(
-                "⚙️ 대기 설정 변경 | 창 뜬 뒤 "
-                f"{self.var_pre_input_delay_seconds.get()}초 | 제출 후 대기 {self.var_send_wait_seconds.get()}초 | "
-                f"확인간격 {self.var_poll_interval_seconds.get()}초 | 같은 응답 {self.var_stable_rounds_required.get()}회 | "
-                f"최대 {self.var_max_wait_seconds.get()}초"
-            )
-
-        tk.Button(
-            btn_row,
-            text="취소",
-            command=dialog.destroy,
-            relief="flat",
-            bg="#E7DED2",
-            fg="#4D443B",
-            font=("맑은 고딕", 9, "bold"),
-            padx=12,
-            pady=6,
-            cursor="hand2",
-        ).pack(side="right")
-        tk.Button(
-            btn_row,
-            text="저장",
-            command=_save_and_close,
-            relief="flat",
-            bg="#1F6F5F",
-            fg="white",
-            font=("맑은 고딕", 9, "bold"),
-            padx=12,
-            pady=6,
-            cursor="hand2",
-        ).pack(side="right", padx=(0, 8))
-
     def _short_text(self, raw: str, mode: str = "path") -> str:
         text = str(raw or "").strip()
         if not text:
@@ -479,11 +394,7 @@ class StoryPromptPipelineApp:
             self.var_scene_run_summary.set("이번 실행: 시작/끝 번호를 확인해 주세요.")
 
     def _refresh_wait_settings_label(self) -> None:
-        if not hasattr(self, "var_max_wait_seconds"):
-            return
-        if hasattr(self, "ent_max_wait_seconds"):
-            self.ent_max_wait_seconds.delete(0, "end")
-            self.ent_max_wait_seconds.insert(0, self.var_max_wait_seconds.get().strip() or str(getattr(self.cfg, "max_wait_seconds", 300.0)))
+        return None
 
     def _refresh_compact_labels(self) -> None:
         if hasattr(self, "lbl_worker_name"):
@@ -723,6 +634,8 @@ class StoryPromptPipelineApp:
         self.var_poll_interval_seconds = tk.StringVar(value=str(self.cfg.poll_interval_seconds))
         self.var_stable_rounds_required = tk.StringVar(value=str(self.cfg.stable_rounds_required))
         self.var_max_wait_seconds = tk.StringVar(value=str(self.cfg.max_wait_seconds))
+        self.var_rest_every_micro_batches = tk.StringVar(value=str(self.cfg.rest_every_micro_batches))
+        self.var_rest_seconds = tk.StringVar(value=str(self.cfg.rest_seconds))
         self.var_human_typing = tk.BooleanVar(value=self.cfg.human_typing_enabled)
         self.var_typing_speed_level = tk.StringVar(value=str(self.cfg.typing_speed_level))
         self.var_reset_chat = tk.BooleanVar(value=self.cfg.reset_chat_each_batch)
@@ -767,7 +680,7 @@ class StoryPromptPipelineApp:
         self.lbl_instance_info.pack(side="left")
         self.lbl_profile_info = tk.Label(info_row, text="", bg=root_bg, fg=subtle, font=("맑은 고딕", 9))
         self.lbl_profile_info.pack(side="left", padx=(10, 0))
-        tk.Label(header, text="수동처럼 실행", bg=mode_badge_bg, fg=mode_badge_fg, font=("맑은 고딕", 8, "bold"), padx=8, pady=3).pack(side="right")
+        tk.Label(header, textvariable=self.var_hud_status, bg=mode_badge_bg, fg=mode_badge_fg, font=("맑은 고딕", 8, "bold"), padx=8, pady=3).pack(side="right")
 
         hud_card = tk.Frame(outer, bg=panel_bg, highlightbackground=card_border, highlightthickness=1)
         hud_card.pack(fill="x", pady=(0, 8))
@@ -778,7 +691,6 @@ class StoryPromptPipelineApp:
         right_hud = tk.Frame(hud_card, bg=panel_bg)
         right_hud.grid(row=0, column=1, sticky="ne", padx=(0, 12), pady=10)
 
-        tk.Label(left_hud, textvariable=self.var_hud_status, bg=accent_soft, fg=accent_text, font=("맑은 고딕", 8, "bold"), padx=8, pady=3).pack(anchor="w")
         tk.Label(left_hud, textvariable=self.var_hud_headline, bg=panel_bg, fg="#23302B", font=("맑은 고딕", 11, "bold")).pack(anchor="w", pady=(8, 2))
         tk.Label(left_hud, textvariable=self.var_hud_subline, bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 9)).pack(anchor="w")
         tk.Label(right_hud, textvariable=self.var_hud_countdown, bg=countdown_bg, fg="#23302B", font=("맑은 고딕", 10, "bold"), padx=10, pady=6).pack(anchor="e")
@@ -805,7 +717,6 @@ class StoryPromptPipelineApp:
         action_buttons.pack(fill="x", padx=10, pady=(0, 10))
         action_btn_opts = {"relief": "flat", "font": ("맑은 고딕", 10, "bold"), "pady": 9, "cursor": "hand2", "width": 10}
         tk.Button(action_buttons, text="브라우저", command=self.on_open_browser, bg=browse_btn, fg="white", **action_btn_opts).pack(side="left", padx=(0, 6))
-        tk.Button(action_buttons, text="새 브라우저", command=self.create_browser_profile, bg="#446A8A", fg="white", **action_btn_opts).pack(side="left", padx=6)
         tk.Button(action_buttons, text="시작", command=self.on_start, bg="#C66A2B", fg="white", **action_btn_opts).pack(side="left", padx=6)
         tk.Button(action_buttons, text="완전 중지", command=self.on_stop, bg="#6F3B2A", fg="white", **action_btn_opts).pack(side="left", padx=6)
         tk.Button(action_buttons, text="최근 결과 보기", command=self.on_open_output_dir, bg="#5E7A74", fg="white", **action_btn_opts).pack(side="left", padx=6)
@@ -848,6 +759,29 @@ class StoryPromptPipelineApp:
         opt_wrap.grid(row=4, column=0, columnspan=4, sticky="ew", padx=12, pady=(8, 10))
         self._make_toggle_button(opt_wrap, self.var_reset_chat, "새 채팅").pack(side="left")
         self._make_toggle_button(opt_wrap, self.var_open_notepad, "메모장 저장").pack(side="left", padx=(8, 0))
+        tk.Button(
+            opt_wrap,
+            text="새 브라우저",
+            command=self.create_browser_profile,
+            relief="flat",
+            bg="#E6E8EC",
+            fg="#6A7380",
+            font=("맑은 고딕", 8, "bold"),
+            padx=10,
+            pady=5,
+            cursor="hand2",
+        ).pack(side="right")
+
+        rest_wrap = tk.Frame(tool_card, bg=panel_bg)
+        rest_wrap.pack(fill="x", padx=12, pady=(0, 10))
+        tk.Label(rest_wrap, text="휴식", bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(side="left")
+        rest_every_entry = tk.Entry(rest_wrap, textvariable=self.var_rest_every_micro_batches, width=4, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        rest_every_entry.pack(side="left", padx=(6, 4))
+        tk.Label(rest_wrap, text="묶음마다", bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(side="left")
+        tk.Label(rest_wrap, text="시간", bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(side="left", padx=(16, 4))
+        rest_seconds_entry = tk.Entry(rest_wrap, textvariable=self.var_rest_seconds, width=5, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        rest_seconds_entry.pack(side="left", padx=(2, 4))
+        tk.Label(rest_wrap, text="초(±30% 랜덤)", bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(side="left")
 
         tk.Label(
             left_card,
@@ -886,6 +820,8 @@ class StoryPromptPipelineApp:
         resize_handle.bind("<ButtonPress-1>", self._start_resize_drag)
         resize_handle.bind("<B1-Motion>", self._on_resize_drag)
         resize_handle.bind("<ButtonRelease-1>", self._end_resize_drag)
+        for entry in (rest_every_entry, rest_seconds_entry):
+            entry.bind("<FocusOut>", lambda _e: (self._save_config(), self._refresh_compact_labels()))
         self._refresh_compact_labels()
         self._reset_hud()
 
@@ -971,6 +907,11 @@ class StoryPromptPipelineApp:
                 self.preview_runner.close()
         except Exception:
             pass
+        try:
+            if self.runner is not None:
+                self.runner.close()
+        except Exception:
+            pass
         self.root.destroy()
 
     def _sync_runner_config(self) -> None:
@@ -1044,8 +985,11 @@ class StoryPromptPipelineApp:
         self.worker_thread.start()
 
     def _run_pipeline_thread(self) -> None:
-        runner = self._build_runner()
-        should_close_runner = True
+        if self.runner is None:
+            self.runner = self._build_runner()
+        else:
+            self._sync_runner_config()
+        runner = self.runner
         try:
             pipeline = StoryPipeline(
                 cfg=self.cfg,
@@ -1060,7 +1004,6 @@ class StoryPromptPipelineApp:
             self.log(f"🖼 이미지 전용 파일: {paths.final_image_txt}")
             self.log(f"🎬 비디오 전용 파일: {paths.final_video_txt}")
         except Exception as exc:
-            should_close_runner = False
             self._queue_status(
                 {
                     "status": "실패",
@@ -1073,13 +1016,10 @@ class StoryPromptPipelineApp:
             self.log(f"❌ 자동화 실패: {exc}")
             self.log(traceback.format_exc().strip())
         finally:
-            if should_close_runner or self.stop_event.is_set():
-                try:
-                    runner.close()
-                except Exception:
-                    pass
+            if self.stop_event.is_set():
+                self.log("🧷 중지 후에도 브라우저는 그대로 둡니다. 프로그램을 닫을 때만 브라우저가 꺼집니다.")
             else:
-                self.log("🧷 오류 확인용으로 브라우저는 그대로 둡니다. 다시 시작 전 직접 닫아 주세요.")
+                self.log("🧷 작업이 끝나도 브라우저는 그대로 둡니다. 프로그램을 닫을 때만 브라우저가 꺼집니다.")
 
     def on_stop(self) -> None:
         self.stop_event.set()

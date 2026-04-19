@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import threading
 import time
@@ -85,6 +86,8 @@ class PipelineConfig:
     poll_interval_seconds: float = 2.0
     stable_rounds_required: int = 2
     max_wait_seconds: float = 300.0
+    rest_every_micro_batches: int = 0
+    rest_seconds: float = 0.0
     human_typing_enabled: bool = False
     typing_speed_level: int = 5
     reset_chat_each_batch: bool = True
@@ -140,13 +143,17 @@ class SessionPaths:
 
 
 class LiveOutputWriter:
-    def __init__(self, output_root: Path, scene_range_label: str):
+    def __init__(self, output_root: Path, scene_range_label: str, display_name: str = ""):
         self.output_root = output_root
         self.output_root.mkdir(parents=True, exist_ok=True)
         stamp = now_stamp()
         pretty_stamp = datetime.now().strftime("%Y-%m-%d_%H시%M분%S초")
         pretty_range = scene_range_label.replace("_", "~")
-        self.session_root = self.output_root / f"{pretty_stamp}_장면_{pretty_range}"
+        safe_name = re.sub(r'[\\/:*?"<>|]+', "_", str(display_name or "").strip())
+        folder_name = f"{pretty_stamp}_장면_{pretty_range}"
+        if safe_name:
+            folder_name = f"{pretty_stamp}_{safe_name}_장면_{pretty_range}"
+        self.session_root = self.output_root / folder_name
         self.raw_dir = self.session_root / "원본응답"
         self.reports_dir = self.session_root / "검수리포트"
         self.raw_dir.mkdir(parents=True, exist_ok=True)
@@ -607,6 +614,51 @@ class StoryPipeline:
                 return
         except Exception:
             pass
+
+    def _take_random_break_if_needed(
+        self,
+        completed_micro_batches: int,
+        total_micro_batches: int,
+        total_batches: int,
+        batch: BatchWindow,
+        micro_index: int,
+        completed_scenes: int,
+        total_scenes: int,
+        current_range: str,
+    ) -> None:
+        every = max(0, int(self.cfg.rest_every_micro_batches or 0))
+        base_seconds = max(0.0, float(self.cfg.rest_seconds or 0.0))
+        if every <= 0 or base_seconds <= 0:
+            return
+        if completed_micro_batches <= 0 or completed_micro_batches >= total_micro_batches:
+            return
+        if completed_micro_batches % every != 0:
+            return
+
+        actual_seconds = round(base_seconds * random.uniform(0.7, 1.3), 1)
+        self.log(
+            f"😴 사람처럼 잠깐 쉬기 | {completed_micro_batches}묶음 처리 후 {actual_seconds:.1f}초 휴식"
+        )
+        self._status(
+            status="잠깐 쉬는 중",
+            detail=f"{completed_micro_batches}묶음 끝나서 {actual_seconds:.1f}초 쉬는 중",
+            current_step="휴식",
+            scene_range=current_range.replace("_", " ~ "),
+            batch_index=batch.batch_index,
+            batch_total=total_batches,
+            micro_index=completed_micro_batches,
+            micro_total=total_micro_batches,
+            batch_micro_index=micro_index,
+            batch_micro_total=len(batch.micro_batches),
+            scene_done=completed_scenes,
+            scene_total=total_scenes,
+            countdown_label="휴식",
+            countdown_remaining_seconds=actual_seconds,
+        )
+        end_at = time.time() + actual_seconds
+        while time.time() < end_at:
+            self._check_stop()
+            time.sleep(0.2)
         try:
             import subprocess
 
@@ -630,7 +682,7 @@ class StoryPipeline:
         total_scenes = sum(len(batch.scenes) for batch in windows)
         completed_micro_batches = 0
         completed_scenes = 0
-        writer = LiveOutputWriter(Path(self.cfg.output_root), scene_range_label)
+        writer = LiveOutputWriter(Path(self.cfg.output_root), scene_range_label, self.cfg.display_name)
         self.runner.open_browser()
         self.log(f"🧠 똑똑즈 워커 세션 시작 | 범위 {scene_range_label}")
         self.log(f"📝 검수 통과 프롬프트 저장 파일: {writer.final_live_txt}")
@@ -909,6 +961,16 @@ class StoryPipeline:
                     scene_total=total_scenes,
                     countdown_label="대기 없음",
                     countdown_remaining_seconds=0.0,
+                )
+                self._take_random_break_if_needed(
+                    completed_micro_batches=completed_micro_batches,
+                    total_micro_batches=total_micro_batches,
+                    total_batches=total_batches,
+                    batch=batch,
+                    micro_index=micro_index,
+                    completed_scenes=completed_scenes,
+                    total_scenes=total_scenes,
+                    current_range=micro_label,
                 )
 
         self.log("🏁 전체 자동화 흐름 완료")
