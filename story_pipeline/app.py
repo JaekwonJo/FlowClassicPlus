@@ -48,8 +48,13 @@ class StoryPromptPipelineApp:
         self.countdown_remaining_seconds = 0.0
 
         self.cfg = self._load_config()
+        self.log_visible = bool(self.cfg.log_visible)
         self.root.geometry(self._compact_window_geometry(self.cfg.window_geometry))
         self._build_ui()
+        try:
+            self._save_config()
+        except Exception:
+            pass
         self.root.bind("<Configure>", self._on_root_configure)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._pump_log_queue()
@@ -94,13 +99,15 @@ class StoryPromptPipelineApp:
         text = str(raw or "").strip()
         if not text:
             return "620x520"
-        body = text.split("+", 1)[0]
+        body, plus, offset = text.partition("+")
         if "x" not in body:
             return "620x520"
         try:
             width_text, height_text = body.split("x", 1)
-            width = max(580, min(int(width_text), 640))
-            height = max(460, min(int(height_text), 560))
+            width = max(580, int(width_text))
+            height = max(460, int(height_text))
+            if plus:
+                return f"{width}x{height}+{offset}"
             return f"{width}x{height}"
         except Exception:
             return "620x520"
@@ -108,6 +115,7 @@ class StoryPromptPipelineApp:
     def _read_ui_into_cfg(self) -> None:
         self.cfg.instance_name = self.instance_name
         self.cfg.window_geometry = self.root.geometry()
+        self.cfg.log_visible = bool(self.log_visible)
         self.cfg.pipeline_mode = self.var_pipeline_mode.get().strip() or "manual_style"
         self.cfg.manual_path = self.var_manual_path.get().strip() or str(DEFAULT_MANUAL_PATH)
         self.cfg.step_macro_path = self.var_step_macro_path.get().strip() or str(DEFAULT_STEP_MACRO_PATH)
@@ -158,6 +166,92 @@ class StoryPromptPipelineApp:
             self._refresh_compact_labels()
             self.log(f"🔗 Gem URL 변경됨 | {self._short_text(value.strip(), mode='url')}")
 
+    def _open_wait_settings_dialog(self) -> None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("대기 설정")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.configure(bg="#F7F2EA")
+        dialog.resizable(False, False)
+
+        fields = [
+            ("창 뜬 뒤 기다림(초)", self.var_pre_input_delay_seconds),
+            ("제출 후 대기(초)", self.var_send_wait_seconds),
+            ("몇 초마다 확인(초)", self.var_poll_interval_seconds),
+            ("같은 응답 몇 번 확인", self.var_stable_rounds_required),
+            ("응답 최대 대기(초)", self.var_max_wait_seconds),
+        ]
+        local_vars: list[tk.StringVar] = []
+        for row, (label_text, source_var) in enumerate(fields):
+            tk.Label(dialog, text=label_text, bg="#F7F2EA", fg="#23302B", font=("맑은 고딕", 9)).grid(
+                row=row, column=0, sticky="w", padx=14, pady=(12 if row == 0 else 6, 0)
+            )
+            local_var = tk.StringVar(value=source_var.get())
+            local_vars.append(local_var)
+            tk.Entry(
+                dialog,
+                textvariable=local_var,
+                width=10,
+                bg="#FFFFFF",
+                fg="#111",
+                insertbackground="#111",
+                relief="flat",
+            ).grid(row=row, column=1, sticky="w", padx=(10, 14), pady=(12 if row == 0 else 6, 0))
+
+        tk.Label(
+            dialog,
+            text="설명: 300초는 꼭 기다린다는 뜻이 아니라,\n그 시간 안에 응답이 안 오면 실패로 보는 최대 제한입니다.",
+            bg="#F7F2EA",
+            fg="#6B6D63",
+            justify="left",
+            font=("맑은 고딕", 8),
+        ).grid(row=len(fields), column=0, columnspan=2, sticky="w", padx=14, pady=(12, 0))
+
+        btn_row = tk.Frame(dialog, bg="#F7F2EA")
+        btn_row.grid(row=len(fields) + 1, column=0, columnspan=2, sticky="e", padx=14, pady=14)
+
+        def _save_and_close() -> None:
+            (
+                self.var_pre_input_delay_seconds,
+                self.var_send_wait_seconds,
+                self.var_poll_interval_seconds,
+                self.var_stable_rounds_required,
+                self.var_max_wait_seconds,
+            ) = local_vars
+            self._save_config()
+            dialog.destroy()
+            self.log(
+                "⚙️ 대기 설정 변경 | 창 뜬 뒤 "
+                f"{self.var_pre_input_delay_seconds.get()}초 | 제출 후 대기 {self.var_send_wait_seconds.get()}초 | "
+                f"확인간격 {self.var_poll_interval_seconds.get()}초 | 같은 응답 {self.var_stable_rounds_required.get()}회 | "
+                f"최대 {self.var_max_wait_seconds.get()}초"
+            )
+
+        tk.Button(
+            btn_row,
+            text="취소",
+            command=dialog.destroy,
+            relief="flat",
+            bg="#E7DED2",
+            fg="#4D443B",
+            font=("맑은 고딕", 9, "bold"),
+            padx=12,
+            pady=6,
+            cursor="hand2",
+        ).pack(side="right")
+        tk.Button(
+            btn_row,
+            text="저장",
+            command=_save_and_close,
+            relief="flat",
+            bg="#1F6F5F",
+            fg="white",
+            font=("맑은 고딕", 9, "bold"),
+            padx=12,
+            pady=6,
+            cursor="hand2",
+        ).pack(side="right", padx=(0, 8))
+
     def _short_text(self, raw: str, mode: str = "path") -> str:
         text = str(raw or "").strip()
         if not text:
@@ -192,7 +286,7 @@ class StoryPromptPipelineApp:
             pieces.append(step)
         if scene:
             pieces.append(scene)
-        if batch and batch != "배치 0 / 0":
+        if batch and batch != "작업 묶음 0 / 0":
             pieces.append(batch)
         self.var_hud_headline.set(headline)
         self.var_hud_subline.set("  |  ".join(pieces) if pieces else "아직 시작하지 않았습니다.")
@@ -225,7 +319,7 @@ class StoryPromptPipelineApp:
         batch_index = payload.get("batch_index")
         batch_total = payload.get("batch_total")
         if batch_index is not None and batch_total is not None and int(batch_total) > 0:
-            self.var_hud_batch.set(f"배치 {int(batch_index)} / {int(batch_total)}")
+            self.var_hud_batch.set(f"작업 묶음 {int(batch_index)} / {int(batch_total)}")
 
         micro_index = payload.get("micro_index")
         micro_total = payload.get("micro_total")
@@ -284,7 +378,7 @@ class StoryPromptPipelineApp:
         self.var_hud_status.set("준비 완료")
         self.var_hud_detail.set("아직 시작하지 않았습니다.")
         self.var_hud_step.set("-")
-        self.var_hud_batch.set("배치 0 / 0")
+        self.var_hud_batch.set("작업 묶음 0 / 0")
         self.var_hud_micro.set("전체 묶음 0 / 0")
         self.var_hud_scene.set("장면 0 / 0")
         self.countdown_label = "대기 없음"
@@ -301,6 +395,10 @@ class StoryPromptPipelineApp:
         else:
             self.log_body.pack_forget()
             self.btn_toggle_log.config(text="로그 보기")
+        try:
+            self._save_config()
+        except Exception:
+            pass
 
     def _refresh_toggle_button(self, variable: tk.BooleanVar, button: tk.Button, label: str) -> None:
         button.config(
@@ -446,21 +544,21 @@ class StoryPromptPipelineApp:
         left_card.grid_columnconfigure(1, weight=1)
         left_card.grid_columnconfigure(3, weight=1)
 
-        tk.Label(left_card, text="시작", bg="#F7F2EA", fg="#23302B").grid(row=1, column=0, sticky="w", padx=(12, 6), pady=4)
+        tk.Label(left_card, text="시작 장면 번호", bg="#F7F2EA", fg="#23302B").grid(row=1, column=0, sticky="w", padx=(12, 6), pady=4)
         start_entry = tk.Entry(left_card, textvariable=self.var_start_scene, width=7, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         start_entry.grid(row=1, column=1, sticky="w", pady=4)
-        tk.Label(left_card, text="끝", bg="#F7F2EA", fg="#23302B").grid(row=1, column=2, sticky="w", padx=(12, 6), pady=4)
+        tk.Label(left_card, text="끝 장면 번호", bg="#F7F2EA", fg="#23302B").grid(row=1, column=2, sticky="w", padx=(12, 6), pady=4)
         end_entry = tk.Entry(left_card, textvariable=self.var_end_scene, width=7, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         end_entry.grid(row=1, column=3, sticky="w", pady=4)
 
-        tk.Label(left_card, text="한번 보낼 장면", bg="#F7F2EA", fg="#23302B").grid(row=2, column=0, sticky="w", padx=(12, 6), pady=4)
+        tk.Label(left_card, text="한번에 보낼 장면 수", bg="#F7F2EA", fg="#23302B").grid(row=2, column=0, sticky="w", padx=(12, 6), pady=4)
         micro_entry = tk.Entry(left_card, textvariable=self.var_micro_batch_size, width=7, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         micro_entry.grid(row=2, column=1, sticky="w", pady=4)
-        tk.Label(left_card, text="창 뜬 뒤 기다림", bg="#F7F2EA", fg="#23302B").grid(row=2, column=2, sticky="w", padx=(12, 6), pady=4)
+        tk.Label(left_card, text="창 뜬 뒤 기다림(초)", bg="#F7F2EA", fg="#23302B").grid(row=2, column=2, sticky="w", padx=(12, 6), pady=4)
         pre_input_entry = tk.Entry(left_card, textvariable=self.var_pre_input_delay_seconds, width=7, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         pre_input_entry.grid(row=2, column=3, sticky="w", pady=4)
 
-        tk.Label(left_card, text="보낸 뒤 잠깐 기다림", bg="#F7F2EA", fg="#23302B").grid(row=3, column=0, sticky="w", padx=(12, 6), pady=4)
+        tk.Label(left_card, text="제출 후 대기(초)", bg="#F7F2EA", fg="#23302B").grid(row=3, column=0, sticky="w", padx=(12, 6), pady=4)
         send_wait_entry = tk.Entry(left_card, textvariable=self.var_send_wait_seconds, width=7, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         send_wait_entry.grid(row=3, column=1, sticky="w", pady=4)
 
@@ -471,6 +569,14 @@ class StoryPromptPipelineApp:
         opt_wrap.grid(row=4, column=0, columnspan=4, sticky="ew", padx=12, pady=(8, 10))
         self._make_toggle_button(opt_wrap, self.var_reset_chat, "새 채팅").pack(side="left")
         self._make_toggle_button(opt_wrap, self.var_open_notepad, "메모장 저장").pack(side="left", padx=(8, 0))
+
+        tk.Label(
+            left_card,
+            text="설명: 시간 숫자는 전부 초입니다. 예) 제출 후 대기 2.0 = 2초, 창 뜬 뒤 기다림 5.0 = 5초",
+            bg="#F7F2EA",
+            fg="#6B6D63",
+            font=("맑은 고딕", 8),
+        ).grid(row=5, column=0, columnspan=4, sticky="w", padx=12, pady=(0, 10))
 
         log_box = tk.Frame(outer, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1, height=120)
         log_box.pack(fill="both", expand=True)
@@ -487,6 +593,9 @@ class StoryPromptPipelineApp:
         self.txt_log.pack(fill="both", expand=True)
         self.txt_log.insert("end", "스토리 자동화 준비 완료\n")
         self.txt_log.configure(state="disabled")
+        if not self.log_visible:
+            self.log_body.pack_forget()
+            self.btn_toggle_log.config(text="로그 보기")
         self._refresh_compact_labels()
         self._reset_hud()
 
@@ -549,6 +658,7 @@ class StoryPromptPipelineApp:
                 except Exception:
                     data = {}
             data["window_geometry"] = self.root.geometry()
+            data["log_visible"] = bool(self.log_visible)
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             pass
@@ -618,7 +728,7 @@ class StoryPromptPipelineApp:
         self.log(f"🧭 브라우저 프로필: {self.cfg.browser_profile_dir}")
         self.log(
             "⏱ 대기 설정 | 창 뜬 뒤 "
-            f"{self.cfg.pre_input_delay_seconds:.1f}초 | 보낸 뒤 잠깐 기다림 "
+            f"{self.cfg.pre_input_delay_seconds:.1f}초 | 제출 후 대기 "
             f"{self.cfg.send_wait_seconds:.1f}초 | 확인간격 {self.cfg.poll_interval_seconds:.1f}초 | "
             f"같은 응답 확인 {self.cfg.stable_rounds_required}회 | 최대 {self.cfg.max_wait_seconds:.1f}초"
         )

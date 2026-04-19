@@ -24,6 +24,13 @@ SEND_SELECTORS = [
     'button[aria-label*="Submit"]',
 ]
 
+STOP_SELECTORS = [
+    'button[aria-label*="중지"]',
+    'button[aria-label*="Stop"]',
+    'button[aria-label*="답변 중지"]',
+    'button[aria-label*="생성 중지"]',
+]
+
 NEW_CHAT_SELECTORS = [
     'button[aria-label*="새 채팅"]',
     'button[aria-label*="New chat"]',
@@ -300,6 +307,25 @@ class GeminiWebRunner:
             raise RuntimeError("전송 버튼과 입력창을 모두 찾지 못했습니다.")
         editor.press("Control+Enter")
 
+    def _has_visible_button(self, selectors: List[str], timeout_ms: int = 300) -> bool:
+        assert self.page is not None
+        for selector in selectors:
+            try:
+                loc = self.page.locator(selector)
+                count = min(loc.count(), 4)
+                for idx in range(count):
+                    button = loc.nth(idx)
+                    if button.is_visible(timeout=timeout_ms):
+                        return True
+            except Exception:
+                continue
+        return False
+
+    def _composer_is_ready_for_next_prompt(self) -> bool:
+        if self._has_visible_button(STOP_SELECTORS):
+            return False
+        return self._has_visible_button(SEND_SELECTORS)
+
     def send_prompt(self, prompt: str, step_label: str = "") -> str:
         self.open_browser()
         assert self.page is not None
@@ -320,7 +346,7 @@ class GeminiWebRunner:
         time.sleep(0.15)
         self._submit()
         self.log(
-            "⏱ 응답 대기 설정 | 보낸 뒤 잠깐 기다림 "
+            "⏱ 응답 대기 설정 | 제출 후 대기 "
             f"{self.send_wait_seconds:.1f}초 | 확인간격 {self.poll_interval_seconds:.1f}초 | "
             f"같은 응답 확인 {self.stable_rounds_required}회 | 최대 {self.wait_timeout_ms / 1000.0:.1f}초"
         )
@@ -344,6 +370,7 @@ class GeminiWebRunner:
         self._wait_with_countdown(self.send_wait_seconds, "응답 확인 시작까지", step_label=step_label)
         stable_count = 0
         last_text = ""
+        button_ready_logged = False
         while time.time() < deadline:
             remaining = max(0.0, deadline - time.time())
             self._status(
@@ -353,6 +380,14 @@ class GeminiWebRunner:
                 countdown_step=step_label,
             )
             current = self._latest_response_text()
+            if current and current != baseline and self._composer_is_ready_for_next_prompt():
+                if not button_ready_logged:
+                    self.log(f"⏭ 화살표 버튼 복귀 확인 | {step_label or '-'}")
+                    button_ready_logged = True
+                time.sleep(min(0.35, max(0.15, self.poll_interval_seconds / 2.0)))
+                followup = self._latest_response_text()
+                if followup and followup != baseline and self._composer_is_ready_for_next_prompt():
+                    return followup
             if current and current != baseline:
                 if current == last_text:
                     stable_count += 1
