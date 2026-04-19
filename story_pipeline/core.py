@@ -38,7 +38,7 @@ def resolve_local_path(raw: str | Path) -> Path:
 
 
 PROMPT_BLOCK_RE = re.compile(
-    r"^(S\d{3}(?:>S\d{3})*)\s+(?:(Video)\s+)?Prompt\s*:\s*(.*?)\s*\|\|\|\s*$",
+    r"^([SV]\d{3}(?:>[SV]\d{3})*)\s+(?:(Video)\s+)?Prompt\s*:\s*(.*?)\s*\|\|\|\s*$",
     re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
 SCENE_LINE_RE = re.compile(
@@ -65,6 +65,7 @@ class Scene:
 @dataclass
 class PipelineConfig:
     instance_name: str = "story_worker1"
+    display_name: str = ""
     pipeline_mode: str = "manual_style"
     window_geometry: str = "620x520"
     log_visible: bool = True
@@ -143,25 +144,27 @@ class LiveOutputWriter:
         self.output_root = output_root
         self.output_root.mkdir(parents=True, exist_ok=True)
         stamp = now_stamp()
-        self.session_root = self.output_root / f"{stamp}_{scene_range_label}"
-        self.raw_dir = self.session_root / "raw"
-        self.reports_dir = self.session_root / "reports"
+        pretty_stamp = datetime.now().strftime("%Y-%m-%d_%H시%M분%S초")
+        pretty_range = scene_range_label.replace("_", "~")
+        self.session_root = self.output_root / f"{pretty_stamp}_장면_{pretty_range}"
+        self.raw_dir = self.session_root / "원본응답"
+        self.reports_dir = self.session_root / "검수리포트"
         self.raw_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
-        self.final_live_txt = self.session_root / f"validated_prompts_{scene_range_label}.txt"
-        self.final_image_txt = self.session_root / f"validated_image_prompts_{scene_range_label}.txt"
-        self.final_video_txt = self.session_root / f"validated_video_prompts_{scene_range_label}.txt"
-        self.manifest_json = self.session_root / "session_manifest.json"
+        self.final_live_txt = self.session_root / f"검수통과_전체프롬프트_{pretty_range}.txt"
+        self.final_image_txt = self.session_root / f"검수통과_이미지프롬프트_{pretty_range}.txt"
+        self.final_video_txt = self.session_root / f"검수통과_비디오프롬프트_{pretty_range}.txt"
+        self.manifest_json = self.session_root / "세션기록.json"
         self.final_live_txt.write_text(
-            f"# 검증 통과 프롬프트 누적 저장\n# 세션: {stamp}\n# 범위: {scene_range_label}\n\n",
+            f"# 검수 통과 프롬프트 누적 저장\n# 세션: {stamp}\n# 범위: {scene_range_label}\n\n",
             encoding="utf-8",
         )
         self.final_image_txt.write_text(
-            f"# 검증 통과 이미지 프롬프트 누적 저장\n# 세션: {stamp}\n# 범위: {scene_range_label}\n\n",
+            f"# 검수 통과 이미지 프롬프트 누적 저장\n# 세션: {stamp}\n# 범위: {scene_range_label}\n\n",
             encoding="utf-8",
         )
         self.final_video_txt.write_text(
-            f"# 검증 통과 비디오 프롬프트 누적 저장\n# 세션: {stamp}\n# 범위: {scene_range_label}\n\n",
+            f"# 검수 통과 비디오 프롬프트 누적 저장\n# 세션: {stamp}\n# 범위: {scene_range_label}\n\n",
             encoding="utf-8",
         )
         self._manifest: Dict[str, object] = {
@@ -374,7 +377,8 @@ class PromptComposer:
             f"{scene_chunk}\n\n"
             "[출력 추가 규칙]\n"
             "- 오직 프롬프트 본문만 출력하세요.\n"
-            "- 각 프롬프트는 반드시 `S### Prompt : ... |||` 또는 `S###>S### Prompt : ... |||` 형식입니다.\n"
+            "- 이미지 프롬프트는 반드시 `S### Prompt : ... |||` 또는 `S###>S### Prompt : ... |||` 형식입니다.\n"
+            "- 비디오 프롬프트는 반드시 `V### Prompt : ... |||` 또는 `V###>V### Prompt : ... |||` 형식입니다.\n"
         )
 
     def build_step7_prompt(self, micro_scenes: Sequence[Scene], draft_text: str, code_validation_errors: Sequence[str]) -> str:
@@ -419,6 +423,7 @@ class PromptComposer:
             "[출력 형식]\n"
             "[최종프롬프트]\n"
             "S### Prompt : ... |||\n"
+            "V### Prompt : ... |||\n"
             "[끝]\n\n"
             "[이번 묶음 장면]\n"
             f"{scene_chunk}\n\n"
@@ -444,8 +449,8 @@ class PromptValidator:
             header = match.group(1).strip()
             is_video_header = bool((match.group(2) or "").strip())
             body = match.group(3).strip()
-            number_matches = [int(item[1:]) for item in re.findall(r"S\d{3}", header)]
-            prompt_type = "video" if is_video_header else self._classify_block(body)
+            number_matches = [int(item[1:]) for item in re.findall(r"[SV]\d{3}", header, re.IGNORECASE)]
+            prompt_type = "video" if is_video_header or header.upper().startswith("V") else self._classify_block(body)
             blocks.append(
                 PromptBlock(
                     header=header,
@@ -505,8 +510,6 @@ class PromptValidator:
                 errors.append(f"{block.header} 종료 구분자 `|||` 가 없습니다.")
             if block.prompt_type == "image" and "@S" not in block.body:
                 errors.append(f"{block.header} 이미지 프롬프트에 캐릭터 태그가 보이지 않습니다.")
-            if block.prompt_type == "video" and "absolutely preserve 3D text sharp" not in block.body.lower():
-                errors.append(f"{block.header} 비디오 방어벽 문구가 없습니다.")
 
         return ValidationResult(ok=not errors, errors=errors, blocks=blocks)
 
@@ -590,8 +593,8 @@ class StoryPipeline:
         completed_scenes = 0
         writer = LiveOutputWriter(Path(self.cfg.output_root), scene_range_label)
         self.runner.open_browser()
-        self.log(f"🧠 스토리 자동화 세션 시작 | 범위 {scene_range_label}")
-        self.log(f"📝 검증 통과 프롬프트는 계속 저장됩니다: {writer.final_live_txt}")
+        self.log(f"🧠 똑똑즈 워커 세션 시작 | 범위 {scene_range_label}")
+        self.log(f"📝 검수 통과 프롬프트 저장 파일: {writer.final_live_txt}")
         self.log(f"🎛️ 실행 모드: {self.cfg.pipeline_mode}")
         self._status(
             status="세션 시작",
@@ -608,11 +611,11 @@ class StoryPipeline:
 
         for batch in windows:
             self._check_stop()
-            self.log(f"📦 배치 {batch.batch_index} 시작 | {batch.label}")
+            self.log(f"📦 작업 묶음 {batch.batch_index} 시작 | {batch.label}")
             self._status(
-                status="배치 시작",
+                status="작업 묶음 시작",
                 detail=f"{batch.label} 준비",
-                current_step="배치 준비",
+                current_step="묶음 준비",
                 scene_range=batch.label.replace("_", " ~ "),
                 batch_index=batch.batch_index,
                 batch_total=total_batches,
@@ -626,7 +629,7 @@ class StoryPipeline:
                 self.log("🧹 새 채팅 기준으로 배치 시작")
                 self._status(
                     status="새 채팅 준비",
-                    detail=f"{batch.label} 새 채팅 상태 맞춤",
+                    detail=f"{batch.label} 새 대화 상태 맞춤",
                     current_step="채팅 초기화",
                     scene_range=batch.label.replace("_", " ~ "),
                     batch_index=batch.batch_index,
@@ -807,7 +810,7 @@ class StoryPipeline:
                         "final_file": f"{micro_label}_final_validated.txt",
                     }
                 )
-                self.log(f"💾 검증 통과 즉시 저장 | {micro_label}")
+                self.log(f"💾 검수 통과 저장 | {micro_label}")
                 completed_micro_batches += 1
                 completed_scenes += len(micro_scenes)
                 self._status(
