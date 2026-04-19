@@ -38,7 +38,7 @@ def resolve_local_path(raw: str | Path) -> Path:
 
 
 PROMPT_BLOCK_RE = re.compile(
-    r"^(S\d{3}(?:>S\d{3})*)\s+Prompt\s*:\s*(.*?)\s*\|\|\|\s*$",
+    r"^(S\d{3}(?:>S\d{3})*)\s+(?:(Video)\s+)?Prompt\s*:\s*(.*?)\s*\|\|\|\s*$",
     re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
 SCENE_LINE_RE = re.compile(
@@ -442,9 +442,10 @@ class PromptValidator:
         blocks: List[PromptBlock] = []
         for match in PROMPT_BLOCK_RE.finditer(text):
             header = match.group(1).strip()
-            body = match.group(2).strip()
+            is_video_header = bool((match.group(2) or "").strip())
+            body = match.group(3).strip()
             number_matches = [int(item[1:]) for item in re.findall(r"S\d{3}", header)]
-            prompt_type = self._classify_block(body)
+            prompt_type = "video" if is_video_header else self._classify_block(body)
             blocks.append(
                 PromptBlock(
                     header=header,

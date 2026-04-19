@@ -46,6 +46,25 @@ RESPONSE_SELECTORS = [
     'div.response-container',
 ]
 
+RESPONSE_IGNORE_SNIPPETS = (
+    "사용자설정 gem",
+    "지금 답변하기",
+    "generating visuals",
+    "developing visuals further",
+    "evaluating text clarity",
+    "생각하는 과정 표시",
+    "님이 보낸 내용",
+)
+
+RESPONSE_VALID_HINTS = (
+    " prompt :",
+    " video prompt :",
+    "|||",
+    "[최종프롬프트]",
+    "[검수요약]",
+    "[장면 설계 브리핑]",
+)
+
 LONG_PROMPT_PASTE_THRESHOLD = 240
 
 
@@ -201,6 +220,11 @@ class GeminiWebRunner:
             for item in entries or []:
                 text = str((item or {}).get("text") or "").strip()
                 if not text:
+                    continue
+                lowered = text.lower()
+                if any(snippet in lowered for snippet in RESPONSE_IGNORE_SNIPPETS) and not any(
+                    hint in lowered for hint in RESPONSE_VALID_HINTS
+                ):
                     continue
                 normalized.append(
                     {
