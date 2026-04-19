@@ -463,6 +463,8 @@ class PromptValidator:
 
     def _classify_block(self, body: str) -> str:
         lowered = body.lower()
+        if re.match(r"^\s*@s\d{3}", lowered):
+            return "video"
         if any(hint in lowered for hint in self.VIDEO_HINTS):
             return "video"
         return "image"
