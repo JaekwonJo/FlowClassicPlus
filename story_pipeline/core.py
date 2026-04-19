@@ -162,18 +162,9 @@ class LiveOutputWriter:
         self.final_image_txt = self.session_root / f"검수통과_이미지프롬프트_{pretty_range}.txt"
         self.final_video_txt = self.session_root / f"검수통과_비디오프롬프트_{pretty_range}.txt"
         self.manifest_json = self.session_root / "세션기록.json"
-        self.final_live_txt.write_text(
-            f"# 검수 통과 프롬프트 누적 저장\n# 세션: {stamp}\n# 범위: {scene_range_label}\n\n",
-            encoding="utf-8",
-        )
-        self.final_image_txt.write_text(
-            f"# 검수 통과 이미지 프롬프트 누적 저장\n# 세션: {stamp}\n# 범위: {scene_range_label}\n\n",
-            encoding="utf-8",
-        )
-        self.final_video_txt.write_text(
-            f"# 검수 통과 비디오 프롬프트 누적 저장\n# 세션: {stamp}\n# 범위: {scene_range_label}\n\n",
-            encoding="utf-8",
-        )
+        self.final_live_txt.write_text("", encoding="utf-8")
+        self.final_image_txt.write_text("", encoding="utf-8")
+        self.final_video_txt.write_text("", encoding="utf-8")
         self._manifest: Dict[str, object] = {
             "created_at": stamp,
             "scene_range": scene_range_label,
@@ -208,22 +199,19 @@ class LiveOutputWriter:
 
     def append_validated_prompts(self, title: str, content: str) -> None:
         with self.final_live_txt.open("a", encoding="utf-8") as f:
-            f.write(f"\n# ===== {title} =====\n")
             f.write(content.strip())
-            f.write("\n")
+            f.write("\n\n")
         blocks = PromptValidator().parse_blocks(content)
         image_lines = [block.render() for block in blocks if block.prompt_type == "image"]
         video_lines = [block.render() for block in blocks if block.prompt_type == "video"]
         if image_lines:
             with self.final_image_txt.open("a", encoding="utf-8") as f:
-                f.write(f"\n# ===== {title} =====\n")
                 f.write("\n\n".join(image_lines).strip())
-                f.write("\n")
+                f.write("\n\n")
         if video_lines:
             with self.final_video_txt.open("a", encoding="utf-8") as f:
-                f.write(f"\n# ===== {title} =====\n")
                 f.write("\n\n".join(video_lines).strip())
-                f.write("\n")
+                f.write("\n\n")
 
     @property
     def paths(self) -> SessionPaths:
@@ -478,6 +466,13 @@ class PromptValidator:
         "starting @s",
         "ending @s",
     )
+    NO_CHANGE_HINTS = (
+        "추가로 재작성할 프롬프트가 없습니다",
+        "추가로 수정할 위반 사항이 발견되지 않았습니다",
+        "위반 사항이 모두 완벽히 클리어",
+        "모든 규칙이 완벽하게 적용되어",
+        "현재 모든 프롬프트가 규칙을 완벽히 충족",
+    )
 
     def parse_blocks(self, text: str) -> List[PromptBlock]:
         blocks: List[PromptBlock] = []
@@ -512,6 +507,15 @@ class PromptValidator:
             return marker.group(1).strip()
         return text.strip()
 
+    def is_no_change_response(self, text: str) -> bool:
+        raw = str(text or "").strip()
+        if not raw:
+            return False
+        if self.parse_blocks(raw):
+            return False
+        lowered = raw.lower()
+        return any(hint in lowered for hint in self.NO_CHANGE_HINTS)
+
     def validate(self, text: str, expected_scenes: Sequence[Scene]) -> ValidationResult:
         errors: List[str] = []
         blocks = self.parse_blocks(text)
@@ -529,15 +533,19 @@ class PromptValidator:
         for key in duplicate_keys:
             errors.append(f"S{key[0]:03d} {key[1]} 프롬프트가 중복되었습니다.")
 
+        coverage: Dict[str, set[int]] = {"image": set(), "video": set()}
+        for block in blocks:
+            coverage.setdefault(block.prompt_type, set()).update(block.numbers or [block.start_number])
+
         for number in expected_numbers:
-            if (number, "image") not in grouped:
+            if number not in coverage.get("image", set()):
                 errors.append(f"S{number:03d} 이미지 프롬프트가 없습니다.")
-            if (number, "video") not in grouped:
+            if number not in coverage.get("video", set()):
                 errors.append(f"S{number:03d} 비디오 프롬프트가 없습니다.")
 
         allowed_numbers = set(expected_numbers)
         for block in blocks:
-            if block.start_number not in allowed_numbers:
+            if not set(block.numbers or [block.start_number]).issubset(allowed_numbers):
                 errors.append(f"{block.header} 는 현재 묶음 범위를 벗어났습니다.")
 
         for block in blocks:
@@ -839,6 +847,9 @@ class StoryPipeline:
                             retry_prompt = self.composer.build_manual_style_step7_prompt()
                             retry_text = self.runner.send_prompt(retry_prompt, step_label=f"{micro_label}_step7_retry{retry_index}")
                             writer.write_raw(f"{micro_label}_step7_retry{retry_index}.txt", retry_text)
+                            if self.validator.is_no_change_response(retry_text):
+                                self.log(f"✅ Step7 재검수 응답: 추가 수정 없음 | {micro_label}")
+                                break
                             final_candidate = self.validator.extract_final_prompt_text(retry_text)
                             final_validation = self.validator.validate(final_candidate, micro_scenes)
                             if not final_validation.ok:
