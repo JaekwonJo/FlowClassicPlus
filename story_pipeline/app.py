@@ -707,8 +707,12 @@ class StoryPromptPipelineApp:
         tk.Button(tool_buttons, text="Gem URL", command=self._edit_url, **tool_btn_opts).pack(side="left", padx=6)
         self.btn_open_output_dir = tk.Button(tool_buttons, text="저장 위치", command=lambda: self._browse_dir(self.var_output_root, "결과 저장 폴더 선택"), **tool_btn_opts)
         self.btn_open_output_dir.pack(side="left", padx=6)
-        tk.Label(tool_card, textvariable=self.var_scene_file_summary, bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(anchor="w", padx=12, pady=(0, 2))
-        tk.Label(tool_card, textvariable=self.var_scene_run_summary, bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8, "bold")).pack(anchor="w", padx=12, pady=(0, 10))
+        summary_row = tk.Frame(tool_card, bg=panel_bg)
+        summary_row.pack(fill="x", padx=12, pady=(0, 10))
+        summary_left = tk.Frame(summary_row, bg=panel_bg)
+        summary_left.pack(side="left", fill="x", expand=True)
+        tk.Label(summary_left, textvariable=self.var_scene_file_summary, bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(anchor="w", pady=(0, 2))
+        tk.Label(summary_left, textvariable=self.var_scene_run_summary, bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8, "bold")).pack(anchor="w")
 
         action_card = tk.Frame(outer, bg=panel_bg, highlightbackground=card_border, highlightthickness=1)
         action_card.pack(fill="x", pady=(0, 8))
@@ -772,16 +776,16 @@ class StoryPromptPipelineApp:
             cursor="hand2",
         ).pack(side="right")
 
-        rest_wrap = tk.Frame(tool_card, bg=panel_bg)
-        rest_wrap.pack(fill="x", padx=12, pady=(0, 10))
+        rest_wrap = tk.Frame(summary_row, bg=panel_bg)
+        rest_wrap.pack(side="right", anchor="s", padx=(8, 0))
         tk.Label(rest_wrap, text="휴식", bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(side="left")
-        rest_every_entry = tk.Entry(rest_wrap, textvariable=self.var_rest_every_micro_batches, width=4, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        rest_every_entry = tk.Entry(rest_wrap, textvariable=self.var_rest_every_micro_batches, width=3, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         rest_every_entry.pack(side="left", padx=(6, 4))
         tk.Label(rest_wrap, text="묶음마다", bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(side="left")
-        tk.Label(rest_wrap, text="시간", bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(side="left", padx=(16, 4))
-        rest_seconds_entry = tk.Entry(rest_wrap, textvariable=self.var_rest_seconds, width=5, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        tk.Label(rest_wrap, text="시간", bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(side="left", padx=(12, 4))
+        rest_seconds_entry = tk.Entry(rest_wrap, textvariable=self.var_rest_seconds, width=4, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         rest_seconds_entry.pack(side="left", padx=(2, 4))
-        tk.Label(rest_wrap, text="초(±30% 랜덤)", bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(side="left")
+        tk.Label(rest_wrap, text="초(±30%)", bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(side="left")
 
         tk.Label(
             left_card,
@@ -810,13 +814,27 @@ class StoryPromptPipelineApp:
             self.log_body.pack_forget()
             self.btn_toggle_log.config(text="로그 보기")
 
-        resize_bar = tk.Frame(outer, bg=root_bg)
-        resize_bar.pack(fill="x", pady=(6, 0))
-        tk.Label(resize_bar, text="창 크기 조절", bg=root_bg, fg="#7A7C74", font=("맑은 고딕", 8)).pack(side="right", padx=(0, 6))
-        resize_handle = tk.Frame(resize_bar, bg="#D8D0C3", width=34, height=22, cursor="size_nw_se", highlightthickness=1, highlightbackground="#BFB5A5")
-        resize_handle.pack(side="right")
+        self.resize_hint_label = tk.Label(
+            self.root,
+            text="창 크기 조절",
+            bg=root_bg,
+            fg="#7A7C74",
+            font=("맑은 고딕", 8),
+        )
+        self.resize_hint_label.place(relx=1.0, rely=1.0, x=-48, y=-8, anchor="se")
+        resize_handle = tk.Frame(
+            self.root,
+            bg="#D8D0C3",
+            width=34,
+            height=22,
+            cursor="size_nw_se",
+            highlightthickness=1,
+            highlightbackground="#BFB5A5",
+        )
+        resize_handle.place(relx=1.0, rely=1.0, x=-8, y=-8, anchor="se")
         resize_handle.pack_propagate(False)
         tk.Label(resize_handle, text="◢", bg="#D8D0C3", fg="#6A6258", font=("맑은 고딕", 10, "bold")).pack(expand=True)
+        self.resize_handle = resize_handle
         resize_handle.bind("<ButtonPress-1>", self._start_resize_drag)
         resize_handle.bind("<B1-Motion>", self._on_resize_drag)
         resize_handle.bind("<ButtonRelease-1>", self._end_resize_drag)
