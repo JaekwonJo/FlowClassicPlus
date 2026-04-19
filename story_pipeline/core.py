@@ -238,7 +238,21 @@ class StoryPromptSource:
             self.library_text = resolve_local_path(cfg.library_path).read_text(encoding="utf-8")
         self.scene_file_text = resolve_local_path(cfg.scene_file_path).read_text(encoding="utf-8")
         self.step_sections = self._extract_step_sections(self.step_macro_text)
+        self._validate_required_steps()
         self.scenes = self._parse_scenes(self.scene_file_text)
+
+    def _validate_required_steps(self) -> None:
+        required_steps = (6, 7) if self.cfg.pipeline_mode == "manual_style" else (5, 6, 7)
+        missing = [num for num in required_steps if num not in self.step_sections]
+        if missing:
+            raise ValueError(f"Step 매크로 파일에 필요한 Step이 없습니다: {', '.join(f'Step {n}' for n in missing)}")
+        empty = [num for num in required_steps if not (self.step_sections.get(num, {}).get('body') or '').strip()]
+        if empty:
+            raise ValueError(
+                "Step 매크로 파일 본문이 비어 있습니다: "
+                + ", ".join(f"Step {n}" for n in empty)
+                + " 본문을 채워 주세요."
+            )
 
     def _extract_step_sections(self, text: str) -> Dict[int, Dict[str, str]]:
         matches = list(STEP_SECTION_RE.finditer(text))
