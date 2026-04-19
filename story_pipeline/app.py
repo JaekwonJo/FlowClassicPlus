@@ -27,9 +27,11 @@ def sanitize_instance_name(raw: str) -> str:
 class StoryPromptPipelineApp:
     def __init__(self, instance_name: str = "story_worker1") -> None:
         self.instance_name = sanitize_instance_name(instance_name)
+        self.preview_runner: GeminiWebRunner | None = None
+        self.geometry_save_job = None
         self.root = tk.Tk()
         self.root.title(f"똑똑즈 자동화 파이프라인 - ttz_worker ({self.instance_name})")
-        self.root.geometry("760x560")
+        self.root.geometry(self.cfg.window_geometry if hasattr(self, "cfg") else "760x560")
         self.root.minsize(720, 520)
         self.root.configure(bg="#ECE7DF")
 
@@ -41,7 +43,10 @@ class StoryPromptPipelineApp:
         self.log_visible = True
 
         self.cfg = self._load_config()
+        self.root.geometry(self.cfg.window_geometry or "760x560")
         self._build_ui()
+        self.root.bind("<Configure>", self._on_root_configure)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._pump_log_queue()
 
     def _load_config(self) -> PipelineConfig:
@@ -80,6 +85,7 @@ class StoryPromptPipelineApp:
 
     def _read_ui_into_cfg(self) -> None:
         self.cfg.instance_name = self.instance_name
+        self.cfg.window_geometry = self.root.geometry()
         self.cfg.pipeline_mode = self.var_pipeline_mode.get().strip() or "manual_style"
         self.cfg.manual_path = self.var_manual_path.get().strip() or str(DEFAULT_MANUAL_PATH)
         self.cfg.step_macro_path = self.var_step_macro_path.get().strip() or str(DEFAULT_STEP_MACRO_PATH)
@@ -385,6 +391,44 @@ class StoryPromptPipelineApp:
             typing_speed_level=self.cfg.typing_speed_level,
         )
 
+    def _on_root_configure(self, _event=None) -> None:
+        if not hasattr(self, "var_pipeline_mode"):
+            return
+        if self.geometry_save_job is not None:
+            try:
+                self.root.after_cancel(self.geometry_save_job)
+            except Exception:
+                pass
+        self.geometry_save_job = self.root.after(400, self._save_geometry_only)
+
+    def _save_geometry_only(self) -> None:
+        self.geometry_save_job = None
+        try:
+            path = self._config_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = {}
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+            data["window_geometry"] = self.root.geometry()
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _on_close(self) -> None:
+        try:
+            self._save_config()
+        except Exception:
+            pass
+        try:
+            if self.preview_runner is not None:
+                self.preview_runner.close()
+        except Exception:
+            pass
+        self.root.destroy()
+
     def _sync_runner_config(self) -> None:
         if self.runner is None:
             self.runner = self._build_runner()
@@ -402,10 +446,17 @@ class StoryPromptPipelineApp:
         try:
             if self.current_log_file is None:
                 self._prepare_log_file("browser")
-            self._sync_runner_config()
+            if self.worker_thread and self.worker_thread.is_alive():
+                self.log("⚠️ 자동화 실행 중에는 브라우저 미리보기를 따로 열지 않습니다.")
+                return
+            if self.preview_runner is None:
+                self.preview_runner = self._build_runner()
+            else:
+                self.preview_runner.start_url = self.cfg.gemini_url
+                self.preview_runner.profile_dir = Path(self.cfg.browser_profile_dir)
             self.log(f"🪟 워커: {self.instance_name}")
             self.log(f"🧭 브라우저 프로필: {self.cfg.browser_profile_dir}")
-            self.runner.open_browser()
+            self.preview_runner.open_browser()
             self.log("🌐 브라우저 열기 완료")
         except Exception as exc:
             self.log(f"❌ 브라우저 열기 실패: {exc}")
@@ -417,7 +468,6 @@ class StoryPromptPipelineApp:
         self.stop_event.clear()
         self._save_config()
         self._prepare_log_file("run")
-        self._sync_runner_config()
         self.log(f"🚀 자동화 시작 요청 | worker={self.instance_name}")
         self.log(f"🧭 브라우저 프로필: {self.cfg.browser_profile_dir}")
         self.log(
@@ -428,13 +478,20 @@ class StoryPromptPipelineApp:
         self.log(
             f"⌨️ 입력 설정 | 인간형 {'ON' if self.cfg.human_typing_enabled else 'OFF'} | 속도 x{self.cfg.typing_speed_level}"
         )
+        if self.preview_runner is not None:
+            try:
+                self.preview_runner.close()
+                self.log("🔄 브라우저 미리보기 세션을 닫고 자동화 세션으로 다시 엽니다.")
+            except Exception:
+                pass
+            self.preview_runner = None
         self.worker_thread = threading.Thread(target=self._run_pipeline_thread, daemon=True)
         self.worker_thread.start()
 
     def _run_pipeline_thread(self) -> None:
-        assert self.runner is not None
+        runner = self._build_runner()
         try:
-            pipeline = StoryPipeline(cfg=self.cfg, runner=self.runner, log=self.log, stop_event=self.stop_event)
+            pipeline = StoryPipeline(cfg=self.cfg, runner=runner, log=self.log, stop_event=self.stop_event)
             paths = pipeline.run()
             self.log(f"📁 세션 폴더: {paths.session_root}")
             self.log(f"📝 통합 누적 파일: {paths.final_live_txt}")
@@ -443,6 +500,11 @@ class StoryPromptPipelineApp:
         except Exception as exc:
             self.log(f"❌ 자동화 실패: {exc}")
             self.log(traceback.format_exc().strip())
+        finally:
+            try:
+                runner.close()
+            except Exception:
+                pass
 
     def on_stop(self) -> None:
         self.stop_event.set()

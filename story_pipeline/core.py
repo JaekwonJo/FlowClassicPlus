@@ -66,6 +66,7 @@ class Scene:
 class PipelineConfig:
     instance_name: str = "story_worker1"
     pipeline_mode: str = "manual_style"
+    window_geometry: str = "760x560"
     manual_path: str = str(DEFAULT_MANUAL_PATH)
     step_macro_path: str = str(DEFAULT_STEP_MACRO_PATH)
     library_path: str = str(DEFAULT_LIBRARY_PATH)
