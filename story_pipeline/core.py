@@ -433,6 +433,35 @@ class PromptComposer:
             f"{broken_text.strip()}\n"
         )
 
+    def build_missing_blocks_prompt(
+        self,
+        micro_scenes: Sequence[Scene],
+        current_text: str,
+        missing_items: Sequence[tuple[int, str]],
+    ) -> str:
+        scene_chunk = self._render_scene_chunk(micro_scenes)
+        request_lines = []
+        for number, prompt_type in missing_items:
+            if prompt_type == "image":
+                request_lines.append(f"- S{number:03d} 이미지 프롬프트 1개")
+            else:
+                request_lines.append(f"- V{number:03d} 비디오 프롬프트 1개")
+        request_block = "\n".join(request_lines) if request_lines else "- 없음"
+        return (
+            "[누락 프롬프트만 보완]\n"
+            "- 아래 현재 최종본에서 빠진 프롬프트만 다시 써 주세요.\n"
+            "- 이미 있는 번호는 다시 쓰지 말고, 빠진 번호만 출력하세요.\n"
+            "- 이번 자동화에서는 비디오 생략 금지입니다. 빠진 비디오가 있으면 반드시 작성하세요.\n"
+            "- 설명, 브리핑, 머리말 없이 프롬프트 줄만 출력하세요.\n"
+            "- 이미지면 `S### Prompt : ... |||`, 비디오면 `V### Prompt : ... |||` 형식만 사용하세요.\n\n"
+            "[이번 묶음 장면]\n"
+            f"{scene_chunk}\n\n"
+            "[현재까지 저장 후보]\n"
+            f"{current_text.strip()}\n\n"
+            "[꼭 다시 써야 하는 누락 번호]\n"
+            f"{request_block}\n"
+        )
+
 
 class PromptValidator:
     VIDEO_HINTS = (
@@ -512,6 +541,16 @@ class PromptValidator:
                 errors.append(f"{block.header} 이미지 프롬프트에 캐릭터 태그가 보이지 않습니다.")
 
         return ValidationResult(ok=not errors, errors=errors, blocks=blocks)
+
+    def missing_items_from_errors(self, errors: Sequence[str]) -> List[tuple[int, str]]:
+        items: List[tuple[int, str]] = []
+        for error in errors:
+            match = re.match(r"^S(\d{3})\s+(이미지|비디오)\s+프롬프트가 없습니다\.$", str(error).strip())
+            if not match:
+                continue
+            prompt_type = "image" if match.group(2) == "이미지" else "video"
+            items.append((int(match.group(1)), prompt_type))
+        return items
 
     def normalize_text(self, blocks: Sequence[PromptBlock], expected_scenes: Sequence[Scene]) -> str:
         order = {scene.number: idx for idx, scene in enumerate(expected_scenes)}
@@ -723,7 +762,7 @@ class StoryPipeline:
                 if not final_validation.ok:
                     merged_candidate = self.validator.merge_partial_with_draft(final_validation, draft_validation, micro_scenes)
                     merged_validation = self.validator.validate(merged_candidate, micro_scenes)
-                    if merged_validation.ok:
+                    if merged_validation.ok or len(merged_validation.errors) < len(final_validation.errors):
                         final_candidate = merged_candidate
                         final_validation = merged_validation
 
@@ -753,7 +792,7 @@ class StoryPipeline:
                             if not final_validation.ok:
                                 merged_candidate = self.validator.merge_partial_with_draft(final_validation, draft_validation, micro_scenes)
                                 merged_validation = self.validator.validate(merged_candidate, micro_scenes)
-                                if merged_validation.ok:
+                                if merged_validation.ok or len(merged_validation.errors) < len(final_validation.errors):
                                     final_candidate = merged_candidate
                                     final_validation = merged_validation
                             if final_validation.ok:
@@ -784,6 +823,48 @@ class StoryPipeline:
                             final_validation = repaired_validation
 
                 if not final_validation.ok:
+                    missing_items = self.validator.missing_items_from_errors(final_validation.errors)
+                    if missing_items:
+                        for refill_index in range(1, 3):
+                            self.log(f"🧩 누락 프롬프트 보완 {refill_index}회차 | {micro_label}")
+                            self._status(
+                                status="누락 프롬프트 보완",
+                                detail=f"{micro_label} 빠진 번호 보완 {refill_index}회차",
+                                current_step="누락 보완",
+                                scene_range=micro_label.replace("_", " ~ "),
+                                batch_index=batch.batch_index,
+                                batch_total=total_batches,
+                                micro_index=completed_micro_batches + 1,
+                                micro_total=total_micro_batches,
+                                batch_micro_index=micro_index,
+                                batch_micro_total=len(batch.micro_batches),
+                                scene_done=completed_scenes,
+                                scene_total=total_scenes,
+                            )
+                            refill_prompt = self.composer.build_missing_blocks_prompt(
+                                micro_scenes,
+                                final_candidate,
+                                missing_items,
+                            )
+                            refill_text = self.runner.send_prompt(refill_prompt, step_label=f"{micro_label}_missing_refill{refill_index}")
+                            writer.write_raw(f"{micro_label}_missing_refill{refill_index}.txt", refill_text)
+                            refill_candidate = self.validator.extract_final_prompt_text(refill_text)
+                            refill_validation = self.validator.validate(refill_candidate, micro_scenes)
+                            if refill_validation.blocks:
+                                merged_candidate = self.validator.merge_partial_with_draft(
+                                    refill_validation,
+                                    final_validation,
+                                    micro_scenes,
+                                )
+                                merged_validation = self.validator.validate(merged_candidate, micro_scenes)
+                                if merged_validation.ok or len(merged_validation.errors) < len(final_validation.errors):
+                                    final_candidate = merged_candidate
+                                    final_validation = merged_validation
+                            if final_validation.ok:
+                                break
+
+                if not final_validation.ok:
+                    writer.write_raw(f"{micro_label}_최종후보_실패직전.txt", final_candidate)
                     writer.write_report(
                         f"{micro_label}_final_validation_failed.json",
                         {"ok": False, "errors": final_validation.errors},

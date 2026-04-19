@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import traceback
@@ -11,7 +12,7 @@ from queue import Empty, Queue
 from typing import Optional
 
 import tkinter as tk
-from tkinter import filedialog, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from .core import DEFAULT_LIBRARY_PATH, DEFAULT_MANUAL_PATH, DEFAULT_SCENE_PATH, DEFAULT_STEP_MACRO_PATH
@@ -59,6 +60,7 @@ class StoryPromptPipelineApp:
         self.run_started_at: float | None = None
         self.countdown_label = "대기 없음"
         self.countdown_remaining_seconds = 0.0
+        self._resize_drag_origin: tuple[int, int, int, int] | None = None
 
         self.cfg = self._load_config()
         self.log_visible = bool(self.cfg.log_visible)
@@ -113,8 +115,12 @@ class StoryPromptPipelineApp:
     def _default_browser_profile_dir(self) -> str:
         return f"runtime/ttz_gemini_profile_pw_{self.instance_name}"
 
+    def _instance_folder_name(self) -> str:
+        digits = "".join(ch for ch in self.instance_name if ch.isdigit())
+        return f"설정{int(digits)}" if digits else self.instance_name
+
     def _default_output_root(self) -> str:
-        return f"logs/똑똑즈_워커/{self.instance_name}"
+        return f"logs/똑똑즈_워커/{self._instance_folder_name()}"
 
     def _legacy_browser_profile_dirs(self) -> list[str]:
         return [
@@ -125,6 +131,7 @@ class StoryPromptPipelineApp:
         return [
             f"logs/story_prompt_pipeline/{self.instance_name}",
             f"logs/ttz_pipeline_worker/{self.instance_name}",
+            f"logs/똑똑즈_워커/{self.instance_name}",
         ]
 
     def _migrate_legacy_paths(self, cfg: PipelineConfig) -> None:
@@ -285,6 +292,42 @@ class StoryPromptPipelineApp:
         shown = self._display_name_text()
         self.log(f"🏷 작업 이름 변경 | {shown}")
 
+    def _suggest_new_browser_profile_dir(self) -> str:
+        current = Path(self.var_browser_profile_dir.get().strip() or self._default_browser_profile_dir())
+        parent = current.parent if str(current.parent) not in {"", "."} else Path("runtime")
+        stem = current.name or f"ttz_gemini_profile_pw_{self.instance_name}"
+        match = re.match(r"^(.*?)(?:_(\d+))?$", stem)
+        base_name = (match.group(1) if match else stem).strip("_") or stem
+        number = int(match.group(2)) + 1 if match and match.group(2) else 2
+        while True:
+            candidate = parent / f"{base_name}_{number}"
+            if not candidate.exists():
+                return str(candidate).replace("\\", "/")
+            number += 1
+
+    def create_browser_profile(self) -> None:
+        if self.worker_thread and self.worker_thread.is_alive():
+            messagebox.showwarning("안내", "작업 실행 중에는 새 브라우저를 만들 수 없습니다.\n먼저 완전 중지 후 다시 눌러주세요.", parent=self.root)
+            return
+        current = self.var_browser_profile_dir.get().strip() or self._default_browser_profile_dir()
+        new_profile = self._suggest_new_browser_profile_dir()
+        try:
+            Path(new_profile).mkdir(parents=True, exist_ok=True)
+            self.var_browser_profile_dir.set(new_profile)
+            self._save_config()
+            self._refresh_compact_labels()
+            self.log(f"🆕 새 브라우저 준비 완료 | {self._short_text(current)} -> {self._short_text(new_profile)}")
+            messagebox.showinfo(
+                "새 브라우저 준비",
+                "새 브라우저 프로필을 만들었습니다.\n\n"
+                f"- 이전 프로필: {Path(current).name}\n"
+                f"- 새 프로필: {Path(new_profile).name}\n\n"
+                "이제 브라우저 버튼을 다시 누르면 새 프로필로 열립니다.",
+                parent=self.root,
+            )
+        except Exception as exc:
+            messagebox.showerror("새 브라우저 만들기 실패", f"새 프로필 생성 중 오류가 났습니다.\n{exc}", parent=self.root)
+
     def _open_wait_settings_dialog(self) -> None:
         dialog = tk.Toplevel(self.root)
         dialog.title("대기 설정")
@@ -436,13 +479,11 @@ class StoryPromptPipelineApp:
             self.var_scene_run_summary.set("이번 실행: 시작/끝 번호를 확인해 주세요.")
 
     def _refresh_wait_settings_label(self) -> None:
-        if not hasattr(self, "btn_wait_settings"):
+        if not hasattr(self, "var_max_wait_seconds"):
             return
-        current = ""
-        if hasattr(self, "var_max_wait_seconds"):
-            current = self.var_max_wait_seconds.get().strip()
-        current = current or str(getattr(self.cfg, "max_wait_seconds", 300.0))
-        self.btn_wait_settings.config(text=f"최대 기다림 {current}초 바꾸기")
+        if hasattr(self, "ent_max_wait_seconds"):
+            self.ent_max_wait_seconds.delete(0, "end")
+            self.ent_max_wait_seconds.insert(0, self.var_max_wait_seconds.get().strip() or str(getattr(self.cfg, "max_wait_seconds", 300.0)))
 
     def _refresh_compact_labels(self) -> None:
         if hasattr(self, "lbl_worker_name"):
@@ -458,6 +499,20 @@ class StoryPromptPipelineApp:
         self._refresh_window_title()
         self._refresh_scene_range_labels()
         self._refresh_wait_settings_label()
+
+    def _start_resize_drag(self, event) -> None:
+        self._resize_drag_origin = (event.x_root, event.y_root, self.root.winfo_width(), self.root.winfo_height())
+
+    def _on_resize_drag(self, event) -> None:
+        if not self._resize_drag_origin:
+            return
+        start_x, start_y, start_w, start_h = self._resize_drag_origin
+        new_w = max(self.root.minsize()[0], start_w + (event.x_root - start_x))
+        new_h = max(self.root.minsize()[1], start_h + (event.y_root - start_y))
+        self.root.geometry(f"{new_w}x{new_h}")
+
+    def _end_resize_drag(self, _event=None) -> None:
+        self._resize_drag_origin = None
 
     def _refresh_hud_compact_summary(self) -> None:
         headline = self.var_hud_detail.get().strip() or self.var_hud_status.get().strip() or "준비 완료"
@@ -740,8 +795,6 @@ class StoryPromptPipelineApp:
         tk.Button(tool_buttons, text="Gem URL", command=self._edit_url, **tool_btn_opts).pack(side="left", padx=6)
         self.btn_open_output_dir = tk.Button(tool_buttons, text="저장 위치", command=lambda: self._browse_dir(self.var_output_root, "결과 저장 폴더 선택"), **tool_btn_opts)
         self.btn_open_output_dir.pack(side="left", padx=6)
-        self.btn_wait_settings = tk.Button(tool_buttons, text="최대 대기", command=self._open_wait_settings_dialog, **tool_btn_opts)
-        self.btn_wait_settings.pack(side="left", padx=6)
         tk.Label(tool_card, textvariable=self.var_scene_file_summary, bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(anchor="w", padx=12, pady=(0, 2))
         tk.Label(tool_card, textvariable=self.var_scene_run_summary, bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8, "bold")).pack(anchor="w", padx=12, pady=(0, 10))
 
@@ -752,6 +805,7 @@ class StoryPromptPipelineApp:
         action_buttons.pack(fill="x", padx=10, pady=(0, 10))
         action_btn_opts = {"relief": "flat", "font": ("맑은 고딕", 10, "bold"), "pady": 9, "cursor": "hand2", "width": 10}
         tk.Button(action_buttons, text="브라우저", command=self.on_open_browser, bg=browse_btn, fg="white", **action_btn_opts).pack(side="left", padx=(0, 6))
+        tk.Button(action_buttons, text="새 브라우저", command=self.create_browser_profile, bg="#446A8A", fg="white", **action_btn_opts).pack(side="left", padx=6)
         tk.Button(action_buttons, text="시작", command=self.on_start, bg="#C66A2B", fg="white", **action_btn_opts).pack(side="left", padx=6)
         tk.Button(action_buttons, text="완전 중지", command=self.on_stop, bg="#6F3B2A", fg="white", **action_btn_opts).pack(side="left", padx=6)
         tk.Button(action_buttons, text="최근 결과 보기", command=self.on_open_output_dir, bg="#5E7A74", fg="white", **action_btn_opts).pack(side="left", padx=6)
@@ -783,8 +837,11 @@ class StoryPromptPipelineApp:
         tk.Label(left_card, text="제출 후 대기(초)", bg=panel_bg, fg="#23302B").grid(row=3, column=0, sticky="w", padx=(12, 6), pady=4)
         send_wait_entry = tk.Entry(left_card, textvariable=self.var_send_wait_seconds, width=7, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         send_wait_entry.grid(row=3, column=1, sticky="w", pady=4)
+        tk.Label(left_card, text="최대 기다림(초)", bg=panel_bg, fg="#23302B").grid(row=3, column=2, sticky="w", padx=(12, 6), pady=4)
+        self.ent_max_wait_seconds = tk.Entry(left_card, textvariable=self.var_max_wait_seconds, width=7, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        self.ent_max_wait_seconds.grid(row=3, column=3, sticky="w", pady=4)
 
-        for entry in (start_entry, end_entry, micro_entry, pre_input_entry, send_wait_entry):
+        for entry in (start_entry, end_entry, micro_entry, pre_input_entry, send_wait_entry, self.ent_max_wait_seconds):
             entry.bind("<FocusOut>", lambda _e: (self._save_config(), self._refresh_compact_labels()))
 
         opt_wrap = tk.Frame(left_card, bg=panel_bg)
@@ -794,7 +851,7 @@ class StoryPromptPipelineApp:
 
         tk.Label(
             left_card,
-            text="설명: 시간 숫자는 전부 초입니다. 예) 제출 후 대기 2.0 = 2초, 창 뜬 뒤 기다림 5.0 = 5초, 최대 기다림은 위의 [최대 기다림 ...초 바꾸기] 버튼에서 바꿉니다.",
+            text="설명: 시간 숫자는 전부 초입니다. 예) 제출 후 대기 2.0 = 2초, 창 뜬 뒤 기다림 5.0 = 5초, 최대 기다림 180.0 = 180초입니다.",
             bg=panel_bg,
             fg="#6B6D63",
             font=("맑은 고딕", 8),
@@ -818,6 +875,17 @@ class StoryPromptPipelineApp:
         if not self.log_visible:
             self.log_body.pack_forget()
             self.btn_toggle_log.config(text="로그 보기")
+
+        resize_bar = tk.Frame(outer, bg=root_bg)
+        resize_bar.pack(fill="x", pady=(6, 0))
+        tk.Label(resize_bar, text="창 크기 조절", bg=root_bg, fg="#7A7C74", font=("맑은 고딕", 8)).pack(side="right", padx=(0, 6))
+        resize_handle = tk.Frame(resize_bar, bg="#D8D0C3", width=34, height=22, cursor="size_nw_se", highlightthickness=1, highlightbackground="#BFB5A5")
+        resize_handle.pack(side="right")
+        resize_handle.pack_propagate(False)
+        tk.Label(resize_handle, text="◢", bg="#D8D0C3", fg="#6A6258", font=("맑은 고딕", 10, "bold")).pack(expand=True)
+        resize_handle.bind("<ButtonPress-1>", self._start_resize_drag)
+        resize_handle.bind("<B1-Motion>", self._on_resize_drag)
+        resize_handle.bind("<ButtonRelease-1>", self._end_resize_drag)
         self._refresh_compact_labels()
         self._reset_hud()
 
