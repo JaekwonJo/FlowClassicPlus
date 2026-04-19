@@ -16,7 +16,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from .core import DEFAULT_LIBRARY_PATH, DEFAULT_MANUAL_PATH, DEFAULT_SCENE_PATH, DEFAULT_STEP_MACRO_PATH
-from .core import PipelineConfig, StoryPipeline
+from .core import LiveOutputWriter, PipelineConfig, StoryPipeline
 from .core import SCENE_LINE_RE, resolve_local_path
 from .web import GeminiWebRunner
 
@@ -392,9 +392,57 @@ class StoryPromptPipelineApp:
             )
         except Exception:
             self.var_scene_run_summary.set("이번 실행: 시작/끝 번호를 확인해 주세요.")
+        if hasattr(self, "var_resume_summary"):
+            resume = self._detect_resume_candidate()
+            if resume is None:
+                self.var_resume_summary.set("이어 저장: 새 세션으로 저장")
+            else:
+                self.var_resume_summary.set(
+                    f"이어 저장: 기존 세션 사용 ({self._scene_label(resume.last_complete_scene)} 다음부터)"
+                )
 
     def _refresh_wait_settings_label(self) -> None:
         return None
+
+    def _detect_resume_candidate(self):
+        try:
+            output_root = Path(self.var_output_root.get().strip() or self._default_output_root())
+            start_num = int((self.var_start_scene.get() or "1").strip())
+            display_name = self.var_display_name.get().strip()
+        except Exception:
+            return None
+        return LiveOutputWriter.find_resume_candidate(output_root, start_num, display_name)
+
+    def _build_start_confirmation_text(self) -> str:
+        resume = self._detect_resume_candidate()
+        lines = [
+            "이 설정으로 시작할까요?",
+            "",
+            f"- 작업 이름: {self._display_name_text()}",
+            f"- 워커: {self.instance_name}",
+            f"- 장면 파일: {self._short_text(self.var_scene_file_path.get())}",
+            f"- 저장 폴더: {self.var_output_root.get().strip() or self._default_output_root()}",
+            f"- 실행 범위: {self.var_scene_run_summary.get().replace('이번 실행: ', '')}",
+            f"- 한번에 보낼 장면 수: {self.var_micro_batch_size.get().strip() or '-'}",
+            f"- 새 채팅: {'ON' if self.var_reset_chat.get() else 'OFF'}",
+            f"- 메모장 저장: {'ON' if self.var_open_notepad.get() else 'OFF'}",
+            f"- 창 뜬 뒤 기다림: {self.var_pre_input_delay_seconds.get().strip() or '-'}초",
+            f"- 제출 후 대기: {self.var_send_wait_seconds.get().strip() or '-'}초",
+            f"- 최대 기다림: {self.var_max_wait_seconds.get().strip() or '-'}초",
+        ]
+        if resume is None:
+            lines.extend(["", "이어 저장 안내", "- 새 세션 폴더를 만들어 저장합니다."])
+        else:
+            lines.extend(
+                [
+                    "",
+                    "이어 저장 안내",
+                    f"- 기존 세션 폴더: {resume.session_root}",
+                    f"- 마지막 완성 번호: {self._scene_label(resume.last_complete_scene)}",
+                    f"- 이번 실행은 {self._scene_label(resume.last_complete_scene + 1)}부터 기존 파일에 이어 저장됩니다.",
+                ]
+            )
+        return "\n".join(lines)
 
     def _refresh_compact_labels(self) -> None:
         if hasattr(self, "lbl_worker_name"):
@@ -653,6 +701,7 @@ class StoryPromptPipelineApp:
         self.var_hud_subline = tk.StringVar()
         self.var_scene_file_summary = tk.StringVar()
         self.var_scene_run_summary = tk.StringVar()
+        self.var_resume_summary = tk.StringVar()
 
         header = tk.Frame(outer, bg=root_bg)
         header.pack(fill="x", pady=(0, 8))
@@ -713,6 +762,7 @@ class StoryPromptPipelineApp:
         summary_left.pack(side="left", fill="x", expand=True)
         tk.Label(summary_left, textvariable=self.var_scene_file_summary, bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(anchor="w", pady=(0, 2))
         tk.Label(summary_left, textvariable=self.var_scene_run_summary, bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8, "bold")).pack(anchor="w")
+        tk.Label(summary_left, textvariable=self.var_resume_summary, bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8)).pack(anchor="w", pady=(2, 0))
 
         action_card = tk.Frame(outer, bg=panel_bg, highlightbackground=card_border, highlightthickness=1)
         action_card.pack(fill="x", pady=(0, 8))
@@ -971,6 +1021,9 @@ class StoryPromptPipelineApp:
             return
         self.stop_event.clear()
         self._save_config()
+        if not messagebox.askokcancel("시작 전 확인", self._build_start_confirmation_text(), parent=self.root):
+            self.log("⏸ 사용자가 시작 전 확인 창에서 취소했습니다.")
+            return
         self._prepare_log_file("run")
         self.run_started_at = time.time()
         self._reset_hud()
