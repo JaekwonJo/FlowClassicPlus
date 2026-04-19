@@ -394,7 +394,7 @@ class GeminiWebRunner:
         while time.time() < deadline:
             remaining = max(0.0, deadline - time.time())
             self._status(
-                countdown_label="최대 대기 남음",
+                countdown_label="응답 기다리는 중",
                 countdown_remaining_seconds=remaining,
                 countdown_total_seconds=self.wait_timeout_ms / 1000.0,
                 countdown_step=step_label,

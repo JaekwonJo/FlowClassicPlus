@@ -348,13 +348,8 @@ class PromptComposer:
         section = self.source.step_sections[6]["body"]
         scene_chunk = self._render_scene_chunk(micro_scenes)
         return (
-            "[자동화 실행 모드]\n"
-            "- 현재 Gem 안에는 이미 매뉴얼과 지식 파일이 들어가 있다고 가정합니다.\n"
-            "- 지금부터는 사용자가 하던 방식 그대로 Step 6만 수행하세요.\n"
-            "- 아래 장면 묶음에 대한 이미지 프롬프트와 비디오 프롬프트를 작성하세요.\n\n"
-            "[Step 6 원문]\n"
-            f"{section}\n\n"
-            "[이번 장면 묶음]\n"
+            f"{section.strip()}\n\n"
+            "[장면 묶음]\n"
             f"{scene_chunk}\n"
         )
 
