@@ -142,37 +142,83 @@ class SessionPaths:
     reports_dir: Path
 
 
+@dataclass
+class ResumeCandidate:
+    session_root: Path
+    scene_range_label: str
+    start_scene: int
+    end_scene: int
+    last_complete_scene: int
+    manifest: Dict[str, object] = field(default_factory=dict)
+
+
 class LiveOutputWriter:
-    def __init__(self, output_root: Path, scene_range_label: str, display_name: str = ""):
+    def __init__(
+        self,
+        output_root: Path,
+        scene_range_label: str,
+        display_name: str = "",
+        resume_candidate: ResumeCandidate | None = None,
+    ):
         self.output_root = output_root
         self.output_root.mkdir(parents=True, exist_ok=True)
         stamp = now_stamp()
-        pretty_stamp = datetime.now().strftime("%Y-%m-%d_%H시%M분%S초")
-        pretty_range = scene_range_label.replace("_", "~")
+        self.resumed = resume_candidate is not None
+        self.resumed_from_scene = resume_candidate.last_complete_scene if resume_candidate else None
         safe_name = re.sub(r'[\\/:*?"<>|]+', "_", str(display_name or "").strip())
-        folder_name = f"{pretty_stamp}_장면_{pretty_range}"
-        if safe_name:
-            folder_name = f"{pretty_stamp}_{safe_name}_장면_{pretty_range}"
-        self.session_root = self.output_root / folder_name
+        manifest_data = dict(resume_candidate.manifest) if resume_candidate else {}
+        effective_range_label = resume_candidate.scene_range_label if resume_candidate else scene_range_label
+        pretty_range = effective_range_label.replace("_", "~")
+        if resume_candidate:
+            self.session_root = resume_candidate.session_root
+        else:
+            pretty_stamp = datetime.now().strftime("%Y-%m-%d_%H시%M분%S초")
+            folder_name = f"{pretty_stamp}_장면_{pretty_range}"
+            if safe_name:
+                folder_name = f"{pretty_stamp}_{safe_name}_장면_{pretty_range}"
+            self.session_root = self.output_root / folder_name
         self.raw_dir = self.session_root / "원본응답"
         self.reports_dir = self.session_root / "검수리포트"
         self.raw_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
-        self.final_live_txt = self.session_root / f"검수통과_전체프롬프트_{pretty_range}.txt"
-        self.final_image_txt = self.session_root / f"검수통과_이미지프롬프트_{pretty_range}.txt"
-        self.final_video_txt = self.session_root / f"검수통과_비디오프롬프트_{pretty_range}.txt"
+        self.final_live_txt = self._manifest_path_or_default(
+            manifest_data.get("final_live_txt"),
+            self.session_root / f"검수통과_전체프롬프트_{pretty_range}.txt",
+        )
+        self.final_image_txt = self._manifest_path_or_default(
+            manifest_data.get("final_image_txt"),
+            self.session_root / f"검수통과_이미지프롬프트_{pretty_range}.txt",
+        )
+        self.final_video_txt = self._manifest_path_or_default(
+            manifest_data.get("final_video_txt"),
+            self.session_root / f"검수통과_비디오프롬프트_{pretty_range}.txt",
+        )
         self.manifest_json = self.session_root / "세션기록.json"
-        self.final_live_txt.write_text("", encoding="utf-8")
-        self.final_image_txt.write_text("", encoding="utf-8")
-        self.final_video_txt.write_text("", encoding="utf-8")
-        self._manifest: Dict[str, object] = {
+        for path in (self.final_live_txt, self.final_image_txt, self.final_video_txt):
+            if not path.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("", encoding="utf-8")
+        self._manifest: Dict[str, object] = manifest_data or {
             "created_at": stamp,
-            "scene_range": scene_range_label,
+            "scene_range": effective_range_label,
             "steps": [],
-            "final_live_txt": str(self.final_live_txt),
-            "final_image_txt": str(self.final_image_txt),
-            "final_video_txt": str(self.final_video_txt),
+            "display_name": str(display_name or "").strip(),
         }
+        self._manifest["scene_range"] = effective_range_label
+        self._manifest["display_name"] = str(display_name or "").strip()
+        self._manifest["final_live_txt"] = str(self.final_live_txt)
+        self._manifest["final_image_txt"] = str(self.final_image_txt)
+        self._manifest["final_video_txt"] = str(self.final_video_txt)
+        if self.resumed:
+            resumed_log = list(self._manifest.get("resumed_runs", []))
+            resumed_log.append(
+                {
+                    "resumed_at": stamp,
+                    "continued_from_scene": self.resumed_from_scene,
+                    "requested_range": scene_range_label,
+                }
+            )
+            self._manifest["resumed_runs"] = resumed_log
         self._flush_manifest()
 
     def _flush_manifest(self) -> None:
@@ -180,6 +226,108 @@ class LiveOutputWriter:
             json.dumps(self._manifest, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    @staticmethod
+    def _manifest_path_or_default(raw: object, default_path: Path) -> Path:
+        text = str(raw or "").strip()
+        if not text:
+            return default_path
+        resolved = resolve_local_path(text)
+        if resolved.is_absolute():
+            return resolved
+        return default_path
+
+    @staticmethod
+    def _parse_scene_range_label(raw: str) -> Tuple[int, int] | None:
+        text = str(raw or "").strip().replace("~", "_")
+        match = re.search(r"S(?P<start>\d{3})_S(?P<end>\d{3})", text)
+        if not match:
+            return None
+        start = int(match.group("start"))
+        end = int(match.group("end"))
+        if start > end:
+            start, end = end, start
+        return start, end
+
+    @classmethod
+    def _read_saved_numbers(cls, candidate_dir: Path, manifest: Dict[str, object]) -> Tuple[set[int], set[int]]:
+        validator = PromptValidator()
+        scene_range_label = str(manifest.get("scene_range") or "")
+        pretty_range = scene_range_label.replace("_", "~")
+        possible_files = [
+            cls._manifest_path_or_default(manifest.get("final_live_txt"), candidate_dir / f"검수통과_전체프롬프트_{pretty_range}.txt"),
+            cls._manifest_path_or_default(manifest.get("final_image_txt"), candidate_dir / f"검수통과_이미지프롬프트_{pretty_range}.txt"),
+            cls._manifest_path_or_default(manifest.get("final_video_txt"), candidate_dir / f"검수통과_비디오프롬프트_{pretty_range}.txt"),
+        ]
+        image_numbers: set[int] = set()
+        video_numbers: set[int] = set()
+        seen: set[Path] = set()
+        for path in possible_files:
+            if path in seen or not path.exists():
+                continue
+            seen.add(path)
+            try:
+                text = path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            for block in validator.parse_blocks(text):
+                numbers = set(block.numbers or [block.start_number])
+                if block.prompt_type == "image":
+                    image_numbers.update(numbers)
+                else:
+                    video_numbers.update(numbers)
+        return image_numbers, video_numbers
+
+    @classmethod
+    def find_resume_candidate(cls, output_root: Path, current_start_scene: int, display_name: str = "") -> ResumeCandidate | None:
+        if current_start_scene <= 1 or not output_root.exists():
+            return None
+        safe_name = re.sub(r'[\\/:*?"<>|]+', "_", str(display_name or "").strip())
+        best: ResumeCandidate | None = None
+        best_key: Tuple[int, float] | None = None
+        for child in output_root.iterdir():
+            if not child.is_dir():
+                continue
+            manifest_path = child / "세션기록.json"
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            manifest_name = str(manifest.get("display_name") or "").strip()
+            if safe_name:
+                manifest_safe_name = re.sub(r'[\\/:*?"<>|]+', "_", manifest_name)
+                if manifest_safe_name != safe_name and safe_name not in child.name:
+                    continue
+            range_info = cls._parse_scene_range_label(str(manifest.get("scene_range") or child.name))
+            if not range_info:
+                continue
+            start_scene, end_scene = range_info
+            if not (start_scene <= current_start_scene <= end_scene):
+                continue
+            image_numbers, video_numbers = cls._read_saved_numbers(child, manifest)
+            complete_numbers = image_numbers & video_numbers
+            last_complete = start_scene - 1
+            for number in range(start_scene, end_scene + 1):
+                if number in complete_numbers:
+                    last_complete = number
+                    continue
+                break
+            if last_complete != current_start_scene - 1:
+                continue
+            sort_key = (last_complete, child.stat().st_mtime)
+            if best_key is None or sort_key > best_key:
+                best_key = sort_key
+                best = ResumeCandidate(
+                    session_root=child,
+                    scene_range_label=str(manifest.get("scene_range") or f"S{start_scene:03d}_S{end_scene:03d}"),
+                    start_scene=start_scene,
+                    end_scene=end_scene,
+                    last_complete_scene=last_complete,
+                    manifest=manifest,
+                )
+        return best
 
     def append_manifest_step(self, item: Dict[str, object]) -> None:
         steps = list(self._manifest.get("steps", []))
@@ -690,8 +838,23 @@ class StoryPipeline:
         total_scenes = sum(len(batch.scenes) for batch in windows)
         completed_micro_batches = 0
         completed_scenes = 0
-        writer = LiveOutputWriter(Path(self.cfg.output_root), scene_range_label, self.cfg.display_name)
+        output_root = Path(self.cfg.output_root)
+        resume_candidate = LiveOutputWriter.find_resume_candidate(
+            output_root,
+            self.cfg.start_scene,
+            self.cfg.display_name,
+        )
+        writer = LiveOutputWriter(
+            output_root,
+            scene_range_label,
+            self.cfg.display_name,
+            resume_candidate=resume_candidate,
+        )
         self.runner.open_browser()
+        if resume_candidate:
+            self.log(
+                f"♻️ 기존 세션 이어 저장 | 마지막 완성 S{resume_candidate.last_complete_scene:03d} | {writer.session_root}"
+            )
         self.log(f"🧠 똑똑즈 워커 세션 시작 | 범위 {scene_range_label}")
         self.log(f"📝 검수 통과 프롬프트 저장 파일: {writer.final_live_txt}")
         self.log(f"🎛️ 실행 모드: {self.cfg.pipeline_mode}")
