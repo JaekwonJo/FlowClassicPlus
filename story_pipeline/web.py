@@ -320,7 +320,7 @@ class GeminiWebRunner:
         time.sleep(0.15)
         self._submit()
         self.log(
-            "⏱ 응답 대기 설정 | 보낸 뒤 첫 확인 "
+            "⏱ 응답 대기 설정 | 보낸 뒤 잠깐 기다림 "
             f"{self.send_wait_seconds:.1f}초 | 확인간격 {self.poll_interval_seconds:.1f}초 | "
             f"같은 응답 확인 {self.stable_rounds_required}회 | 최대 {self.wait_timeout_ms / 1000.0:.1f}초"
         )

@@ -425,14 +425,22 @@ class StoryPromptPipelineApp:
         self.btn_open_output_dir = tk.Button(tool_buttons, text="결과 폴더", command=lambda: self._browse_dir(self.var_output_root, "결과 저장 폴더 선택"), **tool_btn_opts)
         self.btn_open_output_dir.pack(side="left", padx=6)
 
+        action_card = tk.Frame(outer, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1)
+        action_card.pack(fill="x", pady=(0, 8))
+        tk.Label(action_card, text="실행", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).pack(anchor="w", padx=12, pady=(8, 6))
+        action_buttons = tk.Frame(action_card, bg="#F7F2EA")
+        action_buttons.pack(fill="x", padx=10, pady=(0, 10))
+        action_btn_opts = {"relief": "flat", "font": ("맑은 고딕", 10, "bold"), "pady": 9, "cursor": "hand2", "width": 10}
+        tk.Button(action_buttons, text="브라우저", command=self.on_open_browser, bg="#1F6F5F", fg="white", **action_btn_opts).pack(side="left", padx=(0, 6))
+        tk.Button(action_buttons, text="시작", command=self.on_start, bg="#C66A2B", fg="white", **action_btn_opts).pack(side="left", padx=6)
+        tk.Button(action_buttons, text="완전 중지", command=self.on_stop, bg="#6F3B2A", fg="white", **action_btn_opts).pack(side="left", padx=6)
+        tk.Button(action_buttons, text="폴더 열기", command=self.on_open_output_dir, bg="#5E7A74", fg="white", **action_btn_opts).pack(side="left", padx=6)
+
         middle = tk.Frame(outer, bg="#ECE7DF")
         middle.pack(fill="x", pady=(0, 8))
 
         left_card = tk.Frame(middle, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1)
-        left_card.pack(side="left", fill="x", expand=True)
-        right_card = tk.Frame(middle, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1, width=138)
-        right_card.pack(side="left", anchor="n", padx=(8, 0))
-        right_card.pack_propagate(False)
+        left_card.pack(fill="x", expand=True)
 
         tk.Label(left_card, text="핵심 설정", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 6))
         left_card.grid_columnconfigure(1, weight=1)
@@ -452,7 +460,7 @@ class StoryPromptPipelineApp:
         pre_input_entry = tk.Entry(left_card, textvariable=self.var_pre_input_delay_seconds, width=7, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         pre_input_entry.grid(row=2, column=3, sticky="w", pady=4)
 
-        tk.Label(left_card, text="보낸 뒤 첫 확인", bg="#F7F2EA", fg="#23302B").grid(row=3, column=0, sticky="w", padx=(12, 6), pady=4)
+        tk.Label(left_card, text="보낸 뒤 잠깐 기다림", bg="#F7F2EA", fg="#23302B").grid(row=3, column=0, sticky="w", padx=(12, 6), pady=4)
         send_wait_entry = tk.Entry(left_card, textvariable=self.var_send_wait_seconds, width=7, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         send_wait_entry.grid(row=3, column=1, sticky="w", pady=4)
 
@@ -463,14 +471,6 @@ class StoryPromptPipelineApp:
         opt_wrap.grid(row=4, column=0, columnspan=4, sticky="ew", padx=12, pady=(8, 10))
         self._make_toggle_button(opt_wrap, self.var_reset_chat, "새 채팅").pack(side="left")
         self._make_toggle_button(opt_wrap, self.var_open_notepad, "메모장 저장").pack(side="left", padx=(8, 0))
-
-        btn_wrap = tk.Frame(right_card, bg="#F7F2EA")
-        btn_wrap.pack(fill="both", expand=True, padx=8, pady=8)
-        btn_opts = {"relief": "flat", "font": ("맑은 고딕", 10, "bold"), "width": 10, "pady": 9, "cursor": "hand2"}
-        tk.Button(btn_wrap, text="브라우저", command=self.on_open_browser, bg="#1F6F5F", fg="white", **btn_opts).pack(fill="x", pady=(0, 6))
-        tk.Button(btn_wrap, text="시작", command=self.on_start, bg="#C66A2B", fg="white", **btn_opts).pack(fill="x", pady=6)
-        tk.Button(btn_wrap, text="중지", command=self.on_stop, bg="#6F3B2A", fg="white", **btn_opts).pack(fill="x", pady=6)
-        tk.Button(btn_wrap, text="폴더", command=self.on_open_output_dir, bg="#5E7A74", fg="white", **btn_opts).pack(fill="x", pady=(6, 0))
 
         log_box = tk.Frame(outer, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1, height=120)
         log_box.pack(fill="both", expand=True)
@@ -618,7 +618,7 @@ class StoryPromptPipelineApp:
         self.log(f"🧭 브라우저 프로필: {self.cfg.browser_profile_dir}")
         self.log(
             "⏱ 대기 설정 | 창 뜬 뒤 "
-            f"{self.cfg.pre_input_delay_seconds:.1f}초 | 보낸 뒤 첫 확인 "
+            f"{self.cfg.pre_input_delay_seconds:.1f}초 | 보낸 뒤 잠깐 기다림 "
             f"{self.cfg.send_wait_seconds:.1f}초 | 확인간격 {self.cfg.poll_interval_seconds:.1f}초 | "
             f"같은 응답 확인 {self.cfg.stable_rounds_required}회 | 최대 {self.cfg.max_wait_seconds:.1f}초"
         )
