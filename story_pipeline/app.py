@@ -32,8 +32,8 @@ class StoryPromptPipelineApp:
         self.geometry_save_job = None
         self.root = tk.Tk()
         self.root.title(f"똑똑즈 자동화 파이프라인 - ttz_worker ({self.instance_name})")
-        self.root.geometry(self.cfg.window_geometry if hasattr(self, "cfg") else "760x560")
-        self.root.minsize(760, 640)
+        self.root.geometry(self.cfg.window_geometry if hasattr(self, "cfg") else "620x520")
+        self.root.minsize(580, 460)
         self.root.configure(bg="#ECE7DF")
 
         self.queue: Queue[str] = Queue()
@@ -48,7 +48,7 @@ class StoryPromptPipelineApp:
         self.countdown_remaining_seconds = 0.0
 
         self.cfg = self._load_config()
-        self.root.geometry(self.cfg.window_geometry or "760x560")
+        self.root.geometry(self._compact_window_geometry(self.cfg.window_geometry))
         self._build_ui()
         self.root.bind("<Configure>", self._on_root_configure)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -90,6 +90,21 @@ class StoryPromptPipelineApp:
         self._read_ui_into_cfg()
         self._config_path().write_text(json.dumps(self.cfg.__dict__, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def _compact_window_geometry(self, raw: str) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return "620x520"
+        body = text.split("+", 1)[0]
+        if "x" not in body:
+            return "620x520"
+        try:
+            width_text, height_text = body.split("x", 1)
+            width = max(580, min(int(width_text), 640))
+            height = max(460, min(int(height_text), 560))
+            return f"{width}x{height}"
+        except Exception:
+            return "620x520"
+
     def _read_ui_into_cfg(self) -> None:
         self.cfg.instance_name = self.instance_name
         self.cfg.window_geometry = self.root.geometry()
@@ -110,7 +125,7 @@ class StoryPromptPipelineApp:
         self.cfg.poll_interval_seconds = float(self.var_poll_interval_seconds.get() or 2.0)
         self.cfg.stable_rounds_required = int(self.var_stable_rounds_required.get() or 2)
         self.cfg.max_wait_seconds = float(self.var_max_wait_seconds.get() or 300.0)
-        self.cfg.human_typing_enabled = bool(self.var_human_typing.get())
+        self.cfg.human_typing_enabled = False
         self.cfg.typing_speed_level = int(self.var_typing_speed_level.get() or 5)
         self.cfg.reset_chat_each_batch = bool(self.var_reset_chat.get())
         self.cfg.open_notepad_live = bool(self.var_open_notepad.get())
@@ -123,6 +138,7 @@ class StoryPromptPipelineApp:
             variable.set(path)
             self._save_config()
             self._refresh_compact_labels()
+            self.log(f"🗂 선택됨 | {title} | {self._short_text(path)}")
 
     def _browse_dir(self, variable: tk.StringVar, title: str) -> None:
         current = variable.get().strip()
@@ -131,6 +147,7 @@ class StoryPromptPipelineApp:
             variable.set(path)
             self._save_config()
             self._refresh_compact_labels()
+            self.log(f"📁 선택됨 | {title} | {self._short_text(path)}")
 
     def _edit_url(self) -> None:
         current = self.var_gemini_url.get().strip()
@@ -139,6 +156,7 @@ class StoryPromptPipelineApp:
             self.var_gemini_url.set(value.strip())
             self._save_config()
             self._refresh_compact_labels()
+            self.log(f"🔗 Gem URL 변경됨 | {self._short_text(value.strip(), mode='url')}")
 
     def _short_text(self, raw: str, mode: str = "path") -> str:
         text = str(raw or "").strip()
@@ -155,24 +173,29 @@ class StoryPromptPipelineApp:
         return name
 
     def _refresh_compact_labels(self) -> None:
-        if hasattr(self, "lbl_step_macro_value"):
-            self.lbl_step_macro_value.config(text=self._short_text(self.var_step_macro_path.get()))
-        if hasattr(self, "lbl_scene_file_value"):
-            self.lbl_scene_file_value.config(text=self._short_text(self.var_scene_file_path.get()))
-        if hasattr(self, "lbl_url_value"):
-            self.lbl_url_value.config(text=self._short_text(self.var_gemini_url.get(), mode="url"))
-        if hasattr(self, "lbl_output_value"):
-            self.lbl_output_value.config(text=self._short_text(self.var_output_root.get()))
         if hasattr(self, "lbl_worker_name"):
             self.lbl_worker_name.config(text=f"ttz_worker | {self.instance_name}")
         if hasattr(self, "lbl_profile_info"):
             self.lbl_profile_info.config(
                 text=f"브라우저 프로필: {self._short_text(self.var_browser_profile_dir.get())}"
             )
-        if hasattr(self, "lbl_log_file"):
-            self.lbl_log_file.config(
-                text=f"로그 파일: {self._short_text(str(self.current_log_file or '-'))}"
-            )
+        if hasattr(self, "btn_open_output_dir"):
+            self.btn_open_output_dir.config(text="결과 폴더")
+
+    def _refresh_hud_compact_summary(self) -> None:
+        headline = self.var_hud_detail.get().strip() or self.var_hud_status.get().strip() or "준비 완료"
+        step = self.var_hud_step.get().strip()
+        batch = self.var_hud_batch.get().strip()
+        scene = self.var_hud_scene.get().strip()
+        pieces = []
+        if step and step != "-":
+            pieces.append(step)
+        if scene:
+            pieces.append(scene)
+        if batch and batch != "배치 0 / 0":
+            pieces.append(batch)
+        self.var_hud_headline.set(headline)
+        self.var_hud_subline.set("  |  ".join(pieces) if pieces else "아직 시작하지 않았습니다.")
 
     def _format_elapsed(self, seconds: float) -> str:
         total = max(0, int(seconds))
@@ -236,6 +259,7 @@ class StoryPromptPipelineApp:
             self.countdown_label = "대기 없음"
             self.countdown_remaining_seconds = 0.0
             self.var_hud_countdown.set(self._format_countdown(self.countdown_label, 0.0))
+        self._refresh_hud_compact_summary()
 
     def _pump_status_queue(self) -> None:
         try:
@@ -267,6 +291,7 @@ class StoryPromptPipelineApp:
         self.countdown_remaining_seconds = 0.0
         self.var_hud_countdown.set(self._format_countdown(self.countdown_label, 0.0))
         self.var_hud_elapsed.set("00:00:00")
+        self._refresh_hud_compact_summary()
 
     def _toggle_log(self) -> None:
         self.log_visible = not self.log_visible
@@ -360,146 +385,105 @@ class StoryPromptPipelineApp:
         self.var_hud_scene = tk.StringVar()
         self.var_hud_countdown = tk.StringVar()
         self.var_hud_elapsed = tk.StringVar()
+        self.var_hud_headline = tk.StringVar()
+        self.var_hud_subline = tk.StringVar()
 
         header = tk.Frame(outer, bg="#ECE7DF")
-        header.pack(fill="x", pady=(0, 10))
+        header.pack(fill="x", pady=(0, 8))
         left_header = tk.Frame(header, bg="#ECE7DF")
         left_header.pack(side="left")
-        self.lbl_worker_name = tk.Label(left_header, text="", bg="#ECE7DF", fg="#1F6F5F", font=("맑은 고딕", 16, "bold"))
+        self.lbl_worker_name = tk.Label(left_header, text="", bg="#ECE7DF", fg="#1F6F5F", font=("맑은 고딕", 15, "bold"))
         self.lbl_worker_name.pack(anchor="w")
         self.lbl_profile_info = tk.Label(left_header, text="", bg="#ECE7DF", fg="#6A6B62", font=("맑은 고딕", 9))
-        self.lbl_profile_info.pack(anchor="w", pady=(4, 0))
-        tk.Label(header, text="수동처럼 실행", bg="#DDE9E5", fg="#1F6F5F", font=("맑은 고딕", 9, "bold"), padx=10, pady=4).pack(side="right")
+        self.lbl_profile_info.pack(anchor="w", pady=(2, 0))
+        tk.Label(header, text="수동처럼 실행", bg="#DDE9E5", fg="#1F6F5F", font=("맑은 고딕", 8, "bold"), padx=8, pady=3).pack(side="right")
 
         hud_card = tk.Frame(outer, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1)
         hud_card.pack(fill="x", pady=(0, 8))
-        hud_card.grid_columnconfigure(1, weight=1)
-        hud_card.grid_columnconfigure(3, weight=1)
+        hud_card.grid_columnconfigure(0, weight=1)
+        hud_card.grid_columnconfigure(1, weight=0)
+        left_hud = tk.Frame(hud_card, bg="#F7F2EA")
+        left_hud.grid(row=0, column=0, sticky="nsew", padx=(12, 8), pady=10)
+        right_hud = tk.Frame(hud_card, bg="#F7F2EA")
+        right_hud.grid(row=0, column=1, sticky="ne", padx=(0, 12), pady=10)
 
-        tk.Label(hud_card, text="실시간 상태", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 6))
-        tk.Label(hud_card, textvariable=self.var_hud_status, bg="#E5EFEA", fg="#1F6F5F", font=("맑은 고딕", 10, "bold"), padx=10, pady=5).grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=(10, 6))
-        tk.Label(hud_card, text="지금 하는 일", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).grid(row=0, column=2, sticky="w", padx=(4, 8), pady=(10, 6))
-        tk.Label(hud_card, textvariable=self.var_hud_detail, bg="#EFE8DD", fg="#23302B", anchor="w", padx=10, pady=5, font=("맑은 고딕", 10)).grid(row=0, column=3, sticky="ew", padx=(0, 12), pady=(10, 6))
+        tk.Label(left_hud, textvariable=self.var_hud_status, bg="#DDE9E5", fg="#1F6F5F", font=("맑은 고딕", 8, "bold"), padx=8, pady=3).pack(anchor="w")
+        tk.Label(left_hud, textvariable=self.var_hud_headline, bg="#F7F2EA", fg="#23302B", font=("맑은 고딕", 11, "bold")).pack(anchor="w", pady=(8, 2))
+        tk.Label(left_hud, textvariable=self.var_hud_subline, bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9)).pack(anchor="w")
+        tk.Label(right_hud, textvariable=self.var_hud_countdown, bg="#EFE8DD", fg="#23302B", font=("맑은 고딕", 10, "bold"), padx=10, pady=6).pack(anchor="e")
+        tk.Label(right_hud, textvariable=self.var_hud_elapsed, bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9)).pack(anchor="e", pady=(6, 0))
 
-        hud_rows = [
-            ("현재 단계", self.var_hud_step),
-            ("배치 진행", self.var_hud_batch),
-            ("묶음 진행", self.var_hud_micro),
-            ("장면 진행", self.var_hud_scene),
-            ("남은 기다림", self.var_hud_countdown),
-            ("지난 시간", self.var_hud_elapsed),
-        ]
-        for idx, (title, var) in enumerate(hud_rows, start=1):
-            col = 0 if idx % 2 == 1 else 2
-            row = 1 + (idx - 1) // 2
-            value_col = col + 1
-            tk.Label(hud_card, text=title, bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).grid(row=row, column=col, sticky="w", padx=12, pady=6)
-            tk.Label(hud_card, textvariable=var, bg="#EFE8DD", fg="#23302B", anchor="w", padx=10, pady=5, font=("맑은 고딕", 10)).grid(row=row, column=value_col, sticky="ew", padx=(0, 12), pady=6)
-
-        top_card = tk.Frame(outer, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1)
-        top_card.pack(fill="x", pady=(0, 8))
-        top_card.grid_columnconfigure(1, weight=1)
-
-        def compact_row(parent, row, title, value_attr, action_text, action_cmd):
-            tk.Label(parent, text=title, bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).grid(row=row, column=0, sticky="w", padx=12, pady=8)
-            label = tk.Label(parent, text="-", bg="#EFE8DD", fg="#1E2B28", anchor="w", padx=10, pady=6, font=("맑은 고딕", 10))
-            label.grid(row=row, column=1, sticky="ew", padx=(0, 6), pady=6)
-            ttk.Button(parent, text=action_text, command=action_cmd, style="Secondary.TButton", width=8).grid(row=row, column=2, padx=(0, 10), pady=6)
-            setattr(self, value_attr, label)
-
-        compact_row(top_card, 0, "Step 규칙 파일", "lbl_step_macro_value", "파일 선택", lambda: self._browse_file(self.var_step_macro_path, "Step 규칙 파일 선택"))
-        compact_row(top_card, 1, "장면 파일", "lbl_scene_file_value", "파일 선택", lambda: self._browse_file(self.var_scene_file_path, "장면 파일 선택"))
-        compact_row(top_card, 2, "Gem URL", "lbl_url_value", "URL 설정", self._edit_url)
-        compact_row(top_card, 3, "결과 저장 폴더", "lbl_output_value", "폴더 선택", lambda: self._browse_dir(self.var_output_root, "결과 저장 폴더 선택"))
+        tool_card = tk.Frame(outer, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1)
+        tool_card.pack(fill="x", pady=(0, 8))
+        tk.Label(tool_card, text="빠른 설정", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).pack(anchor="w", padx=12, pady=(8, 6))
+        tool_buttons = tk.Frame(tool_card, bg="#F7F2EA")
+        tool_buttons.pack(fill="x", padx=10, pady=(0, 10))
+        tool_btn_opts = {"relief": "flat", "font": ("맑은 고딕", 9, "bold"), "padx": 10, "pady": 8, "cursor": "hand2", "bg": "#EFE8DD", "fg": "#31423D"}
+        tk.Button(tool_buttons, text="Step 파일", command=lambda: self._browse_file(self.var_step_macro_path, "Step 규칙 파일 선택"), **tool_btn_opts).pack(side="left", padx=(0, 6))
+        tk.Button(tool_buttons, text="장면 파일", command=lambda: self._browse_file(self.var_scene_file_path, "장면 파일 선택"), **tool_btn_opts).pack(side="left", padx=6)
+        tk.Button(tool_buttons, text="Gem URL", command=self._edit_url, **tool_btn_opts).pack(side="left", padx=6)
+        self.btn_open_output_dir = tk.Button(tool_buttons, text="결과 폴더", command=lambda: self._browse_dir(self.var_output_root, "결과 저장 폴더 선택"), **tool_btn_opts)
+        self.btn_open_output_dir.pack(side="left", padx=6)
 
         middle = tk.Frame(outer, bg="#ECE7DF")
         middle.pack(fill="x", pady=(0, 8))
 
         left_card = tk.Frame(middle, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1)
         left_card.pack(side="left", fill="x", expand=True)
-        right_card = tk.Frame(middle, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1)
-        right_card.pack(side="left", anchor="n", padx=(10, 0))
+        right_card = tk.Frame(middle, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1, width=138)
+        right_card.pack(side="left", anchor="n", padx=(8, 0))
+        right_card.pack_propagate(False)
 
-        tk.Label(left_card, text="쉬운 작업 설정", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 4))
-        left_card.grid_columnconfigure(5, weight=1)
-        tk.Label(left_card, text="시작 장면", bg="#F7F2EA", fg="#23302B").grid(row=1, column=0, sticky="w", padx=(12, 6), pady=4)
-        start_entry = tk.Entry(left_card, textvariable=self.var_start_scene, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        tk.Label(left_card, text="핵심 설정", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 6))
+        left_card.grid_columnconfigure(1, weight=1)
+        left_card.grid_columnconfigure(3, weight=1)
+
+        tk.Label(left_card, text="시작", bg="#F7F2EA", fg="#23302B").grid(row=1, column=0, sticky="w", padx=(12, 6), pady=4)
+        start_entry = tk.Entry(left_card, textvariable=self.var_start_scene, width=7, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         start_entry.grid(row=1, column=1, sticky="w", pady=4)
-        tk.Label(left_card, text="끝 장면", bg="#F7F2EA", fg="#23302B").grid(row=1, column=2, sticky="w", padx=(14, 6), pady=4)
-        end_entry = tk.Entry(left_card, textvariable=self.var_end_scene, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        tk.Label(left_card, text="끝", bg="#F7F2EA", fg="#23302B").grid(row=1, column=2, sticky="w", padx=(12, 6), pady=4)
+        end_entry = tk.Entry(left_card, textvariable=self.var_end_scene, width=7, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         end_entry.grid(row=1, column=3, sticky="w", pady=4)
 
-        tk.Label(left_card, text="한번 크게 묶기", bg="#F7F2EA", fg="#23302B").grid(row=2, column=0, sticky="w", padx=(12, 6), pady=4)
-        batch_entry = tk.Entry(left_card, textvariable=self.var_batch_size, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
-        batch_entry.grid(row=2, column=1, sticky="w", pady=4)
-        tk.Label(left_card, text="한번 보낼 장면 수", bg="#F7F2EA", fg="#23302B").grid(row=2, column=2, sticky="w", padx=(14, 6), pady=4)
-        micro_entry = tk.Entry(left_card, textvariable=self.var_micro_batch_size, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
-        micro_entry.grid(row=2, column=3, sticky="w", pady=4)
+        tk.Label(left_card, text="한번 보낼 장면", bg="#F7F2EA", fg="#23302B").grid(row=2, column=0, sticky="w", padx=(12, 6), pady=4)
+        micro_entry = tk.Entry(left_card, textvariable=self.var_micro_batch_size, width=7, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        micro_entry.grid(row=2, column=1, sticky="w", pady=4)
+        tk.Label(left_card, text="창 뜬 뒤 기다림", bg="#F7F2EA", fg="#23302B").grid(row=2, column=2, sticky="w", padx=(12, 6), pady=4)
+        pre_input_entry = tk.Entry(left_card, textvariable=self.var_pre_input_delay_seconds, width=7, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        pre_input_entry.grid(row=2, column=3, sticky="w", pady=4)
 
-        tk.Label(left_card, text="창 뜬 뒤 기다림", bg="#F7F2EA", fg="#23302B").grid(row=1, column=4, sticky="w", padx=(16, 6), pady=4)
-        pre_input_entry = tk.Entry(left_card, textvariable=self.var_pre_input_delay_seconds, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
-        pre_input_entry.grid(row=1, column=5, sticky="w", pady=4)
-        tk.Label(left_card, text="보낸 뒤 첫 확인", bg="#F7F2EA", fg="#23302B").grid(row=2, column=4, sticky="w", padx=(16, 6), pady=4)
-        send_wait_entry = tk.Entry(left_card, textvariable=self.var_send_wait_seconds, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
-        send_wait_entry.grid(row=1, column=5, sticky="w", pady=4)
-        send_wait_entry.grid_configure(row=2, column=5)
-        tk.Label(left_card, text="몇 초마다 확인", bg="#F7F2EA", fg="#23302B").grid(row=3, column=4, sticky="w", padx=(16, 6), pady=4)
-        poll_entry = tk.Entry(left_card, textvariable=self.var_poll_interval_seconds, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
-        poll_entry.grid(row=3, column=5, sticky="w", pady=4)
+        tk.Label(left_card, text="보낸 뒤 첫 확인", bg="#F7F2EA", fg="#23302B").grid(row=3, column=0, sticky="w", padx=(12, 6), pady=4)
+        send_wait_entry = tk.Entry(left_card, textvariable=self.var_send_wait_seconds, width=7, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        send_wait_entry.grid(row=3, column=1, sticky="w", pady=4)
 
-        tk.Label(left_card, text="같은 응답 확인", bg="#F7F2EA", fg="#23302B").grid(row=3, column=0, sticky="w", padx=(12, 6), pady=4)
-        stable_entry = tk.Entry(left_card, textvariable=self.var_stable_rounds_required, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
-        stable_entry.grid(row=3, column=1, sticky="w", pady=4)
-        tk.Label(left_card, text="최대 기다림", bg="#F7F2EA", fg="#23302B").grid(row=3, column=2, sticky="w", padx=(14, 6), pady=4)
-        max_wait_entry = tk.Entry(left_card, textvariable=self.var_max_wait_seconds, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
-        max_wait_entry.grid(row=3, column=3, sticky="w", pady=4)
-        tk.Label(left_card, text="키보드 속도", bg="#F7F2EA", fg="#23302B").grid(row=4, column=4, sticky="w", padx=(16, 6), pady=4)
-        typing_speed_entry = tk.Entry(left_card, textvariable=self.var_typing_speed_level, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
-        typing_speed_entry.grid(row=4, column=5, sticky="w", pady=4)
-
-        hint = tk.Label(
-            left_card,
-            text="예) 한번 보낼 장면 수 5 = S001~S005를 한 번에 Gemini에 보냅니다.",
-            bg="#F7F2EA",
-            fg="#7A746B",
-            font=("맑은 고딕", 8),
-        )
-        hint.grid(row=4, column=0, columnspan=4, sticky="w", padx=12, pady=(2, 2))
-
-        for entry in (start_entry, end_entry, batch_entry, micro_entry, pre_input_entry, send_wait_entry, poll_entry, stable_entry, max_wait_entry, typing_speed_entry):
+        for entry in (start_entry, end_entry, micro_entry, pre_input_entry, send_wait_entry):
             entry.bind("<FocusOut>", lambda _e: self._save_config())
 
         opt_wrap = tk.Frame(left_card, bg="#F7F2EA")
-        opt_wrap.grid(row=5, column=0, columnspan=6, sticky="ew", padx=12, pady=(6, 8))
-        self._make_toggle_button(opt_wrap, self.var_human_typing, "키보드처럼 천천히 입력").pack(side="left")
-        self._make_toggle_button(opt_wrap, self.var_reset_chat, "새 채팅").pack(side="left", padx=(10, 0))
-        self._make_toggle_button(opt_wrap, self.var_open_notepad, "메모장 저장").pack(side="left", padx=(10, 0))
+        opt_wrap.grid(row=4, column=0, columnspan=4, sticky="ew", padx=12, pady=(8, 10))
+        self._make_toggle_button(opt_wrap, self.var_reset_chat, "새 채팅").pack(side="left")
+        self._make_toggle_button(opt_wrap, self.var_open_notepad, "메모장 저장").pack(side="left", padx=(8, 0))
 
         btn_wrap = tk.Frame(right_card, bg="#F7F2EA")
-        btn_wrap.pack(anchor="n", padx=10, pady=10)
-        tk.Label(btn_wrap, text="실행", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).pack(anchor="w", pady=(0, 8))
-        btn_grid = tk.Frame(btn_wrap, bg="#F7F2EA")
-        btn_grid.pack()
-        btn_opts = {"relief": "flat", "font": ("맑은 고딕", 10, "bold"), "width": 10, "pady": 10, "cursor": "hand2"}
-        tk.Button(btn_grid, text="브라우저", command=self.on_open_browser, bg="#1F6F5F", fg="white", **btn_opts).grid(row=0, column=0, padx=4, pady=4)
-        tk.Button(btn_grid, text="시작", command=self.on_start, bg="#C66A2B", fg="white", **btn_opts).grid(row=0, column=1, padx=4, pady=4)
-        tk.Button(btn_grid, text="중지", command=self.on_stop, bg="#6F3B2A", fg="white", **btn_opts).grid(row=1, column=0, padx=4, pady=4)
-        tk.Button(btn_grid, text="폴더", command=self.on_open_output_dir, bg="#5E7A74", fg="white", **btn_opts).grid(row=1, column=1, padx=4, pady=4)
+        btn_wrap.pack(fill="both", expand=True, padx=8, pady=8)
+        btn_opts = {"relief": "flat", "font": ("맑은 고딕", 10, "bold"), "width": 10, "pady": 9, "cursor": "hand2"}
+        tk.Button(btn_wrap, text="브라우저", command=self.on_open_browser, bg="#1F6F5F", fg="white", **btn_opts).pack(fill="x", pady=(0, 6))
+        tk.Button(btn_wrap, text="시작", command=self.on_start, bg="#C66A2B", fg="white", **btn_opts).pack(fill="x", pady=6)
+        tk.Button(btn_wrap, text="중지", command=self.on_stop, bg="#6F3B2A", fg="white", **btn_opts).pack(fill="x", pady=6)
+        tk.Button(btn_wrap, text="폴더", command=self.on_open_output_dir, bg="#5E7A74", fg="white", **btn_opts).pack(fill="x", pady=(6, 0))
 
-        log_box = tk.Frame(outer, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1, height=170)
+        log_box = tk.Frame(outer, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1, height=120)
         log_box.pack(fill="both", expand=True)
         log_box.pack_propagate(False)
         log_head = tk.Frame(log_box, bg="#F7F2EA")
         log_head.pack(fill="x", padx=8, pady=(8, 4))
         tk.Label(log_head, text="실행 로그", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).pack(side="left")
-        self.lbl_log_file = tk.Label(log_head, text="로그 파일: -", bg="#F7F2EA", fg="#7A746B", font=("맑은 고딕", 8))
-        self.lbl_log_file.pack(side="left", padx=(12, 0))
         self.btn_toggle_log = tk.Button(log_head, text="로그 숨기기", command=self._toggle_log, bg="#E7DED2", fg="#4D443B", relief="flat", font=("맑은 고딕", 9, "bold"), padx=10, pady=4, cursor="hand2")
         self.btn_toggle_log.pack(side="right")
-        self.log_body = tk.Frame(log_box, bg="#F7F2EA", height=130)
+        self.log_body = tk.Frame(log_box, bg="#F7F2EA", height=86)
         self.log_body.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         self.log_body.pack_propagate(False)
-        self.txt_log = ScrolledText(self.log_body, height=7, bg="#16211E", fg="#F6F3EA", insertbackground="#F6F3EA", relief="flat")
+        self.txt_log = ScrolledText(self.log_body, height=5, bg="#16211E", fg="#F6F3EA", insertbackground="#F6F3EA", relief="flat")
         self.txt_log.pack(fill="both", expand=True)
         self.txt_log.insert("end", "스토리 자동화 준비 완료\n")
         self.txt_log.configure(state="disabled")
@@ -653,6 +637,7 @@ class StoryPromptPipelineApp:
 
     def _run_pipeline_thread(self) -> None:
         runner = self._build_runner()
+        should_close_runner = True
         try:
             pipeline = StoryPipeline(
                 cfg=self.cfg,
@@ -667,6 +652,7 @@ class StoryPromptPipelineApp:
             self.log(f"🖼 이미지 전용 파일: {paths.final_image_txt}")
             self.log(f"🎬 비디오 전용 파일: {paths.final_video_txt}")
         except Exception as exc:
+            should_close_runner = False
             self._queue_status(
                 {
                     "status": "실패",
@@ -679,10 +665,13 @@ class StoryPromptPipelineApp:
             self.log(f"❌ 자동화 실패: {exc}")
             self.log(traceback.format_exc().strip())
         finally:
-            try:
-                runner.close()
-            except Exception:
-                pass
+            if should_close_runner or self.stop_event.is_set():
+                try:
+                    runner.close()
+                except Exception:
+                    pass
+            else:
+                self.log("🧷 오류 확인용으로 브라우저는 그대로 둡니다. 다시 시작 전 직접 닫아 주세요.")
 
     def on_stop(self) -> None:
         self.stop_event.set()

@@ -254,7 +254,7 @@ class GeminiWebRunner:
                     editor.evaluate(
                         """(el) => {
                             el.focus();
-                            el.innerHTML = "";
+                            while (el.firstChild) el.removeChild(el.firstChild);
                             el.dispatchEvent(new Event("input", {bubbles: true}));
                         }"""
                     )
@@ -273,7 +273,7 @@ class GeminiWebRunner:
         editor.evaluate(
             """(el, value) => {
                 el.focus();
-                el.innerHTML = "";
+                while (el.firstChild) el.removeChild(el.firstChild);
                 const lines = String(value).split(/\\n/);
                 lines.forEach((line, idx) => {
                     if (idx > 0) el.appendChild(document.createElement("br"));
