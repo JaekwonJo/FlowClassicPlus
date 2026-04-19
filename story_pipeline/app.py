@@ -575,6 +575,7 @@ class StoryPromptPipelineApp:
         tk.Button(tool_buttons, text="Gem URL", command=self._edit_url, **tool_btn_opts).pack(side="left", padx=6)
         self.btn_open_output_dir = tk.Button(tool_buttons, text="결과 폴더", command=lambda: self._browse_dir(self.var_output_root, "결과 저장 폴더 선택"), **tool_btn_opts)
         self.btn_open_output_dir.pack(side="left", padx=6)
+        tk.Button(tool_buttons, text="대기 세부", command=self._open_wait_settings_dialog, **tool_btn_opts).pack(side="left", padx=6)
         tk.Label(tool_card, textvariable=self.var_scene_file_summary, bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 8)).pack(anchor="w", padx=12, pady=(0, 2))
         tk.Label(tool_card, textvariable=self.var_scene_run_summary, bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 8, "bold")).pack(anchor="w", padx=12, pady=(0, 10))
 
@@ -627,7 +628,7 @@ class StoryPromptPipelineApp:
 
         tk.Label(
             left_card,
-            text="설명: 시간 숫자는 전부 초입니다. 예) 제출 후 대기 2.0 = 2초, 창 뜬 뒤 기다림 5.0 = 5초",
+            text="설명: 시간 숫자는 전부 초입니다. 예) 제출 후 대기 2.0 = 2초, 창 뜬 뒤 기다림 5.0 = 5초, 최대 대기는 [대기 세부]에서 바꿉니다.",
             bg="#F7F2EA",
             fg="#6B6D63",
             font=("맑은 고딕", 8),

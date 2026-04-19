@@ -169,12 +169,13 @@ class GeminiWebRunner:
                 continue
         return None
 
-    def _collect_response_texts(self) -> List[str]:
+    def _collect_response_entries(self) -> List[dict]:
         assert self.page is not None
         script = """
         () => {
           const selectors = %s;
           const out = [];
+          let order = 0;
           for (const selector of selectors) {
             const nodes = Array.from(document.querySelectorAll(selector));
             for (const node of nodes) {
@@ -182,31 +183,49 @@ class GeminiWebRunner:
               if (!text) continue;
               const style = window.getComputedStyle(node);
               if (style.display === "none" || style.visibility === "hidden") continue;
-              out.push(text);
+              const rect = node.getBoundingClientRect();
+              out.push({
+                text,
+                top: Number(rect.top || 0),
+                bottom: Number(rect.bottom || 0),
+                order: order++,
+              });
             }
           }
           return out;
         }
         """ % (repr(RESPONSE_SELECTORS))
         try:
-            texts = self.page.evaluate(script)
-            texts = [item.strip() for item in texts if str(item).strip()]
-            if texts:
-                return texts
+            entries = self.page.evaluate(script)
+            normalized = []
+            for item in entries or []:
+                text = str((item or {}).get("text") or "").strip()
+                if not text:
+                    continue
+                normalized.append(
+                    {
+                        "text": text,
+                        "top": float((item or {}).get("top") or 0.0),
+                        "bottom": float((item or {}).get("bottom") or 0.0),
+                        "order": int((item or {}).get("order") or 0),
+                    }
+                )
+            if normalized:
+                normalized.sort(key=lambda item: (item["bottom"], item["top"], item["order"]))
+                return normalized
         except Exception:
             pass
         try:
             body_text = self.page.locator("main").inner_text(timeout=1500).strip()
-            return [body_text] if body_text else []
+            return [{"text": body_text, "top": 0.0, "bottom": 999999.0, "order": 0}] if body_text else []
         except Exception:
             return []
 
     def _latest_response_text(self) -> str:
-        texts = self._collect_response_texts()
-        if not texts:
+        entries = self._collect_response_entries()
+        if not entries:
             return ""
-        texts.sort(key=len)
-        return texts[-1]
+        return str(entries[-1].get("text") or "").strip()
 
     def _human_type_text(self, editor, text: str, tag_name: str) -> None:
         assert self.page is not None
@@ -371,10 +390,11 @@ class GeminiWebRunner:
         stable_count = 0
         last_text = ""
         button_ready_logged = False
+        stop_gone_logged = False
         while time.time() < deadline:
             remaining = max(0.0, deadline - time.time())
             self._status(
-                countdown_label="응답 완료 대기",
+                countdown_label="최대 대기 남음",
                 countdown_remaining_seconds=remaining,
                 countdown_total_seconds=self.wait_timeout_ms / 1000.0,
                 countdown_step=step_label,
@@ -387,6 +407,14 @@ class GeminiWebRunner:
                 time.sleep(min(0.35, max(0.15, self.poll_interval_seconds / 2.0)))
                 followup = self._latest_response_text()
                 if followup and followup != baseline and self._composer_is_ready_for_next_prompt():
+                    return followup
+            if current and current != baseline and not self._has_visible_button(STOP_SELECTORS):
+                if not stop_gone_logged:
+                    self.log(f"⏭ 네모 버튼 종료 확인 | {step_label or '-'}")
+                    stop_gone_logged = True
+                time.sleep(min(0.35, max(0.15, self.poll_interval_seconds / 2.0)))
+                followup = self._latest_response_text()
+                if followup and followup != baseline and not self._has_visible_button(STOP_SELECTORS):
                     return followup
             if current and current != baseline:
                 if current == last_text:
