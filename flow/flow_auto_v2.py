@@ -2936,61 +2936,86 @@ class FlowVisionApp:
         raw = str(value or "").strip().upper()
         if not raw:
             return ""
-        prefix = (self.cfg.get("asset_loop_prefix") or "S").strip().upper() or "S"
-        if raw.isdigit():
-            return f"{prefix}{raw.zfill(self._asset_pad_width())}"
-        m = re.match(rf"^\s*{re.escape(prefix)}\s*0*([0-9]+)\s*$", raw, re.IGNORECASE)
-        if m:
-            return f"{prefix}{str(int(m.group(1))).zfill(self._asset_pad_width())}"
-        return raw
+        normalized = self._normalize_prompt_source_tag(raw)
+        return normalized or raw
 
     def _prompt_source_prefix(self):
         return (self.cfg.get("asset_loop_prefix") or "S").strip().upper() or "S"
 
-    def _parse_asset_scene_route_spec(self, raw_spec):
-        prefix = self._prompt_source_prefix()
-        try:
-            pad_width = int(self.cfg.get("asset_loop_num_width", 0))
-        except (TypeError, ValueError):
-            pad_width = 0
-        pad_width = max(3, pad_width)
-        text = str(raw_spec or "").strip()
+    def _prompt_source_prefix_aliases(self):
+        aliases = []
+        for candidate in (self._prompt_source_prefix(), "V"):
+            token = str(candidate or "").strip().upper()
+            if token and token not in aliases:
+                aliases.append(token)
+        return tuple(aliases)
+
+    def _normalize_prompt_source_tag(self, raw_tag, keep_original_prefix=False):
+        text = str(raw_tag or "").strip()
         if not text:
-            return None
+            return ""
+        prefix_pattern = "|".join(re.escape(token) for token in self._prompt_source_prefix_aliases())
         match = re.match(
-            rf"^\s*(?:{re.escape(prefix)}\s*)?0*([1-9][0-9]*)\s*(?:>\s*(?:{re.escape(prefix)}\s*)?0*([1-9][0-9]*))?\s*$",
+            rf"^\s*(?:(?P<prefix>{prefix_pattern})\s*)?0*(?P<number>[1-9][0-9]*)\s*$",
             text,
             re.IGNORECASE,
         )
         if not match:
+            return ""
+        prefix = str(match.group("prefix") or self._prompt_source_prefix()).strip().upper()
+        if not keep_original_prefix:
+            prefix = self._prompt_source_prefix()
+        number = int(match.group("number"))
+        return f"{prefix}{str(number).zfill(self._asset_pad_width())}"
+
+    def _parse_asset_scene_route_spec(self, raw_spec):
+        text = str(raw_spec or "").strip()
+        if not text:
             return None
-        start_no = int(match.group(1))
-        end_no = int(match.group(2)) if match.group(2) else 0
-        start_tag = f"{prefix}{str(start_no).zfill(pad_width)}"
-        end_tag = f"{prefix}{str(end_no).zfill(pad_width)}" if end_no > 0 else ""
+        parts = [part.strip() for part in text.split(">")]
+        if not parts or len(parts) > 2:
+            return None
+        start_tag = self._normalize_prompt_source_tag(parts[0], keep_original_prefix=False)
+        display_start_tag = self._normalize_prompt_source_tag(parts[0], keep_original_prefix=True)
+        if not start_tag or not display_start_tag:
+            return None
+        start_no = int(re.sub(r"\D", "", start_tag))
+        end_no = 0
+        end_tag = ""
+        display_end_tag = ""
+        if len(parts) == 2:
+            end_tag = self._normalize_prompt_source_tag(parts[1], keep_original_prefix=False)
+            display_end_tag = self._normalize_prompt_source_tag(parts[1], keep_original_prefix=True)
+            if not end_tag or not display_end_tag:
+                return None
+            end_no = int(re.sub(r"\D", "", end_tag))
+        display_spec = display_start_tag if not display_end_tag else f"{display_start_tag}>{display_end_tag}"
         return {
             "start_no": start_no,
             "start_tag": start_tag,
             "end_no": end_no if end_no > 0 else None,
             "end_tag": end_tag,
+            "display_start_tag": display_start_tag,
+            "display_end_tag": display_end_tag,
+            "display_spec": display_spec,
             "raw_spec": text,
         }
 
-    def _compose_asset_tag_prompt(self, tag, body):
-        tag_text = str(tag or "").strip().upper()
+    def _compose_asset_prompt_spec(self, prompt_spec, body):
+        prompt_spec_text = str(prompt_spec or "").strip().upper()
         body_text = str(body or "").strip()
-        if not tag_text:
+        if not prompt_spec_text:
             return body_text
         if not body_text:
             return ""
         any_prompt_label_pattern = re.compile(
-            rf"^\s*[A-Z]+\s*0*[1-9][0-9]*\s*(?:PROMPT|프롬프트)\s*:\s*",
+            r"^\s*[A-Z]+\s*0*[1-9][0-9]*(?:\s*>\s*[A-Z]+\s*0*[1-9][0-9]*)?\s*(?:PROMPT|프롬프트)\s*:\s*",
             re.IGNORECASE,
         )
         if any_prompt_label_pattern.match(body_text):
             return body_text
         tag_colon_pattern = re.compile(
-            rf"^\s*{re.escape(tag_text)}\s*:\s*(.*)\s*$",
+            rf"^\s*{re.escape(prompt_spec_text)}\s*:\s*(.*)\s*$",
             re.IGNORECASE | re.DOTALL,
         )
         tag_colon_match = tag_colon_pattern.match(body_text)
@@ -2998,7 +3023,10 @@ class FlowVisionApp:
             body_text = str(tag_colon_match.group(1) or "").strip()
             if not body_text:
                 return ""
-        return f"{tag_text} Prompt : {body_text}"
+        return f"{prompt_spec_text} Prompt : {body_text}"
+
+    def _compose_asset_tag_prompt(self, tag, body):
+        return self._compose_asset_prompt_spec(tag, body)
 
     def _parse_prompt_source_entries(self, raw_text):
         sep = self.cfg.get("prompts_separator", "|||")
@@ -3601,14 +3629,18 @@ class FlowVisionApp:
 
     def _parse_asset_prompt_entries(self, entries):
         prefix = (self.cfg.get("asset_loop_prefix") or "S").strip() or "S"
+        prefix_pattern = "|".join(re.escape(token) for token in self._prompt_source_prefix_aliases())
         try:
             pad_width = int(self.cfg.get("asset_loop_num_width", 0))
         except (TypeError, ValueError):
             pad_width = 0
         pad_width = max(3, pad_width)
-        tag_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*::\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
-        prompt_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
-        tag_only_pattern = re.compile(rf"^\s*({re.escape(prefix)}\d+)\s*$", re.IGNORECASE)
+        tag_pattern = re.compile(rf"^\s*((?:{prefix_pattern})\s*0*[1-9][0-9]*)\s*::\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
+        prompt_pattern = re.compile(
+            rf"^\s*(((?:{prefix_pattern})\s*0*[1-9][0-9]*)(?:\s*>\s*(?:{prefix_pattern})\s*0*[1-9][0-9]*)?)\s*(?:PROMPT|프롬프트)\s*:\s*(.*)\s*$",
+            re.IGNORECASE | re.DOTALL,
+        )
+        tag_only_pattern = re.compile(rf"^\s*((?:{prefix_pattern})\s*0*[1-9][0-9]*)\s*$", re.IGNORECASE)
         number_inline_pattern = re.compile(r"^\s*0*([1-9][0-9]*)\s*:\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
         number_only_pattern = re.compile(r"^\s*0*([1-9][0-9]*)\s*$", re.IGNORECASE)
         tagged_prompts = {}
@@ -3626,17 +3658,38 @@ class FlowVisionApp:
                 route_info = self._parse_asset_scene_route_spec(route_inline_match.group(1))
                 body = str(route_inline_match.group(2) or "").strip()
                 if route_info and body:
-                    tagged_prompts[route_info["start_tag"].upper()] = self._compose_asset_tag_prompt(route_info["start_tag"], body)
+                    tagged_prompts[route_info["start_tag"].upper()] = self._compose_asset_prompt_spec(route_info.get("display_spec", route_info["start_tag"]), body)
                     tagged_end_tags[route_info["start_tag"].upper()] = str(route_info.get("end_tag") or "").strip().upper()
                     continue
             match = tag_pattern.match(raw_text)
             if not match:
                 match = prompt_pattern.match(raw_text)
             if match:
-                tag = match.group(1).strip().upper()
-                body = match.group(2).strip()
-                if body:
-                    tagged_prompts[tag] = body
+                if match.re is prompt_pattern:
+                    prompt_spec = str(match.group(1) or "").strip()
+                    body = str(match.group(3) or "").strip()
+                    start_raw = prompt_spec.split(">", 1)[0]
+                    end_raw = prompt_spec.split(">", 1)[1] if ">" in prompt_spec else ""
+                    tag = self._normalize_prompt_source_tag(start_raw)
+                    display_spec = ">".join(
+                        part for part in (
+                            self._normalize_prompt_source_tag(start_raw, keep_original_prefix=True),
+                            self._normalize_prompt_source_tag(end_raw, keep_original_prefix=True) if end_raw else "",
+                        ) if part
+                    )
+                    if body and tag:
+                        tagged_prompts[tag.upper()] = self._compose_asset_prompt_spec(display_spec or tag, body)
+                        if end_raw:
+                            end_tag = self._normalize_prompt_source_tag(end_raw)
+                            if end_tag:
+                                tagged_end_tags[tag.upper()] = end_tag.upper()
+                else:
+                    raw_tag = str(match.group(1) or "").strip()
+                    body = str(match.group(2) or "").strip()
+                    tag = self._normalize_prompt_source_tag(raw_tag)
+                    display_tag = self._normalize_prompt_source_tag(raw_tag, keep_original_prefix=True)
+                    if body and tag:
+                        tagged_prompts[tag.upper()] = self._compose_asset_prompt_spec(display_tag or tag, body)
                 continue
             number_inline_match = number_inline_pattern.match(raw_text)
             if number_inline_match:
@@ -3651,7 +3704,7 @@ class FlowVisionApp:
                 next_body = str(source[idx] or "").strip()
                 if next_body:
                     start_tag = route_only_info["start_tag"].upper()
-                    tagged_prompts[start_tag] = self._compose_asset_tag_prompt(route_only_info["start_tag"], next_body)
+                    tagged_prompts[start_tag] = self._compose_asset_prompt_spec(route_only_info.get("display_spec", route_only_info["start_tag"]), next_body)
                     tagged_end_tags[start_tag] = str(route_only_info.get("end_tag") or "").strip().upper()
                     idx += 1
                     continue
@@ -3659,7 +3712,11 @@ class FlowVisionApp:
             if tag_only_match and idx < len(source):
                 next_body = str(source[idx] or "").strip()
                 if next_body:
-                    tagged_prompts[tag_only_match.group(1).strip().upper()] = next_body
+                    raw_tag = str(tag_only_match.group(1) or "").strip()
+                    tag = self._normalize_prompt_source_tag(raw_tag)
+                    display_tag = self._normalize_prompt_source_tag(raw_tag, keep_original_prefix=True)
+                    if tag:
+                        tagged_prompts[tag.upper()] = self._compose_asset_prompt_spec(display_tag or tag, next_body)
                     idx += 1
                     continue
             number_only_match = number_only_pattern.match(raw_text)
