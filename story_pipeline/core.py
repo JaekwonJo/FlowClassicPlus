@@ -724,29 +724,60 @@ class StoryPipeline:
                         final_validation = merged_validation
 
                 if not final_validation.ok:
-                    self.log(f"🩹 Step7 결과 보정 시도 | {micro_label}")
-                    self._status(
-                        status="자동 보정",
-                        detail=f"{micro_label} 형식 보정 중",
-                        current_step="보정",
-                        scene_range=micro_label.replace("_", " ~ "),
-                        batch_index=batch.batch_index,
-                        batch_total=total_batches,
-                        micro_index=completed_micro_batches + 1,
-                        micro_total=total_micro_batches,
-                        batch_micro_index=micro_index,
-                        batch_micro_total=len(batch.micro_batches),
-                        scene_done=completed_scenes,
-                        scene_total=total_scenes,
-                    )
-                    repair_prompt = self.composer.build_repair_prompt(micro_scenes, step7_text, final_validation.errors)
-                    repair_text = self.runner.send_prompt(repair_prompt, step_label=f"{micro_label}_repair")
-                    writer.write_raw(f"{micro_label}_repair.txt", repair_text)
-                    repaired_candidate = self.validator.extract_final_prompt_text(repair_text)
-                    repaired_validation = self.validator.validate(repaired_candidate, micro_scenes)
-                    if repaired_validation.ok:
-                        final_candidate = repaired_candidate
-                        final_validation = repaired_validation
+                    if self.cfg.pipeline_mode == "manual_style":
+                        for retry_index in range(1, 3):
+                            self.log(f"🔁 Step7 다시 요청 {retry_index}회차 | {micro_label}")
+                            self._status(
+                                status="Step7 다시 요청",
+                                detail=f"{micro_label} Step7 재검수 {retry_index}회차",
+                                current_step="Step7 재검수",
+                                scene_range=micro_label.replace("_", " ~ "),
+                                batch_index=batch.batch_index,
+                                batch_total=total_batches,
+                                micro_index=completed_micro_batches + 1,
+                                micro_total=total_micro_batches,
+                                batch_micro_index=micro_index,
+                                batch_micro_total=len(batch.micro_batches),
+                                scene_done=completed_scenes,
+                                scene_total=total_scenes,
+                            )
+                            retry_prompt = self.composer.build_manual_style_step7_prompt()
+                            retry_text = self.runner.send_prompt(retry_prompt, step_label=f"{micro_label}_step7_retry{retry_index}")
+                            writer.write_raw(f"{micro_label}_step7_retry{retry_index}.txt", retry_text)
+                            final_candidate = self.validator.extract_final_prompt_text(retry_text)
+                            final_validation = self.validator.validate(final_candidate, micro_scenes)
+                            if not final_validation.ok:
+                                merged_candidate = self.validator.merge_partial_with_draft(final_validation, draft_validation, micro_scenes)
+                                merged_validation = self.validator.validate(merged_candidate, micro_scenes)
+                                if merged_validation.ok:
+                                    final_candidate = merged_candidate
+                                    final_validation = merged_validation
+                            if final_validation.ok:
+                                break
+                    else:
+                        self.log(f"🩹 Step7 결과 보정 시도 | {micro_label}")
+                        self._status(
+                            status="자동 보정",
+                            detail=f"{micro_label} 형식 보정 중",
+                            current_step="보정",
+                            scene_range=micro_label.replace("_", " ~ "),
+                            batch_index=batch.batch_index,
+                            batch_total=total_batches,
+                            micro_index=completed_micro_batches + 1,
+                            micro_total=total_micro_batches,
+                            batch_micro_index=micro_index,
+                            batch_micro_total=len(batch.micro_batches),
+                            scene_done=completed_scenes,
+                            scene_total=total_scenes,
+                        )
+                        repair_prompt = self.composer.build_repair_prompt(micro_scenes, step7_text, final_validation.errors)
+                        repair_text = self.runner.send_prompt(repair_prompt, step_label=f"{micro_label}_repair")
+                        writer.write_raw(f"{micro_label}_repair.txt", repair_text)
+                        repaired_candidate = self.validator.extract_final_prompt_text(repair_text)
+                        repaired_validation = self.validator.validate(repaired_candidate, micro_scenes)
+                        if repaired_validation.ok:
+                            final_candidate = repaired_candidate
+                            final_validation = repaired_validation
 
                 if not final_validation.ok:
                     writer.write_report(
