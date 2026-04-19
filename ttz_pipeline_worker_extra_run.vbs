@@ -6,20 +6,28 @@ localPyw = WshShell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\FlowClassicPl
 legacyLocalPyw = WshShell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\Autoupload\runtime\python-embed\pythonw.exe"
 legacyPyw = basePath & "\runtime\python-embed\pythonw.exe"
 
+workerName = "story_worker2"
+If WScript.Arguments.Count > 0 Then
+    workerName = Trim(CStr(WScript.Arguments(0)))
+    If workerName = "" Then
+        workerName = "story_worker2"
+    End If
+End If
+
 WshShell.CurrentDirectory = basePath
 
 checkSystem = WshShell.Run("cmd /c python -c ""import tkinter""", 0, True)
 
 If checkSystem = 0 Then
-    WshShell.Run "pythonw story_prompt_pipeline.py --instance-name story_worker1", 0
+    WshShell.Run "pythonw ttz_pipeline_worker.py --instance-name """ & workerName & """", 0
 ElseIf fso.FileExists(localPyw) Then
-    WshShell.Run """" & localPyw & """ story_prompt_pipeline.py --instance-name story_worker1", 0
+    WshShell.Run """" & localPyw & """ ttz_pipeline_worker.py --instance-name """ & workerName & """", 0
 ElseIf fso.FileExists(legacyLocalPyw) Then
-    WshShell.Run """" & legacyLocalPyw & """ story_prompt_pipeline.py --instance-name story_worker1", 0
+    WshShell.Run """" & legacyLocalPyw & """ ttz_pipeline_worker.py --instance-name """ & workerName & """", 0
 ElseIf fso.FileExists(legacyPyw) Then
-    WshShell.Run """" & legacyPyw & """ story_prompt_pipeline.py --instance-name story_worker1", 0
+    WshShell.Run """" & legacyPyw & """ ttz_pipeline_worker.py --instance-name """ & workerName & """", 0
 Else
-    MsgBox "pythonw not found for story prompt pipeline.", vbExclamation, "Story Prompt Pipeline"
+    MsgBox "pythonw not found for TTZ pipeline worker.", vbExclamation, "TTZ Pipeline Worker"
 End If
 
 Set fso = Nothing

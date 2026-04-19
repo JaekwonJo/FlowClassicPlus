@@ -32,7 +32,7 @@ class StoryPromptPipelineApp:
         self.preview_runner: GeminiWebRunner | None = None
         self.geometry_save_job = None
         self.root = tk.Tk()
-        self.root.title(f"똑똑즈 자동화 파이프라인 - ttz_worker ({self.instance_name})")
+        self.root.title(f"똑똑즈 파이프라인 워커 - ttz_worker ({self.instance_name})")
         self.root.geometry(self.cfg.window_geometry if hasattr(self, "cfg") else "620x520")
         self.root.minsize(580, 460)
         self.root.configure(bg="#ECE7DF")
@@ -64,10 +64,13 @@ class StoryPromptPipelineApp:
 
     def _load_config(self) -> PipelineConfig:
         path = self._config_path()
+        legacy_path = self._legacy_config_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
+        for candidate in (path, legacy_path):
+            if not candidate.exists():
+                continue
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
+                data = json.loads(candidate.read_text(encoding="utf-8"))
                 cfg = PipelineConfig(**data)
                 cfg.instance_name = self.instance_name
                 if not cfg.browser_profile_dir:
@@ -76,7 +79,7 @@ class StoryPromptPipelineApp:
                     cfg.output_root = self._default_output_root()
                 return cfg
             except Exception:
-                pass
+                continue
         return PipelineConfig(
             instance_name=self.instance_name,
             browser_profile_dir=self._default_browser_profile_dir(),
@@ -84,13 +87,16 @@ class StoryPromptPipelineApp:
         )
 
     def _config_path(self) -> Path:
+        return Path("runtime") / f"ttz_pipeline_worker_config_{self.instance_name}.json"
+
+    def _legacy_config_path(self) -> Path:
         return Path("runtime") / f"story_prompt_pipeline_config_{self.instance_name}.json"
 
     def _default_browser_profile_dir(self) -> str:
-        return f"runtime/story_gemini_profile_pw_{self.instance_name}"
+        return f"runtime/ttz_gemini_profile_pw_{self.instance_name}"
 
     def _default_output_root(self) -> str:
-        return f"logs/story_prompt_pipeline/{self.instance_name}"
+        return f"logs/ttz_pipeline_worker/{self.instance_name}"
 
     def _save_config(self) -> None:
         self._read_ui_into_cfg()
