@@ -100,15 +100,7 @@ class GeminiWebRunner:
     def reset_conversation(self) -> None:
         self.open_browser()
         assert self.page is not None
-        for selector in NEW_CHAT_SELECTORS:
-            try:
-                button = self.page.locator(selector).first
-                if button.count() and button.is_visible(timeout=1200):
-                    button.click(timeout=1500)
-                    self.wait_for_input_ready()
-                    return
-            except Exception:
-                continue
+        self.log("🧭 Gem URL로 다시 이동해 초기 채팅 상태를 맞춥니다.")
         self.page.goto(self.start_url, wait_until="domcontentloaded")
         self.wait_for_input_ready()
 

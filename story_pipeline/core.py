@@ -540,6 +540,7 @@ class StoryPipeline:
         self.source = StoryPromptSource(cfg)
         self.composer = PromptComposer(self.source)
         self.validator = PromptValidator()
+        self.live_file_opened = False
 
     def _check_stop(self) -> None:
         if self.stop_event.is_set():
@@ -573,7 +574,6 @@ class StoryPipeline:
 
         scene_range_label = f"S{windows[0].scenes[0].number:03d}_S{windows[-1].scenes[-1].number:03d}"
         writer = LiveOutputWriter(Path(self.cfg.output_root), scene_range_label)
-        self._open_live_file_if_needed(writer.final_live_txt)
         self.runner.open_browser()
         self.log(f"🧠 스토리 자동화 세션 시작 | 범위 {scene_range_label}")
         self.log(f"📝 검증 통과 프롬프트는 계속 저장됩니다: {writer.final_live_txt}")
@@ -653,6 +653,9 @@ class StoryPipeline:
 
                 normalized_final = self.validator.normalize_text(final_validation.blocks, micro_scenes)
                 writer.append_validated_prompts(micro_label, normalized_final)
+                if not self.live_file_opened:
+                    self._open_live_file_if_needed(writer.final_live_txt)
+                    self.live_file_opened = True
                 writer.write_raw(f"{micro_label}_final_validated.txt", normalized_final)
                 writer.write_report(
                     f"{micro_label}_final_validation.json",
