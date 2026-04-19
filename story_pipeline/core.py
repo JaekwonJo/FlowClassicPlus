@@ -78,11 +78,12 @@ class PipelineConfig:
     end_scene: int = 15
     batch_size: int = 15
     micro_batch_size: int = 5
+    pre_input_delay_seconds: float = 4.0
     send_wait_seconds: float = 2.0
     poll_interval_seconds: float = 2.0
     stable_rounds_required: int = 2
     max_wait_seconds: float = 300.0
-    human_typing_enabled: bool = True
+    human_typing_enabled: bool = False
     typing_speed_level: int = 5
     reset_chat_each_batch: bool = True
     open_notepad_live: bool = True
@@ -532,15 +533,25 @@ class StoryPipeline:
         runner,
         log: Callable[[str], None],
         stop_event: threading.Event,
+        status_callback: Optional[Callable[[dict], None]] = None,
     ):
         self.cfg = cfg
         self.runner = runner
         self.log = log
         self.stop_event = stop_event
+        self.status_callback = status_callback
         self.source = StoryPromptSource(cfg)
         self.composer = PromptComposer(self.source)
         self.validator = PromptValidator()
         self.live_file_opened = False
+
+    def _status(self, **payload) -> None:
+        if self.status_callback is None:
+            return
+        try:
+            self.status_callback(payload)
+        except Exception:
+            pass
 
     def _check_stop(self) -> None:
         if self.stop_event.is_set():
@@ -573,22 +584,75 @@ class StoryPipeline:
             raise ValueError("선택한 범위에서 장면을 찾지 못했습니다.")
 
         scene_range_label = f"S{windows[0].scenes[0].number:03d}_S{windows[-1].scenes[-1].number:03d}"
+        total_batches = len(windows)
+        total_micro_batches = sum(len(batch.micro_batches) for batch in windows)
+        total_scenes = sum(len(batch.scenes) for batch in windows)
+        completed_micro_batches = 0
+        completed_scenes = 0
         writer = LiveOutputWriter(Path(self.cfg.output_root), scene_range_label)
         self.runner.open_browser()
         self.log(f"🧠 스토리 자동화 세션 시작 | 범위 {scene_range_label}")
         self.log(f"📝 검증 통과 프롬프트는 계속 저장됩니다: {writer.final_live_txt}")
         self.log(f"🎛️ 실행 모드: {self.cfg.pipeline_mode}")
+        self._status(
+            status="세션 시작",
+            detail=f"범위 {scene_range_label}",
+            current_step="준비",
+            scene_range=scene_range_label.replace("_", " ~ "),
+            batch_index=0,
+            batch_total=total_batches,
+            micro_index=0,
+            micro_total=total_micro_batches,
+            scene_done=0,
+            scene_total=total_scenes,
+        )
 
         for batch in windows:
             self._check_stop()
             self.log(f"📦 배치 {batch.batch_index} 시작 | {batch.label}")
+            self._status(
+                status="배치 시작",
+                detail=f"{batch.label} 준비",
+                current_step="배치 준비",
+                scene_range=batch.label.replace("_", " ~ "),
+                batch_index=batch.batch_index,
+                batch_total=total_batches,
+                micro_index=completed_micro_batches,
+                micro_total=total_micro_batches,
+                scene_done=completed_scenes,
+                scene_total=total_scenes,
+            )
             if self.cfg.reset_chat_each_batch:
                 self.runner.reset_conversation()
                 self.log("🧹 새 채팅 기준으로 배치 시작")
+                self._status(
+                    status="새 채팅 준비",
+                    detail=f"{batch.label} 새 채팅 상태 맞춤",
+                    current_step="채팅 초기화",
+                    scene_range=batch.label.replace("_", " ~ "),
+                    batch_index=batch.batch_index,
+                    batch_total=total_batches,
+                    micro_index=completed_micro_batches,
+                    micro_total=total_micro_batches,
+                    scene_done=completed_scenes,
+                    scene_total=total_scenes,
+                )
 
             step5_text = ""
             if self.cfg.pipeline_mode == "step5_step7":
                 step5_prompt = self.composer.build_step5_prompt(batch)
+                self._status(
+                    status="Step5 생성",
+                    detail=f"{batch.label} 기획 요약 요청",
+                    current_step="Step5",
+                    scene_range=batch.label.replace("_", " ~ "),
+                    batch_index=batch.batch_index,
+                    batch_total=total_batches,
+                    micro_index=completed_micro_batches,
+                    micro_total=total_micro_batches,
+                    scene_done=completed_scenes,
+                    scene_total=total_scenes,
+                )
                 step5_text = self.runner.send_prompt(step5_prompt, step_label=f"{batch.label}_step5")
                 writer.write_raw(f"{batch.label}_step5.txt", step5_text)
                 writer.append_manifest_step(
@@ -599,6 +663,20 @@ class StoryPipeline:
                 self._check_stop()
                 micro_label = f"{micro_scenes[0].label}_{micro_scenes[-1].label}"
                 self.log(f"🎬 Step6 생성 시작 | {micro_label}")
+                self._status(
+                    status="Step6 생성",
+                    detail=f"{micro_label} 프롬프트 초안 요청",
+                    current_step="Step6",
+                    scene_range=micro_label.replace("_", " ~ "),
+                    batch_index=batch.batch_index,
+                    batch_total=total_batches,
+                    micro_index=completed_micro_batches + 1,
+                    micro_total=total_micro_batches,
+                    batch_micro_index=micro_index,
+                    batch_micro_total=len(batch.micro_batches),
+                    scene_done=completed_scenes,
+                    scene_total=total_scenes,
+                )
 
                 if self.cfg.pipeline_mode == "manual_style":
                     step6_prompt = self.composer.build_manual_style_step6_prompt(micro_scenes)
@@ -617,6 +695,20 @@ class StoryPipeline:
                 else:
                     self.log(f"⚠️ Step6 1차 형식 이슈 {len(draft_validation.errors)}개 | {micro_label}")
 
+                self._status(
+                    status="Step7 검수",
+                    detail=f"{micro_label} 검수 요청",
+                    current_step="Step7",
+                    scene_range=micro_label.replace("_", " ~ "),
+                    batch_index=batch.batch_index,
+                    batch_total=total_batches,
+                    micro_index=completed_micro_batches + 1,
+                    micro_total=total_micro_batches,
+                    batch_micro_index=micro_index,
+                    batch_micro_total=len(batch.micro_batches),
+                    scene_done=completed_scenes,
+                    scene_total=total_scenes,
+                )
                 if self.cfg.pipeline_mode == "manual_style":
                     step7_prompt = self.composer.build_manual_style_step7_prompt()
                 else:
@@ -635,6 +727,20 @@ class StoryPipeline:
 
                 if not final_validation.ok:
                     self.log(f"🩹 Step7 결과 보정 시도 | {micro_label}")
+                    self._status(
+                        status="자동 보정",
+                        detail=f"{micro_label} 형식 보정 중",
+                        current_step="보정",
+                        scene_range=micro_label.replace("_", " ~ "),
+                        batch_index=batch.batch_index,
+                        batch_total=total_batches,
+                        micro_index=completed_micro_batches + 1,
+                        micro_total=total_micro_batches,
+                        batch_micro_index=micro_index,
+                        batch_micro_total=len(batch.micro_batches),
+                        scene_done=completed_scenes,
+                        scene_total=total_scenes,
+                    )
                     repair_prompt = self.composer.build_repair_prompt(micro_scenes, step7_text, final_validation.errors)
                     repair_text = self.runner.send_prompt(repair_prompt, step_label=f"{micro_label}_repair")
                     writer.write_raw(f"{micro_label}_repair.txt", repair_text)
@@ -672,6 +778,38 @@ class StoryPipeline:
                     }
                 )
                 self.log(f"💾 검증 통과 즉시 저장 | {micro_label}")
+                completed_micro_batches += 1
+                completed_scenes += len(micro_scenes)
+                self._status(
+                    status="저장 완료",
+                    detail=f"{micro_label} 저장됨",
+                    current_step="저장 완료",
+                    scene_range=micro_label.replace("_", " ~ "),
+                    batch_index=batch.batch_index,
+                    batch_total=total_batches,
+                    micro_index=completed_micro_batches,
+                    micro_total=total_micro_batches,
+                    batch_micro_index=micro_index,
+                    batch_micro_total=len(batch.micro_batches),
+                    scene_done=completed_scenes,
+                    scene_total=total_scenes,
+                    countdown_label="대기 없음",
+                    countdown_remaining_seconds=0.0,
+                )
 
         self.log("🏁 전체 자동화 흐름 완료")
+        self._status(
+            status="전체 완료",
+            detail=f"{scene_range_label} 처리 완료",
+            current_step="완료",
+            scene_range=scene_range_label.replace("_", " ~ "),
+            batch_index=total_batches,
+            batch_total=total_batches,
+            micro_index=total_micro_batches,
+            micro_total=total_micro_batches,
+            scene_done=total_scenes,
+            scene_total=total_scenes,
+            countdown_label="대기 없음",
+            countdown_remaining_seconds=0.0,
+        )
         return writer.paths

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -32,15 +33,19 @@ class StoryPromptPipelineApp:
         self.root = tk.Tk()
         self.root.title(f"똑똑즈 자동화 파이프라인 - ttz_worker ({self.instance_name})")
         self.root.geometry(self.cfg.window_geometry if hasattr(self, "cfg") else "760x560")
-        self.root.minsize(720, 520)
+        self.root.minsize(760, 640)
         self.root.configure(bg="#ECE7DF")
 
         self.queue: Queue[str] = Queue()
+        self.status_queue: Queue[dict] = Queue()
         self.worker_thread: threading.Thread | None = None
         self.stop_event = threading.Event()
         self.runner: GeminiWebRunner | None = None
         self.current_log_file: Path | None = None
         self.log_visible = True
+        self.run_started_at: float | None = None
+        self.countdown_label = "대기 없음"
+        self.countdown_remaining_seconds = 0.0
 
         self.cfg = self._load_config()
         self.root.geometry(self.cfg.window_geometry or "760x560")
@@ -48,6 +53,8 @@ class StoryPromptPipelineApp:
         self.root.bind("<Configure>", self._on_root_configure)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._pump_log_queue()
+        self._pump_status_queue()
+        self._tick_elapsed_clock()
 
     def _load_config(self) -> PipelineConfig:
         path = self._config_path()
@@ -98,6 +105,7 @@ class StoryPromptPipelineApp:
         self.cfg.end_scene = int(self.var_end_scene.get() or self.cfg.start_scene)
         self.cfg.batch_size = int(self.var_batch_size.get() or 15)
         self.cfg.micro_batch_size = int(self.var_micro_batch_size.get() or 5)
+        self.cfg.pre_input_delay_seconds = float(self.var_pre_input_delay_seconds.get() or 4.0)
         self.cfg.send_wait_seconds = float(self.var_send_wait_seconds.get() or 2.0)
         self.cfg.poll_interval_seconds = float(self.var_poll_interval_seconds.get() or 2.0)
         self.cfg.stable_rounds_required = int(self.var_stable_rounds_required.get() or 2)
@@ -165,6 +173,100 @@ class StoryPromptPipelineApp:
             self.lbl_log_file.config(
                 text=f"로그 파일: {self._short_text(str(self.current_log_file or '-'))}"
             )
+
+    def _format_elapsed(self, seconds: float) -> str:
+        total = max(0, int(seconds))
+        hour = total // 3600
+        minute = (total % 3600) // 60
+        second = total % 60
+        return f"{hour:02d}:{minute:02d}:{second:02d}"
+
+    def _format_countdown(self, label: str, seconds: float) -> str:
+        remain = max(0.0, float(seconds))
+        return f"{label} {remain:05.1f}초"
+
+    def _queue_status(self, payload: dict) -> None:
+        self.status_queue.put(payload)
+
+    def _apply_status(self, payload: dict) -> None:
+        status = str(payload.get("status") or "").strip()
+        if status:
+            self.var_hud_status.set(status)
+        detail = str(payload.get("detail") or "").strip()
+        if detail:
+            self.var_hud_detail.set(detail)
+        step = str(payload.get("current_step") or "").strip()
+        if step:
+            self.var_hud_step.set(step)
+
+        batch_index = payload.get("batch_index")
+        batch_total = payload.get("batch_total")
+        if batch_index is not None and batch_total is not None and int(batch_total) > 0:
+            self.var_hud_batch.set(f"배치 {int(batch_index)} / {int(batch_total)}")
+
+        micro_index = payload.get("micro_index")
+        micro_total = payload.get("micro_total")
+        batch_micro_index = payload.get("batch_micro_index")
+        batch_micro_total = payload.get("batch_micro_total")
+        micro_parts = []
+        if micro_index is not None and micro_total is not None and int(micro_total) > 0:
+            micro_parts.append(f"전체 묶음 {int(micro_index)} / {int(micro_total)}")
+        if batch_micro_index is not None and batch_micro_total is not None and int(batch_micro_total) > 0:
+            micro_parts.append(f"이번 배치 {int(batch_micro_index)} / {int(batch_micro_total)}")
+        if micro_parts:
+            self.var_hud_micro.set(" | ".join(micro_parts))
+
+        scene_done = payload.get("scene_done")
+        scene_total = payload.get("scene_total")
+        scene_range = str(payload.get("scene_range") or "").strip()
+        scene_text_parts = []
+        if scene_done is not None and scene_total is not None and int(scene_total) > 0:
+            scene_text_parts.append(f"장면 {int(scene_done)} / {int(scene_total)}")
+        if scene_range:
+            scene_text_parts.append(f"현재 {scene_range}")
+        if scene_text_parts:
+            self.var_hud_scene.set(" | ".join(scene_text_parts))
+
+        if "countdown_label" in payload or "countdown_remaining_seconds" in payload:
+            self.countdown_label = str(payload.get("countdown_label") or self.countdown_label or "대기 없음")
+            self.countdown_remaining_seconds = max(0.0, float(payload.get("countdown_remaining_seconds") or 0.0))
+            self.var_hud_countdown.set(self._format_countdown(self.countdown_label, self.countdown_remaining_seconds))
+
+        if status in {"전체 완료", "실패", "중지 요청"}:
+            self.countdown_label = "대기 없음"
+            self.countdown_remaining_seconds = 0.0
+            self.var_hud_countdown.set(self._format_countdown(self.countdown_label, 0.0))
+
+    def _pump_status_queue(self) -> None:
+        try:
+            while True:
+                payload = self.status_queue.get_nowait()
+                self._apply_status(payload)
+        except Empty:
+            pass
+        self.root.after(120, self._pump_status_queue)
+
+    def _tick_elapsed_clock(self) -> None:
+        if self.run_started_at is None:
+            self.var_hud_elapsed.set("00:00:00")
+        else:
+            self.var_hud_elapsed.set(self._format_elapsed(time.time() - self.run_started_at))
+            if self.countdown_remaining_seconds > 0:
+                self.countdown_remaining_seconds = max(0.0, self.countdown_remaining_seconds - 0.2)
+                self.var_hud_countdown.set(self._format_countdown(self.countdown_label, self.countdown_remaining_seconds))
+        self.root.after(200, self._tick_elapsed_clock)
+
+    def _reset_hud(self) -> None:
+        self.var_hud_status.set("준비 완료")
+        self.var_hud_detail.set("아직 시작하지 않았습니다.")
+        self.var_hud_step.set("-")
+        self.var_hud_batch.set("배치 0 / 0")
+        self.var_hud_micro.set("전체 묶음 0 / 0")
+        self.var_hud_scene.set("장면 0 / 0")
+        self.countdown_label = "대기 없음"
+        self.countdown_remaining_seconds = 0.0
+        self.var_hud_countdown.set(self._format_countdown(self.countdown_label, 0.0))
+        self.var_hud_elapsed.set("00:00:00")
 
     def _toggle_log(self) -> None:
         self.log_visible = not self.log_visible
@@ -240,6 +342,7 @@ class StoryPromptPipelineApp:
         self.var_end_scene = tk.StringVar(value=str(self.cfg.end_scene))
         self.var_batch_size = tk.StringVar(value=str(self.cfg.batch_size))
         self.var_micro_batch_size = tk.StringVar(value=str(self.cfg.micro_batch_size))
+        self.var_pre_input_delay_seconds = tk.StringVar(value=str(self.cfg.pre_input_delay_seconds))
         self.var_send_wait_seconds = tk.StringVar(value=str(self.cfg.send_wait_seconds))
         self.var_poll_interval_seconds = tk.StringVar(value=str(self.cfg.poll_interval_seconds))
         self.var_stable_rounds_required = tk.StringVar(value=str(self.cfg.stable_rounds_required))
@@ -249,6 +352,14 @@ class StoryPromptPipelineApp:
         self.var_reset_chat = tk.BooleanVar(value=self.cfg.reset_chat_each_batch)
         self.var_open_notepad = tk.BooleanVar(value=self.cfg.open_notepad_live)
         self.var_manual_baked = tk.BooleanVar(value=self.cfg.manual_is_baked_into_gem)
+        self.var_hud_status = tk.StringVar()
+        self.var_hud_detail = tk.StringVar()
+        self.var_hud_step = tk.StringVar()
+        self.var_hud_batch = tk.StringVar()
+        self.var_hud_micro = tk.StringVar()
+        self.var_hud_scene = tk.StringVar()
+        self.var_hud_countdown = tk.StringVar()
+        self.var_hud_elapsed = tk.StringVar()
 
         header = tk.Frame(outer, bg="#ECE7DF")
         header.pack(fill="x", pady=(0, 10))
@@ -258,7 +369,32 @@ class StoryPromptPipelineApp:
         self.lbl_worker_name.pack(anchor="w")
         self.lbl_profile_info = tk.Label(left_header, text="", bg="#ECE7DF", fg="#6A6B62", font=("맑은 고딕", 9))
         self.lbl_profile_info.pack(anchor="w", pady=(4, 0))
-        tk.Label(header, text="manual_style", bg="#DDE9E5", fg="#1F6F5F", font=("맑은 고딕", 9, "bold"), padx=10, pady=4).pack(side="right")
+        tk.Label(header, text="수동처럼 실행", bg="#DDE9E5", fg="#1F6F5F", font=("맑은 고딕", 9, "bold"), padx=10, pady=4).pack(side="right")
+
+        hud_card = tk.Frame(outer, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1)
+        hud_card.pack(fill="x", pady=(0, 8))
+        hud_card.grid_columnconfigure(1, weight=1)
+        hud_card.grid_columnconfigure(3, weight=1)
+
+        tk.Label(hud_card, text="실시간 상태", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 6))
+        tk.Label(hud_card, textvariable=self.var_hud_status, bg="#E5EFEA", fg="#1F6F5F", font=("맑은 고딕", 10, "bold"), padx=10, pady=5).grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=(10, 6))
+        tk.Label(hud_card, text="지금 하는 일", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).grid(row=0, column=2, sticky="w", padx=(4, 8), pady=(10, 6))
+        tk.Label(hud_card, textvariable=self.var_hud_detail, bg="#EFE8DD", fg="#23302B", anchor="w", padx=10, pady=5, font=("맑은 고딕", 10)).grid(row=0, column=3, sticky="ew", padx=(0, 12), pady=(10, 6))
+
+        hud_rows = [
+            ("현재 단계", self.var_hud_step),
+            ("배치 진행", self.var_hud_batch),
+            ("묶음 진행", self.var_hud_micro),
+            ("장면 진행", self.var_hud_scene),
+            ("남은 기다림", self.var_hud_countdown),
+            ("지난 시간", self.var_hud_elapsed),
+        ]
+        for idx, (title, var) in enumerate(hud_rows, start=1):
+            col = 0 if idx % 2 == 1 else 2
+            row = 1 + (idx - 1) // 2
+            value_col = col + 1
+            tk.Label(hud_card, text=title, bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).grid(row=row, column=col, sticky="w", padx=12, pady=6)
+            tk.Label(hud_card, textvariable=var, bg="#EFE8DD", fg="#23302B", anchor="w", padx=10, pady=5, font=("맑은 고딕", 10)).grid(row=row, column=value_col, sticky="ew", padx=(0, 12), pady=6)
 
         top_card = tk.Frame(outer, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1)
         top_card.pack(fill="x", pady=(0, 8))
@@ -271,10 +407,10 @@ class StoryPromptPipelineApp:
             ttk.Button(parent, text=action_text, command=action_cmd, style="Secondary.TButton", width=8).grid(row=row, column=2, padx=(0, 10), pady=6)
             setattr(self, value_attr, label)
 
-        compact_row(top_card, 0, "Step 매크로", "lbl_step_macro_value", "파일 선택", lambda: self._browse_file(self.var_step_macro_path, "Step 매크로 선택"))
-        compact_row(top_card, 1, "장면 분할", "lbl_scene_file_value", "파일 선택", lambda: self._browse_file(self.var_scene_file_path, "장면 분할 파일 선택"))
+        compact_row(top_card, 0, "Step 규칙 파일", "lbl_step_macro_value", "파일 선택", lambda: self._browse_file(self.var_step_macro_path, "Step 규칙 파일 선택"))
+        compact_row(top_card, 1, "장면 파일", "lbl_scene_file_value", "파일 선택", lambda: self._browse_file(self.var_scene_file_path, "장면 파일 선택"))
         compact_row(top_card, 2, "Gem URL", "lbl_url_value", "URL 설정", self._edit_url)
-        compact_row(top_card, 3, "출력 폴더", "lbl_output_value", "폴더 선택", lambda: self._browse_dir(self.var_output_root, "출력 폴더 선택"))
+        compact_row(top_card, 3, "결과 저장 폴더", "lbl_output_value", "폴더 선택", lambda: self._browse_dir(self.var_output_root, "결과 저장 폴더 선택"))
 
         middle = tk.Frame(outer, bg="#ECE7DF")
         middle.pack(fill="x", pady=(0, 8))
@@ -284,45 +420,58 @@ class StoryPromptPipelineApp:
         right_card = tk.Frame(middle, bg="#F7F2EA", highlightbackground="#D7CCBE", highlightthickness=1)
         right_card.pack(side="left", anchor="n", padx=(10, 0))
 
-        tk.Label(left_card, text="작업 범위", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 4))
+        tk.Label(left_card, text="쉬운 작업 설정", bg="#F7F2EA", fg="#6B6D63", font=("맑은 고딕", 9, "bold")).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 4))
         left_card.grid_columnconfigure(5, weight=1)
-        tk.Label(left_card, text="시작", bg="#F7F2EA", fg="#23302B").grid(row=1, column=0, sticky="w", padx=(12, 6), pady=4)
+        tk.Label(left_card, text="시작 장면", bg="#F7F2EA", fg="#23302B").grid(row=1, column=0, sticky="w", padx=(12, 6), pady=4)
         start_entry = tk.Entry(left_card, textvariable=self.var_start_scene, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         start_entry.grid(row=1, column=1, sticky="w", pady=4)
-        tk.Label(left_card, text="끝", bg="#F7F2EA", fg="#23302B").grid(row=1, column=2, sticky="w", padx=(14, 6), pady=4)
+        tk.Label(left_card, text="끝 장면", bg="#F7F2EA", fg="#23302B").grid(row=1, column=2, sticky="w", padx=(14, 6), pady=4)
         end_entry = tk.Entry(left_card, textvariable=self.var_end_scene, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         end_entry.grid(row=1, column=3, sticky="w", pady=4)
 
-        tk.Label(left_card, text="배치", bg="#F7F2EA", fg="#23302B").grid(row=2, column=0, sticky="w", padx=(12, 6), pady=4)
+        tk.Label(left_card, text="한번 크게 묶기", bg="#F7F2EA", fg="#23302B").grid(row=2, column=0, sticky="w", padx=(12, 6), pady=4)
         batch_entry = tk.Entry(left_card, textvariable=self.var_batch_size, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         batch_entry.grid(row=2, column=1, sticky="w", pady=4)
-        tk.Label(left_card, text="마이크로", bg="#F7F2EA", fg="#23302B").grid(row=2, column=2, sticky="w", padx=(14, 6), pady=4)
+        tk.Label(left_card, text="한번 보낼 장면 수", bg="#F7F2EA", fg="#23302B").grid(row=2, column=2, sticky="w", padx=(14, 6), pady=4)
         micro_entry = tk.Entry(left_card, textvariable=self.var_micro_batch_size, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         micro_entry.grid(row=2, column=3, sticky="w", pady=4)
 
-        tk.Label(left_card, text="입력후 대기", bg="#F7F2EA", fg="#23302B").grid(row=1, column=4, sticky="w", padx=(16, 6), pady=4)
+        tk.Label(left_card, text="창 뜬 뒤 기다림", bg="#F7F2EA", fg="#23302B").grid(row=1, column=4, sticky="w", padx=(16, 6), pady=4)
+        pre_input_entry = tk.Entry(left_card, textvariable=self.var_pre_input_delay_seconds, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
+        pre_input_entry.grid(row=1, column=5, sticky="w", pady=4)
+        tk.Label(left_card, text="보낸 뒤 첫 확인", bg="#F7F2EA", fg="#23302B").grid(row=2, column=4, sticky="w", padx=(16, 6), pady=4)
         send_wait_entry = tk.Entry(left_card, textvariable=self.var_send_wait_seconds, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         send_wait_entry.grid(row=1, column=5, sticky="w", pady=4)
-        tk.Label(left_card, text="확인 간격", bg="#F7F2EA", fg="#23302B").grid(row=2, column=4, sticky="w", padx=(16, 6), pady=4)
+        send_wait_entry.grid_configure(row=2, column=5)
+        tk.Label(left_card, text="몇 초마다 확인", bg="#F7F2EA", fg="#23302B").grid(row=3, column=4, sticky="w", padx=(16, 6), pady=4)
         poll_entry = tk.Entry(left_card, textvariable=self.var_poll_interval_seconds, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
-        poll_entry.grid(row=2, column=5, sticky="w", pady=4)
+        poll_entry.grid(row=3, column=5, sticky="w", pady=4)
 
-        tk.Label(left_card, text="안정 횟수", bg="#F7F2EA", fg="#23302B").grid(row=3, column=0, sticky="w", padx=(12, 6), pady=4)
+        tk.Label(left_card, text="같은 응답 확인", bg="#F7F2EA", fg="#23302B").grid(row=3, column=0, sticky="w", padx=(12, 6), pady=4)
         stable_entry = tk.Entry(left_card, textvariable=self.var_stable_rounds_required, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         stable_entry.grid(row=3, column=1, sticky="w", pady=4)
-        tk.Label(left_card, text="최대 대기", bg="#F7F2EA", fg="#23302B").grid(row=3, column=2, sticky="w", padx=(14, 6), pady=4)
+        tk.Label(left_card, text="최대 기다림", bg="#F7F2EA", fg="#23302B").grid(row=3, column=2, sticky="w", padx=(14, 6), pady=4)
         max_wait_entry = tk.Entry(left_card, textvariable=self.var_max_wait_seconds, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
         max_wait_entry.grid(row=3, column=3, sticky="w", pady=4)
-        tk.Label(left_card, text="타이핑 속도", bg="#F7F2EA", fg="#23302B").grid(row=3, column=4, sticky="w", padx=(16, 6), pady=4)
+        tk.Label(left_card, text="키보드 속도", bg="#F7F2EA", fg="#23302B").grid(row=4, column=4, sticky="w", padx=(16, 6), pady=4)
         typing_speed_entry = tk.Entry(left_card, textvariable=self.var_typing_speed_level, width=6, bg="#FFFFFF", fg="#111", insertbackground="#111", relief="flat")
-        typing_speed_entry.grid(row=3, column=5, sticky="w", pady=4)
+        typing_speed_entry.grid(row=4, column=5, sticky="w", pady=4)
 
-        for entry in (start_entry, end_entry, batch_entry, micro_entry, send_wait_entry, poll_entry, stable_entry, max_wait_entry, typing_speed_entry):
+        hint = tk.Label(
+            left_card,
+            text="예) 한번 보낼 장면 수 5 = S001~S005를 한 번에 Gemini에 보냅니다.",
+            bg="#F7F2EA",
+            fg="#7A746B",
+            font=("맑은 고딕", 8),
+        )
+        hint.grid(row=4, column=0, columnspan=4, sticky="w", padx=12, pady=(2, 2))
+
+        for entry in (start_entry, end_entry, batch_entry, micro_entry, pre_input_entry, send_wait_entry, poll_entry, stable_entry, max_wait_entry, typing_speed_entry):
             entry.bind("<FocusOut>", lambda _e: self._save_config())
 
         opt_wrap = tk.Frame(left_card, bg="#F7F2EA")
-        opt_wrap.grid(row=4, column=0, columnspan=6, sticky="ew", padx=12, pady=(6, 8))
-        self._make_toggle_button(opt_wrap, self.var_human_typing, "인간형 타이핑").pack(side="left")
+        opt_wrap.grid(row=5, column=0, columnspan=6, sticky="ew", padx=12, pady=(6, 8))
+        self._make_toggle_button(opt_wrap, self.var_human_typing, "키보드처럼 천천히 입력").pack(side="left")
         self._make_toggle_button(opt_wrap, self.var_reset_chat, "새 채팅").pack(side="left", padx=(10, 0))
         self._make_toggle_button(opt_wrap, self.var_open_notepad, "메모장 저장").pack(side="left", padx=(10, 0))
 
@@ -355,6 +504,7 @@ class StoryPromptPipelineApp:
         self.txt_log.insert("end", "스토리 자동화 준비 완료\n")
         self.txt_log.configure(state="disabled")
         self._refresh_compact_labels()
+        self._reset_hud()
 
     def log(self, text: str) -> None:
         if self.current_log_file is not None:
@@ -384,11 +534,13 @@ class StoryPromptPipelineApp:
             profile_dir=Path(self.cfg.browser_profile_dir),
             log=self.log,
             wait_timeout_ms=int(max(30.0, self.cfg.max_wait_seconds) * 1000),
+            pre_input_delay_seconds=self.cfg.pre_input_delay_seconds,
             send_wait_seconds=self.cfg.send_wait_seconds,
             poll_interval_seconds=self.cfg.poll_interval_seconds,
             stable_rounds_required=self.cfg.stable_rounds_required,
             human_typing_enabled=self.cfg.human_typing_enabled,
             typing_speed_level=self.cfg.typing_speed_level,
+            status_callback=self._queue_status,
         )
 
     def _on_root_configure(self, _event=None) -> None:
@@ -436,6 +588,7 @@ class StoryPromptPipelineApp:
         self.runner.start_url = self.cfg.gemini_url
         self.runner.profile_dir = Path(self.cfg.browser_profile_dir)
         self.runner.wait_timeout_ms = int(max(30.0, self.cfg.max_wait_seconds) * 1000)
+        self.runner.pre_input_delay_seconds = max(0.0, float(self.cfg.pre_input_delay_seconds))
         self.runner.send_wait_seconds = max(0.0, float(self.cfg.send_wait_seconds))
         self.runner.poll_interval_seconds = max(0.5, float(self.cfg.poll_interval_seconds))
         self.runner.stable_rounds_required = max(1, int(self.cfg.stable_rounds_required))
@@ -468,15 +621,25 @@ class StoryPromptPipelineApp:
         self.stop_event.clear()
         self._save_config()
         self._prepare_log_file("run")
+        self.run_started_at = time.time()
+        self._reset_hud()
+        self._queue_status(
+            {
+                "status": "시작 준비",
+                "detail": "브라우저와 작업 범위를 준비하는 중입니다.",
+                "current_step": "준비",
+            }
+        )
         self.log(f"🚀 자동화 시작 요청 | worker={self.instance_name}")
         self.log(f"🧭 브라우저 프로필: {self.cfg.browser_profile_dir}")
         self.log(
-            "⏱ 대기 설정 | 입력후 "
+            "⏱ 대기 설정 | 창 뜬 뒤 "
+            f"{self.cfg.pre_input_delay_seconds:.1f}초 | 보낸 뒤 첫 확인 "
             f"{self.cfg.send_wait_seconds:.1f}초 | 확인간격 {self.cfg.poll_interval_seconds:.1f}초 | "
-            f"안정 {self.cfg.stable_rounds_required}회 | 최대 {self.cfg.max_wait_seconds:.1f}초"
+            f"같은 응답 확인 {self.cfg.stable_rounds_required}회 | 최대 {self.cfg.max_wait_seconds:.1f}초"
         )
         self.log(
-            f"⌨️ 입력 설정 | 인간형 {'ON' if self.cfg.human_typing_enabled else 'OFF'} | 속도 x{self.cfg.typing_speed_level}"
+            f"⌨️ 입력 설정 | 키보드처럼 천천히 입력 {'ON' if self.cfg.human_typing_enabled else 'OFF'} | 속도 x{self.cfg.typing_speed_level}"
         )
         if self.preview_runner is not None:
             try:
@@ -491,13 +654,28 @@ class StoryPromptPipelineApp:
     def _run_pipeline_thread(self) -> None:
         runner = self._build_runner()
         try:
-            pipeline = StoryPipeline(cfg=self.cfg, runner=runner, log=self.log, stop_event=self.stop_event)
+            pipeline = StoryPipeline(
+                cfg=self.cfg,
+                runner=runner,
+                log=self.log,
+                stop_event=self.stop_event,
+                status_callback=self._queue_status,
+            )
             paths = pipeline.run()
             self.log(f"📁 세션 폴더: {paths.session_root}")
             self.log(f"📝 통합 누적 파일: {paths.final_live_txt}")
             self.log(f"🖼 이미지 전용 파일: {paths.final_image_txt}")
             self.log(f"🎬 비디오 전용 파일: {paths.final_video_txt}")
         except Exception as exc:
+            self._queue_status(
+                {
+                    "status": "실패",
+                    "detail": str(exc),
+                    "current_step": "오류",
+                    "countdown_label": "대기 없음",
+                    "countdown_remaining_seconds": 0.0,
+                }
+            )
             self.log(f"❌ 자동화 실패: {exc}")
             self.log(traceback.format_exc().strip())
         finally:
@@ -508,6 +686,15 @@ class StoryPromptPipelineApp:
 
     def on_stop(self) -> None:
         self.stop_event.set()
+        self._queue_status(
+            {
+                "status": "중지 요청",
+                "detail": "현재 작업이 안전하게 멈추기를 기다리는 중입니다.",
+                "current_step": "중지",
+                "countdown_label": "대기 없음",
+                "countdown_remaining_seconds": 0.0,
+            }
+        )
         self.log("⏹ 중지 요청을 보냈습니다.")
 
     def on_open_output_dir(self) -> None:

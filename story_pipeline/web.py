@@ -39,6 +39,8 @@ RESPONSE_SELECTORS = [
     'div.response-container',
 ]
 
+LONG_PROMPT_PASTE_THRESHOLD = 240
+
 
 class GeminiWebRunner:
     def __init__(
@@ -47,24 +49,59 @@ class GeminiWebRunner:
         profile_dir: Path,
         log: Callable[[str], None],
         wait_timeout_ms: int = 300000,
+        pre_input_delay_seconds: float = 4.0,
         send_wait_seconds: float = 2.0,
         poll_interval_seconds: float = 2.0,
         stable_rounds_required: int = 2,
         human_typing_enabled: bool = True,
         typing_speed_level: int = 5,
+        status_callback: Optional[Callable[[dict], None]] = None,
     ):
         self.start_url = start_url
         self.profile_dir = profile_dir
         self.log = log
         self.wait_timeout_ms = wait_timeout_ms
+        self.pre_input_delay_seconds = max(0.0, float(pre_input_delay_seconds))
         self.send_wait_seconds = max(0.0, float(send_wait_seconds))
         self.poll_interval_seconds = max(0.5, float(poll_interval_seconds))
         self.stable_rounds_required = max(1, int(stable_rounds_required))
         self.human_typing_enabled = bool(human_typing_enabled)
         self.typing_speed_level = max(1, min(20, int(typing_speed_level)))
+        self.status_callback = status_callback
         self.playwright = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
+
+    def _status(self, **payload) -> None:
+        if self.status_callback is None:
+            return
+        try:
+            self.status_callback(payload)
+        except Exception:
+            pass
+
+    def _wait_with_countdown(self, seconds: float, label: str, step_label: str = "") -> None:
+        total_seconds = max(0.0, float(seconds))
+        if total_seconds <= 0:
+            self._status(
+                countdown_label="대기 없음",
+                countdown_remaining_seconds=0.0,
+                countdown_total_seconds=0.0,
+                countdown_step=step_label,
+            )
+            return
+        end_at = time.time() + total_seconds
+        while True:
+            remaining = max(0.0, end_at - time.time())
+            self._status(
+                countdown_label=label,
+                countdown_remaining_seconds=remaining,
+                countdown_total_seconds=total_seconds,
+                countdown_step=step_label,
+            )
+            if remaining <= 0:
+                break
+            time.sleep(min(0.2, remaining))
 
     def open_browser(self) -> None:
         if self.page and not self.page.is_closed():
@@ -208,7 +245,8 @@ class GeminiWebRunner:
         except Exception:
             tag_name = ""
         editor.click()
-        if self.human_typing_enabled:
+        use_human_typing = self.human_typing_enabled and len(str(text or "")) < LONG_PROMPT_PASTE_THRESHOLD
+        if use_human_typing:
             try:
                 if tag_name == "textarea":
                     editor.fill("")
@@ -225,6 +263,10 @@ class GeminiWebRunner:
             self.log(f"⌨️ 사람형 타이핑 입력 | 속도 x{self.typing_speed_level}")
             self._human_type_text(editor, text, tag_name)
             return
+        if self.human_typing_enabled:
+            self.log("📋 긴 프롬프트라 전체 붙여넣기 입력으로 전환")
+        else:
+            self.log("📋 전체 붙여넣기 입력")
         if tag_name == "textarea":
             editor.fill(text)
             return
@@ -266,24 +308,50 @@ class GeminiWebRunner:
 
         baseline = self._latest_response_text()
         self.log(f"📨 Gemini 전송 시작 | {step_label or '-'}")
+        if self.pre_input_delay_seconds > 0:
+            self.log(f"🕒 창 안정화 대기 | 입력 전 {self.pre_input_delay_seconds:.1f}초 | {step_label or '-'}")
+        self._status(
+            status="입력 준비",
+            detail=f"{step_label or '-'} 입력창 안정화 대기",
+            current_step="입력 준비",
+        )
+        self._wait_with_countdown(self.pre_input_delay_seconds, "입력 시작까지", step_label=step_label)
         self._set_editor_text(prompt)
+        time.sleep(0.15)
         self._submit()
         self.log(
-            "⏱ 응답 대기 설정 | 입력후 "
+            "⏱ 응답 대기 설정 | 보낸 뒤 첫 확인 "
             f"{self.send_wait_seconds:.1f}초 | 확인간격 {self.poll_interval_seconds:.1f}초 | "
-            f"안정 {self.stable_rounds_required}회 | 최대 {self.wait_timeout_ms / 1000.0:.1f}초"
+            f"같은 응답 확인 {self.stable_rounds_required}회 | 최대 {self.wait_timeout_ms / 1000.0:.1f}초"
         )
-        result = self._wait_for_new_response(baseline)
+        result = self._wait_for_new_response(baseline, step_label=step_label)
         self.log(f"📥 Gemini 응답 확보 | {step_label or '-'}")
+        self._status(
+            countdown_label="응답 확보",
+            countdown_remaining_seconds=0.0,
+            countdown_total_seconds=0.0,
+            countdown_step=step_label,
+        )
         return result
 
-    def _wait_for_new_response(self, baseline: str) -> str:
+    def _wait_for_new_response(self, baseline: str, step_label: str = "") -> str:
         deadline = time.time() + (self.wait_timeout_ms / 1000.0)
-        if self.send_wait_seconds > 0:
-            time.sleep(self.send_wait_seconds)
+        self._status(
+            status="응답 대기",
+            detail=f"{step_label or '-'} 응답 확인 중",
+            current_step="응답 대기",
+        )
+        self._wait_with_countdown(self.send_wait_seconds, "응답 확인 시작까지", step_label=step_label)
         stable_count = 0
         last_text = ""
         while time.time() < deadline:
+            remaining = max(0.0, deadline - time.time())
+            self._status(
+                countdown_label="응답 완료 대기",
+                countdown_remaining_seconds=remaining,
+                countdown_total_seconds=self.wait_timeout_ms / 1000.0,
+                countdown_step=step_label,
+            )
             current = self._latest_response_text()
             if current and current != baseline:
                 if current == last_text:
