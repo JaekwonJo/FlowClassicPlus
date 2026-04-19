@@ -620,6 +620,11 @@ class PromptValidator:
         "위반 사항이 모두 완벽히 클리어",
         "모든 규칙이 완벽하게 적용되어",
         "현재 모든 프롬프트가 규칙을 완벽히 충족",
+        "추가적인 수정 및 재출력이 필요하지 않습니다",
+        "중복된 재작성 렌더링은 생략",
+        "이미 완벽하게 수행 및 검증을 마친 상태",
+        "다음 대본",
+        "최종 검수 완료",
     )
 
     def parse_blocks(self, text: str) -> List[PromptBlock]:
@@ -664,6 +669,16 @@ class PromptValidator:
         lowered = raw.lower()
         return any(hint in lowered for hint in self.NO_CHANGE_HINTS)
 
+    def _video_optional_numbers(self, blocks: Sequence[PromptBlock]) -> set[int]:
+        optional_numbers: set[int] = set()
+        for block in blocks:
+            if block.prompt_type != "image":
+                continue
+            body = block.body or ""
+            if re.search(r"@S[78]\d{2}", body, re.IGNORECASE):
+                optional_numbers.update(block.numbers or [block.start_number])
+        return optional_numbers
+
     def validate(self, text: str, expected_scenes: Sequence[Scene]) -> ValidationResult:
         errors: List[str] = []
         blocks = self.parse_blocks(text)
@@ -684,11 +699,12 @@ class PromptValidator:
         coverage: Dict[str, set[int]] = {"image": set(), "video": set()}
         for block in blocks:
             coverage.setdefault(block.prompt_type, set()).update(block.numbers or [block.start_number])
+        optional_video_numbers = self._video_optional_numbers(blocks)
 
         for number in expected_numbers:
             if number not in coverage.get("image", set()):
                 errors.append(f"S{number:03d} 이미지 프롬프트가 없습니다.")
-            if number not in coverage.get("video", set()):
+            if number not in coverage.get("video", set()) and number not in optional_video_numbers:
                 errors.append(f"S{number:03d} 비디오 프롬프트가 없습니다.")
 
         allowed_numbers = set(expected_numbers)
