@@ -8,45 +8,18 @@ from typing import Callable, List, Optional
 from playwright.sync_api import BrowserContext, Page, TimeoutError, sync_playwright
 
 
-INPUT_SELECTORS = [
-    'rich-textarea div[contenteditable="true"]',
-    'div[contenteditable="true"][aria-label*="메시지"]',
-    'div[contenteditable="true"][aria-label*="Message"]',
-    'textarea[aria-label*="메시지"]',
-    'textarea[aria-label*="message"]',
-    'div[contenteditable="true"]',
-]
+DEFAULT_SITE_TARGET = "gemini"
+SITE_DEFAULT_URLS = {
+    "gemini": "https://gemini.google.com/app",
+    "chatgpt": "https://chatgpt.com/",
+}
+SITE_LABELS = {
+    "gemini": "Gemini",
+    "chatgpt": "ChatGPT",
+}
 
-SEND_SELECTORS = [
-    'button[aria-label*="전송"]',
-    'button[aria-label*="Send"]',
-    'button[aria-label*="메시지 보내기"]',
-    'button[aria-label*="Submit"]',
-]
 
-STOP_SELECTORS = [
-    'button[aria-label*="중지"]',
-    'button[aria-label*="Stop"]',
-    'button[aria-label*="답변 중지"]',
-    'button[aria-label*="생성 중지"]',
-]
-
-NEW_CHAT_SELECTORS = [
-    'button[aria-label*="새 채팅"]',
-    'button[aria-label*="New chat"]',
-    'a[aria-label*="새 채팅"]',
-    'a[aria-label*="New chat"]',
-]
-
-RESPONSE_SELECTORS = [
-    "model-response",
-    "message-content",
-    '[data-message-author-role="model"]',
-    '[data-test-id="model-response"]',
-    'div.response-container',
-]
-
-RESPONSE_IGNORE_SNIPPETS = (
+COMMON_RESPONSE_IGNORE_SNIPPETS = (
     "사용자설정 gem",
     "지금 답변하기",
     "generating visuals",
@@ -67,10 +40,81 @@ RESPONSE_VALID_HINTS = (
 
 LONG_PROMPT_PASTE_THRESHOLD = 240
 
+SITE_PROFILES = {
+    "gemini": {
+        "input_selectors": [
+            'rich-textarea div[contenteditable="true"]',
+            'div[contenteditable="true"][aria-label*="메시지"]',
+            'div[contenteditable="true"][aria-label*="Message"]',
+            'textarea[aria-label*="메시지"]',
+            'textarea[aria-label*="message"]',
+            'div[contenteditable="true"]',
+        ],
+        "send_selectors": [
+            'button[aria-label*="전송"]',
+            'button[aria-label*="Send"]',
+            'button[aria-label*="메시지 보내기"]',
+            'button[aria-label*="Submit"]',
+        ],
+        "stop_selectors": [
+            'button[aria-label*="중지"]',
+            'button[aria-label*="Stop"]',
+            'button[aria-label*="답변 중지"]',
+            'button[aria-label*="생성 중지"]',
+        ],
+        "response_selectors": [
+            "model-response",
+            "message-content",
+            '[data-message-author-role="model"]',
+            '[data-test-id="model-response"]',
+            'div.response-container',
+        ],
+        "response_ignore_snippets": COMMON_RESPONSE_IGNORE_SNIPPETS,
+    },
+    "chatgpt": {
+        "input_selectors": [
+            '#prompt-textarea',
+            'div#prompt-textarea[contenteditable="true"]',
+            'textarea[placeholder*="Message"]',
+            'textarea[placeholder*="메시지"]',
+            'div[contenteditable="true"][aria-label*="메시지"]',
+            'div[contenteditable="true"][aria-label*="Message"]',
+            'div[contenteditable="true"]',
+        ],
+        "send_selectors": [
+            'button[data-testid="send-button"]',
+            'button[aria-label*="Send prompt"]',
+            'button[aria-label*="전송"]',
+            'button[aria-label*="Send"]',
+        ],
+        "stop_selectors": [
+            'button[data-testid="stop-button"]',
+            'button[aria-label*="Stop generating"]',
+            'button[aria-label*="중지"]',
+            'button[aria-label*="생성 중지"]',
+        ],
+        "response_selectors": [
+            '[data-message-author-role="assistant"]',
+            'article [data-message-author-role="assistant"]',
+            'div[data-message-author-role="assistant"]',
+            'main article',
+        ],
+        "response_ignore_snippets": COMMON_RESPONSE_IGNORE_SNIPPETS
+        + (
+            "thinking",
+            "tools",
+            "무엇이든 물어보세요",
+            "what can i help with",
+            "searching the web",
+        ),
+    },
+}
+
 
 class GeminiWebRunner:
     def __init__(
         self,
+        site_target: str,
         start_url: str,
         profile_dir: Path,
         log: Callable[[str], None],
@@ -83,6 +127,7 @@ class GeminiWebRunner:
         typing_speed_level: int = 5,
         status_callback: Optional[Callable[[dict], None]] = None,
     ):
+        self.site_target = site_target if site_target in SITE_PROFILES else DEFAULT_SITE_TARGET
         self.start_url = start_url
         self.profile_dir = profile_dir
         self.log = log
@@ -97,6 +142,12 @@ class GeminiWebRunner:
         self.playwright = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
+
+    def _site_profile(self) -> dict:
+        return SITE_PROFILES.get(self.site_target, SITE_PROFILES[DEFAULT_SITE_TARGET])
+
+    def _site_label(self) -> str:
+        return SITE_LABELS.get(self.site_target, self.site_target.title())
 
     def _status(self, **payload) -> None:
         if self.status_callback is None:
@@ -147,7 +198,7 @@ class GeminiWebRunner:
         self.page = pages[0] if pages else self.context.new_page()
         self.page.goto(self.start_url, wait_until="domcontentloaded")
         self.wait_for_input_ready()
-        self.log("🌐 Gemini 웹 브라우저 준비 완료")
+        self.log(f"🌐 {self._site_label()} 웹 브라우저 준비 완료")
 
     def close(self) -> None:
         try:
@@ -163,7 +214,7 @@ class GeminiWebRunner:
     def reset_conversation(self) -> None:
         self.open_browser()
         assert self.page is not None
-        self.log("🧭 Gem URL로 다시 이동해 초기 채팅 상태를 맞춥니다.")
+        self.log("🧭 대상 URL로 다시 이동해 초기 채팅 상태를 맞춥니다.")
         self.page.goto(self.start_url, wait_until="domcontentloaded")
         self.wait_for_input_ready()
 
@@ -175,11 +226,11 @@ class GeminiWebRunner:
             if editor is not None:
                 return
             time.sleep(1.0)
-        raise RuntimeError("Gemini 입력창을 찾지 못했습니다. 로그인 여부와 Gem URL을 확인해 주세요.")
+        raise RuntimeError(f"{self._site_label()} 입력창을 찾지 못했습니다. 로그인 여부와 대상 URL을 확인해 주세요.")
 
     def _find_editor(self, timeout_ms: int = 2000):
         assert self.page is not None
-        for selector in INPUT_SELECTORS:
+        for selector in self._site_profile().get("input_selectors", []):
             try:
                 loc = self.page.locator(selector).first
                 if loc.count() and loc.is_visible(timeout=timeout_ms):
@@ -213,7 +264,7 @@ class GeminiWebRunner:
           }
           return out;
         }
-        """ % (repr(RESPONSE_SELECTORS))
+        """ % (repr(self._site_profile().get("response_selectors", [])))
         try:
             entries = self.page.evaluate(script)
             normalized = []
@@ -222,7 +273,8 @@ class GeminiWebRunner:
                 if not text:
                     continue
                 lowered = text.lower()
-                if any(snippet in lowered for snippet in RESPONSE_IGNORE_SNIPPETS) and not any(
+                ignore_snippets = self._site_profile().get("response_ignore_snippets", COMMON_RESPONSE_IGNORE_SNIPPETS)
+                if any(snippet in lowered for snippet in ignore_snippets) and not any(
                     hint in lowered for hint in RESPONSE_VALID_HINTS
                 ):
                     continue
@@ -289,7 +341,7 @@ class GeminiWebRunner:
         assert self.page is not None
         editor = self._find_editor(timeout_ms=3000)
         if editor is None:
-            raise RuntimeError("Gemini 입력창을 찾지 못했습니다.")
+            raise RuntimeError(f"{self._site_label()} 입력창을 찾지 못했습니다.")
         try:
             tag_name = (editor.evaluate("(el) => el.tagName") or "").lower()
         except Exception:
@@ -337,7 +389,7 @@ class GeminiWebRunner:
 
     def _submit(self) -> None:
         assert self.page is not None
-        for selector in SEND_SELECTORS:
+        for selector in self._site_profile().get("send_selectors", []):
             try:
                 loc = self.page.locator(selector).first
                 if loc.count() and loc.is_enabled(timeout=1200):
@@ -365,9 +417,9 @@ class GeminiWebRunner:
         return False
 
     def _composer_is_ready_for_next_prompt(self) -> bool:
-        if self._has_visible_button(STOP_SELECTORS):
+        if self._has_visible_button(self._site_profile().get("stop_selectors", [])):
             return False
-        return self._has_visible_button(SEND_SELECTORS)
+        return self._has_visible_button(self._site_profile().get("send_selectors", []))
 
     def send_prompt(self, prompt: str, step_label: str = "") -> str:
         self.open_browser()
@@ -376,7 +428,7 @@ class GeminiWebRunner:
         self.wait_for_input_ready()
 
         baseline = self._latest_response_text()
-        self.log(f"📨 Gemini 전송 시작 | {step_label or '-'}")
+        self.log(f"📨 {self._site_label()} 전송 시작 | {step_label or '-'}")
         if self.pre_input_delay_seconds > 0:
             self.log(f"🕒 창 안정화 대기 | 입력 전 {self.pre_input_delay_seconds:.1f}초 | {step_label or '-'}")
         self._status(
@@ -394,7 +446,7 @@ class GeminiWebRunner:
             f"같은 응답 확인 {self.stable_rounds_required}회 | 최대 {self.wait_timeout_ms / 1000.0:.1f}초"
         )
         result = self._wait_for_new_response(baseline, step_label=step_label)
-        self.log(f"📥 Gemini 응답 확보 | {step_label or '-'}")
+        self.log(f"📥 {self._site_label()} 응답 확보 | {step_label or '-'}")
         self._status(
             countdown_label="응답 확보",
             countdown_remaining_seconds=0.0,
@@ -432,13 +484,13 @@ class GeminiWebRunner:
                 followup = self._latest_response_text()
                 if followup and followup != baseline and self._composer_is_ready_for_next_prompt():
                     return followup
-            if current and current != baseline and not self._has_visible_button(STOP_SELECTORS):
+            if current and current != baseline and not self._has_visible_button(self._site_profile().get("stop_selectors", [])):
                 if not stop_gone_logged:
                     self.log(f"⏭ 네모 버튼 종료 확인 | {step_label or '-'}")
                     stop_gone_logged = True
                 time.sleep(min(0.35, max(0.15, self.poll_interval_seconds / 2.0)))
                 followup = self._latest_response_text()
-                if followup and followup != baseline and not self._has_visible_button(STOP_SELECTORS):
+                if followup and followup != baseline and not self._has_visible_button(self._site_profile().get("stop_selectors", [])):
                     return followup
             if current and current != baseline:
                 if current == last_text:
@@ -449,4 +501,4 @@ class GeminiWebRunner:
                 if stable_count >= self.stable_rounds_required:
                     return current
             time.sleep(self.poll_interval_seconds)
-        raise RuntimeError("Gemini 응답 대기 시간이 초과되었습니다.")
+        raise RuntimeError(f"{self._site_label()} 응답 대기 시간이 초과되었습니다.")

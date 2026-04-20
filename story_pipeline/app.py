@@ -18,7 +18,7 @@ from tkinter.scrolledtext import ScrolledText
 from .core import DEFAULT_LIBRARY_PATH, DEFAULT_MANUAL_PATH, DEFAULT_SCENE_PATH, DEFAULT_STEP_MACRO_PATH
 from .core import LiveOutputWriter, PipelineConfig, StoryPipeline
 from .core import SCENE_LINE_RE, resolve_local_path
-from .web import GeminiWebRunner
+from .web import DEFAULT_SITE_TARGET, GeminiWebRunner, SITE_DEFAULT_URLS, SITE_LABELS
 
 
 def sanitize_instance_name(raw: str) -> str:
@@ -114,7 +114,18 @@ class StoryPromptPipelineApp:
         return Path("runtime") / f"story_prompt_pipeline_config_{self.instance_name}.json"
 
     def _default_browser_profile_dir(self) -> str:
-        return f"runtime/ttz_gemini_profile_pw_{self.instance_name}"
+        site_target = getattr(getattr(self, "cfg", None), "site_target", DEFAULT_SITE_TARGET)
+        return self._default_browser_profile_dir_for(site_target)
+
+    def _default_browser_profile_dir_for(self, site_target: str) -> str:
+        safe_site = site_target if site_target in SITE_DEFAULT_URLS else DEFAULT_SITE_TARGET
+        return f"runtime/ttz_{safe_site}_profile_pw_{self.instance_name}"
+
+    def _default_site_url(self, site_target: str) -> str:
+        return SITE_DEFAULT_URLS.get(site_target, SITE_DEFAULT_URLS[DEFAULT_SITE_TARGET])
+
+    def _site_label(self, site_target: str) -> str:
+        return SITE_LABELS.get(site_target, site_target.title())
 
     def _instance_folder_name(self) -> str:
         digits = "".join(ch for ch in self.instance_name if ch.isdigit())
@@ -126,6 +137,8 @@ class StoryPromptPipelineApp:
     def _legacy_browser_profile_dirs(self) -> list[str]:
         return [
             f"runtime/story_gemini_profile_pw_{self.instance_name}",
+            f"runtime/ttz_gemini_profile_pw_{self.instance_name}",
+            f"runtime/ttz_chatgpt_profile_pw_{self.instance_name}",
         ]
 
     def _legacy_output_roots(self) -> list[str]:
@@ -227,13 +240,14 @@ class StoryPromptPipelineApp:
         self.cfg.display_name = str(getattr(self, "var_display_name", tk.StringVar(value=self.cfg.display_name)).get()).strip()
         self.cfg.window_geometry = self.root.geometry()
         self.cfg.log_visible = bool(self.log_visible)
+        self.cfg.site_target = self.var_site_target.get().strip() or DEFAULT_SITE_TARGET
         self.cfg.pipeline_mode = self.var_pipeline_mode.get().strip() or "manual_style"
         self.cfg.manual_path = self.var_manual_path.get().strip() or str(DEFAULT_MANUAL_PATH)
         self.cfg.step_macro_path = self.var_step_macro_path.get().strip() or str(DEFAULT_STEP_MACRO_PATH)
         self.cfg.library_path = self.var_library_path.get().strip() or str(DEFAULT_LIBRARY_PATH)
         self.cfg.scene_file_path = self.var_scene_file_path.get().strip() or str(DEFAULT_SCENE_PATH)
-        self.cfg.gemini_url = self.var_gemini_url.get().strip() or "https://gemini.google.com/app"
-        self.cfg.browser_profile_dir = self.var_browser_profile_dir.get().strip() or self._default_browser_profile_dir()
+        self.cfg.gemini_url = self.var_gemini_url.get().strip() or self._default_site_url(self.cfg.site_target)
+        self.cfg.browser_profile_dir = self.var_browser_profile_dir.get().strip() or self._default_browser_profile_dir_for(self.cfg.site_target)
         self.cfg.output_root = self.var_output_root.get().strip() or self._default_output_root()
         self.cfg.start_scene = int(self.var_start_scene.get() or 1)
         self.cfg.end_scene = int(self.var_end_scene.get() or self.cfg.start_scene)
@@ -272,12 +286,26 @@ class StoryPromptPipelineApp:
 
     def _edit_url(self) -> None:
         current = self.var_gemini_url.get().strip()
-        value = simpledialog.askstring("Gem URL", "실제 Gem 채팅 URL을 넣어주세요.", initialvalue=current, parent=self.root)
+        value = simpledialog.askstring("대상 사이트 URL", "실제 대상 사이트 채팅 URL을 넣어주세요.", initialvalue=current, parent=self.root)
         if value:
             self.var_gemini_url.set(value.strip())
             self._save_config()
             self._refresh_compact_labels()
-            self.log(f"🔗 Gem URL 변경됨 | {self._short_text(value.strip(), mode='url')}")
+            self.log(f"🔗 사이트 URL 변경됨 | {self._short_text(value.strip(), mode='url')}")
+
+    def _on_site_target_change(self, *_args) -> None:
+        site_target = self.var_site_target.get().strip() or DEFAULT_SITE_TARGET
+        current_url = self.var_gemini_url.get().strip()
+        known_urls = {self._default_site_url(name) for name in SITE_DEFAULT_URLS}
+        if not current_url or current_url in known_urls:
+            self.var_gemini_url.set(self._default_site_url(site_target))
+        current_profile = self.var_browser_profile_dir.get().strip()
+        known_profiles = {self._default_browser_profile_dir_for(name) for name in SITE_DEFAULT_URLS}
+        if not current_profile or current_profile in known_profiles:
+            self.var_browser_profile_dir.set(self._default_browser_profile_dir_for(site_target))
+        self._save_config()
+        self._refresh_compact_labels()
+        self.log(f"🌐 대상 사이트 변경 | {self._site_label(site_target)}")
 
     def _edit_display_name(self) -> None:
         current = self.var_display_name.get().strip()
@@ -421,6 +449,7 @@ class StoryPromptPipelineApp:
             "",
             f"- 작업 이름: {self._display_name_text()}",
             f"- 워커: {self.instance_name}",
+            f"- 대상 사이트: {self._site_label(self.var_site_target.get().strip() or DEFAULT_SITE_TARGET)}",
             f"- 장면 파일: {self._short_text(self.var_scene_file_path.get())}",
             f"- 저장 폴더: {self.var_output_root.get().strip() or self._default_output_root()}",
             f"- 실행 범위: {self.var_scene_run_summary.get().replace('이번 실행: ', '')}",
@@ -452,7 +481,10 @@ class StoryPromptPipelineApp:
             self.lbl_instance_info.config(text=f"설정 번호: {self.instance_name}")
         if hasattr(self, "lbl_profile_info"):
             self.lbl_profile_info.config(
-                text=f"브라우저 프로필: {self._short_text(self.var_browser_profile_dir.get())}"
+                text=(
+                    f"대상 사이트: {self._site_label(self.var_site_target.get().strip() or DEFAULT_SITE_TARGET)}    "
+                    f"브라우저 프로필: {self._short_text(self.var_browser_profile_dir.get())}"
+                )
             )
         if hasattr(self, "btn_open_output_dir"):
             self.btn_open_output_dir.config(text="저장 위치")
@@ -666,6 +698,7 @@ class StoryPromptPipelineApp:
         outer.pack(fill="both", expand=True, padx=12, pady=12)
 
         self.var_display_name = tk.StringVar(value=self.cfg.display_name)
+        self.var_site_target = tk.StringVar(value=getattr(self.cfg, "site_target", DEFAULT_SITE_TARGET))
         self.var_manual_path = tk.StringVar(value=self.cfg.manual_path)
         self.var_step_macro_path = tk.StringVar(value=self.cfg.step_macro_path)
         self.var_library_path = tk.StringVar(value=self.cfg.library_path)
@@ -690,6 +723,7 @@ class StoryPromptPipelineApp:
         self.var_reset_chat = tk.BooleanVar(value=self.cfg.reset_chat_each_batch)
         self.var_open_notepad = tk.BooleanVar(value=self.cfg.open_notepad_live)
         self.var_manual_baked = tk.BooleanVar(value=self.cfg.manual_is_baked_into_gem)
+        self.var_site_target.trace_add("write", self._on_site_target_change)
         self.var_hud_status = tk.StringVar()
         self.var_hud_detail = tk.StringVar()
         self.var_hud_step = tk.StringVar()
@@ -749,12 +783,28 @@ class StoryPromptPipelineApp:
         tool_card = tk.Frame(outer, bg=panel_bg, highlightbackground=card_border, highlightthickness=1)
         tool_card.pack(fill="x", pady=(0, 8))
         tk.Label(tool_card, text="빠른 설정", bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 9, "bold")).pack(anchor="w", padx=12, pady=(8, 6))
+        site_row = tk.Frame(tool_card, bg=panel_bg)
+        site_row.pack(fill="x", padx=12, pady=(0, 6))
+        tk.Label(site_row, text="대상 사이트", bg=panel_bg, fg="#6B6D63", font=("맑은 고딕", 8, "bold")).pack(side="left")
+        for site_key in ("gemini", "chatgpt"):
+            tk.Radiobutton(
+                site_row,
+                text=self._site_label(site_key),
+                value=site_key,
+                variable=self.var_site_target,
+                bg=panel_bg,
+                fg="#23302B",
+                selectcolor=panel_bg,
+                activebackground=panel_bg,
+                activeforeground="#23302B",
+                font=("맑은 고딕", 9, "bold"),
+            ).pack(side="left", padx=(10, 0))
         tool_buttons = tk.Frame(tool_card, bg=panel_bg)
         tool_buttons.pack(fill="x", padx=10, pady=(0, 10))
         tool_btn_opts = {"relief": "flat", "font": ("맑은 고딕", 9, "bold"), "padx": 10, "pady": 8, "cursor": "hand2", "bg": "#EFE8DD", "fg": "#31423D"}
         tk.Button(tool_buttons, text="Step 파일", command=lambda: self._browse_file(self.var_step_macro_path, "Step 규칙 파일 선택"), **tool_btn_opts).pack(side="left", padx=(0, 6))
         tk.Button(tool_buttons, text="장면 파일", command=lambda: self._browse_file(self.var_scene_file_path, "장면 파일 선택"), **tool_btn_opts).pack(side="left", padx=6)
-        tk.Button(tool_buttons, text="Gem URL", command=self._edit_url, **tool_btn_opts).pack(side="left", padx=6)
+        tk.Button(tool_buttons, text="사이트 URL", command=self._edit_url, **tool_btn_opts).pack(side="left", padx=6)
         self.btn_open_output_dir = tk.Button(tool_buttons, text="저장 위치", command=lambda: self._browse_dir(self.var_output_root, "결과 저장 폴더 선택"), **tool_btn_opts)
         self.btn_open_output_dir.pack(side="left", padx=6)
         summary_row = tk.Frame(tool_card, bg=panel_bg)
@@ -918,6 +968,7 @@ class StoryPromptPipelineApp:
     def _build_runner(self) -> GeminiWebRunner:
         self._save_config()
         return GeminiWebRunner(
+            site_target=self.cfg.site_target,
             start_url=self.cfg.gemini_url,
             profile_dir=Path(self.cfg.browser_profile_dir),
             log=self.log,
@@ -987,6 +1038,7 @@ class StoryPromptPipelineApp:
         if self.runner is None:
             self.runner = self._build_runner()
             return
+        self.runner.site_target = self.cfg.site_target
         self.runner.start_url = self.cfg.gemini_url
         self.runner.profile_dir = Path(self.cfg.browser_profile_dir)
         self.runner.wait_timeout_ms = int(max(30.0, self.cfg.max_wait_seconds) * 1000)
@@ -1010,15 +1062,17 @@ class StoryPromptPipelineApp:
             if self.preview_runner is None:
                 self.preview_runner = self._build_runner()
             else:
+                self.preview_runner.site_target = self.cfg.site_target
                 self.preview_runner.start_url = self.cfg.gemini_url
                 self.preview_runner.profile_dir = Path(self.cfg.browser_profile_dir)
             self.log(f"🪟 워커: {self._display_name_text()} ({self.instance_name})")
+            self.log(f"🌐 대상 사이트: {self._site_label(self.cfg.site_target)}")
             self.log(f"🧭 브라우저 프로필: {self.cfg.browser_profile_dir}")
             self.log("🌐 브라우저 여는 중... 워커 창은 그대로 사용하셔도 됩니다.")
             self._queue_status(
                 {
                     "status": "브라우저 준비 중",
-                    "detail": "Gemini 창을 여는 중입니다. 잠시만 기다려주세요.",
+                    "detail": f"{self._site_label(self.cfg.site_target)} 창을 여는 중입니다. 잠시만 기다려주세요.",
                     "current_step": "브라우저",
                 }
             )
@@ -1036,7 +1090,7 @@ class StoryPromptPipelineApp:
             self._queue_status(
                 {
                     "status": "브라우저 준비 완료",
-                    "detail": "Gemini 창이 열렸습니다.",
+                    "detail": f"{self._site_label(self.cfg.site_target)} 창이 열렸습니다.",
                     "current_step": "브라우저",
                 }
             )
@@ -1070,6 +1124,7 @@ class StoryPromptPipelineApp:
             }
         )
         self.log(f"🚀 자동화 시작 요청 | worker={self._display_name_text()} ({self.instance_name})")
+        self.log(f"🌐 대상 사이트: {self._site_label(self.cfg.site_target)}")
         self.log(f"🧭 브라우저 프로필: {self.cfg.browser_profile_dir}")
         self.log(
             "⏱ 대기 설정 | 창 뜬 뒤 "
