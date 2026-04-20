@@ -104,8 +104,8 @@ class PromptBlock:
     prompt_type: str
 
     @property
-    def key(self) -> Tuple[int, str]:
-        return (self.start_number, self.prompt_type)
+    def key(self) -> Tuple[Tuple[int, ...], str]:
+        return (tuple(self.numbers or [self.start_number]), self.prompt_type)
 
     def render(self) -> str:
         return f"{self.header} Prompt : {self.body.strip()} |||"
@@ -686,15 +686,17 @@ class PromptValidator:
             return ValidationResult(ok=False, errors=["프롬프트 블록을 하나도 찾지 못했습니다."], blocks=[])
 
         expected_numbers = [scene.number for scene in expected_scenes]
-        grouped: Dict[Tuple[int, str], PromptBlock] = {}
-        duplicate_keys: List[Tuple[int, str]] = []
+        grouped: Dict[Tuple[Tuple[int, ...], str], PromptBlock] = {}
+        duplicate_keys: List[Tuple[Tuple[int, ...], str]] = []
         for block in blocks:
             if block.key in grouped:
                 duplicate_keys.append(block.key)
             grouped[block.key] = block
 
         for key in duplicate_keys:
-            errors.append(f"S{key[0]:03d} {key[1]} 프롬프트가 중복되었습니다.")
+            numbers, prompt_type = key
+            head = ">".join(f"S{number:03d}" for number in numbers)
+            errors.append(f"{head} {prompt_type} 프롬프트가 중복되었습니다.")
 
         coverage: Dict[str, set[int]] = {"image": set(), "video": set()}
         for block in blocks:
@@ -716,8 +718,6 @@ class PromptValidator:
             rendered = block.render()
             if "|||" not in rendered:
                 errors.append(f"{block.header} 종료 구분자 `|||` 가 없습니다.")
-            if block.prompt_type == "image" and "@S" not in block.body:
-                errors.append(f"{block.header} 이미지 프롬프트에 캐릭터 태그가 보이지 않습니다.")
 
         return ValidationResult(ok=not errors, errors=errors, blocks=blocks)
 
