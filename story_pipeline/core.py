@@ -1029,10 +1029,17 @@ class StoryPipeline:
                             if self.validator.is_no_change_response(retry_text):
                                 self.log(f"✅ Step7 재검수 응답: 추가 수정 없음 | {micro_label}")
                                 break
-                            final_candidate = self.validator.extract_final_prompt_text(retry_text)
-                            final_validation = self.validator.validate(final_candidate, micro_scenes)
-                            if not final_validation.ok:
-                                merged_candidate = self.validator.merge_partial_with_draft(final_validation, draft_validation, micro_scenes)
+                            retry_candidate = self.validator.extract_final_prompt_text(retry_text)
+                            retry_validation = self.validator.validate(retry_candidate, micro_scenes)
+                            if retry_validation.ok:
+                                final_candidate = retry_candidate
+                                final_validation = retry_validation
+                            else:
+                                merged_candidate = self.validator.merge_partial_with_draft(
+                                    retry_validation,
+                                    final_validation,
+                                    micro_scenes,
+                                )
                                 merged_validation = self.validator.validate(merged_candidate, micro_scenes)
                                 if merged_validation.ok or len(merged_validation.errors) < len(final_validation.errors):
                                     final_candidate = merged_candidate
