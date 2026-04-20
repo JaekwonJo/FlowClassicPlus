@@ -626,6 +626,13 @@ class PromptValidator:
         "다음 대본",
         "최종 검수 완료",
     )
+    STEP_ACK_HINTS = (
+        "ready.",
+        "ready",
+        "준비 완료",
+        "준비됐습니다",
+        "준비되었습니다",
+    )
 
     def parse_blocks(self, text: str) -> List[PromptBlock]:
         blocks: List[PromptBlock] = []
@@ -668,6 +675,16 @@ class PromptValidator:
             return False
         lowered = raw.lower()
         return any(hint in lowered for hint in self.NO_CHANGE_HINTS)
+
+    def is_step_ack_response(self, text: str) -> bool:
+        raw = str(text or "").strip()
+        if not raw:
+            return False
+        if self.parse_blocks(raw):
+            return False
+        lowered = raw.lower()
+        compact = re.sub(r"\s+", " ", lowered).strip()
+        return compact in self.STEP_ACK_HINTS
 
     def _video_optional_numbers(self, blocks: Sequence[PromptBlock]) -> set[int]:
         optional_numbers: set[int] = set()
@@ -966,6 +983,39 @@ class StoryPipeline:
                 writer.write_raw(f"{micro_label}_step6_draft.txt", step6_text)
 
                 draft_validation = self.validator.validate(step6_text, micro_scenes)
+                if not draft_validation.blocks:
+                    for retry_index in range(1, 3):
+                        if self.validator.is_step_ack_response(step6_text):
+                            self.log(f"🔁 Step6 응답이 준비 신호만 와서 다시 요청 {retry_index}회차 | {micro_label}")
+                        else:
+                            self.log(f"🔁 Step6 프롬프트가 없어 다시 요청 {retry_index}회차 | {micro_label}")
+                        self._status(
+                            status="Step6 다시 요청",
+                            detail=f"{micro_label} Step6 재요청 {retry_index}회차",
+                            current_step="Step6 재요청",
+                            scene_range=micro_label.replace("_", " ~ "),
+                            batch_index=batch.batch_index,
+                            batch_total=total_batches,
+                            micro_index=completed_micro_batches + 1,
+                            micro_total=total_micro_batches,
+                            batch_micro_index=micro_index,
+                            batch_micro_total=len(batch.micro_batches),
+                            scene_done=completed_scenes,
+                            scene_total=total_scenes,
+                        )
+                        step6_text = self.runner.send_prompt(step6_prompt, step_label=f"{micro_label}_step6_retry{retry_index}")
+                        writer.write_raw(f"{micro_label}_step6_retry{retry_index}.txt", step6_text)
+                        draft_validation = self.validator.validate(step6_text, micro_scenes)
+                        if draft_validation.blocks:
+                            break
+                    if not draft_validation.blocks:
+                        writer.write_report(
+                            f"{micro_label}_step6_validation.json",
+                            {"ok": False, "errors": draft_validation.errors},
+                        )
+                        raise RuntimeError(
+                            f"{micro_label} Step6 응답에서 프롬프트를 찾지 못했습니다. 현재 응답: {step6_text[:120].strip() or '(비어 있음)'}"
+                        )
                 writer.write_report(
                     f"{micro_label}_step6_validation.json",
                     {"ok": draft_validation.ok, "errors": draft_validation.errors},
