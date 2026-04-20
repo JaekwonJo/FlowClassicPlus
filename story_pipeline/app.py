@@ -42,6 +42,7 @@ class StoryPromptPipelineApp:
     def __init__(self, instance_name: str = "story_worker1") -> None:
         self.instance_name = sanitize_instance_name(instance_name)
         self.preview_runner: GeminiWebRunner | None = None
+        self.preview_thread: threading.Thread | None = None
         self.geometry_save_job = None
         self.root = tk.Tk()
         self.root.title("똑똑즈 파이프라인 워커")
@@ -1003,6 +1004,9 @@ class StoryPromptPipelineApp:
             if self.worker_thread and self.worker_thread.is_alive():
                 self.log("⚠️ 자동화 실행 중에는 브라우저 미리보기를 따로 열지 않습니다.")
                 return
+            if self.preview_thread and self.preview_thread.is_alive():
+                self.log("⏳ 이미 브라우저를 여는 중입니다. 잠시만 기다려주세요.")
+                return
             if self.preview_runner is None:
                 self.preview_runner = self._build_runner()
             else:
@@ -1010,10 +1014,41 @@ class StoryPromptPipelineApp:
                 self.preview_runner.profile_dir = Path(self.cfg.browser_profile_dir)
             self.log(f"🪟 워커: {self._display_name_text()} ({self.instance_name})")
             self.log(f"🧭 브라우저 프로필: {self.cfg.browser_profile_dir}")
-            self.preview_runner.open_browser()
-            self.log("🌐 브라우저 열기 완료")
+            self.log("🌐 브라우저 여는 중... 워커 창은 그대로 사용하셔도 됩니다.")
+            self._queue_status(
+                {
+                    "status": "브라우저 준비 중",
+                    "detail": "Gemini 창을 여는 중입니다. 잠시만 기다려주세요.",
+                    "current_step": "브라우저",
+                }
+            )
+            self.preview_thread = threading.Thread(target=self._open_preview_browser_thread, daemon=True)
+            self.preview_thread.start()
         except Exception as exc:
             self.log(f"❌ 브라우저 열기 실패: {exc}")
+
+    def _open_preview_browser_thread(self) -> None:
+        try:
+            if self.preview_runner is None:
+                self.preview_runner = self._build_runner()
+            self.preview_runner.open_browser()
+            self.log("🌐 브라우저 열기 완료")
+            self._queue_status(
+                {
+                    "status": "브라우저 준비 완료",
+                    "detail": "Gemini 창이 열렸습니다.",
+                    "current_step": "브라우저",
+                }
+            )
+        except Exception as exc:
+            self.log(f"❌ 브라우저 열기 실패: {exc}")
+            self._queue_status(
+                {
+                    "status": "브라우저 열기 실패",
+                    "detail": str(exc),
+                    "current_step": "브라우저",
+                }
+            )
 
     def on_start(self) -> None:
         if self.worker_thread and self.worker_thread.is_alive():
