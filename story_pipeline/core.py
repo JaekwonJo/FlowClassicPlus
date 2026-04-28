@@ -67,6 +67,7 @@ class Scene:
 class PipelineConfig:
     instance_name: str = "story_worker1"
     display_name: str = ""
+    site_target: str = "gemini"
     pipeline_mode: str = "manual_style"
     window_geometry: str = "620x520"
     log_visible: bool = True
@@ -74,6 +75,7 @@ class PipelineConfig:
     step_macro_path: str = str(DEFAULT_STEP_MACRO_PATH)
     library_path: str = str(DEFAULT_LIBRARY_PATH)
     scene_file_path: str = str(DEFAULT_SCENE_PATH)
+    scene_file_slots: List[Dict[str, str]] = field(default_factory=list)
     gemini_url: str = "https://gemini.google.com/app"
     browser_profile_dir: str = ""
     output_root: str = ""
@@ -83,7 +85,7 @@ class PipelineConfig:
     micro_batch_size: int = 5
     pre_input_delay_seconds: float = 4.0
     send_wait_seconds: float = 2.0
-    poll_interval_seconds: float = 2.0
+    poll_interval_seconds: float = 5.0
     stable_rounds_required: int = 2
     max_wait_seconds: float = 300.0
     rest_every_micro_batches: int = 0
@@ -104,8 +106,8 @@ class PromptBlock:
     prompt_type: str
 
     @property
-    def key(self) -> Tuple[Tuple[int, ...], str]:
-        return (tuple(self.numbers or [self.start_number]), self.prompt_type)
+    def key(self) -> Tuple[int, str]:
+        return (self.start_number, self.prompt_type)
 
     def render(self) -> str:
         return f"{self.header} Prompt : {self.body.strip()} |||"
@@ -551,9 +553,30 @@ class PromptComposer:
             f"{draft_text.strip()}\n"
         )
 
-    def build_manual_style_step7_prompt(self) -> str:
+    def build_manual_style_step7_prompt(
+        self,
+        micro_scenes: Sequence[Scene],
+        current_text: str = "",
+        validation_errors: Sequence[str] = (),
+    ) -> str:
         section = self.source.step_sections[7]["body"]
-        return section.strip()
+        scene_chunk = self._render_scene_chunk(micro_scenes)
+        error_block = "\n".join(f"- {item}" for item in validation_errors) if validation_errors else "- 없음"
+        return (
+            f"{section.strip()}\n\n"
+            "[자동화 범위 고정]\n"
+            f"- 이번 검수 범위는 {micro_scenes[0].label} ~ {micro_scenes[-1].label} 입니다.\n"
+            "- 이 범위 밖 번호는 절대로 새로 쓰지 마세요.\n"
+            "- `S061>S062` 같은 연결 라벨은 왼쪽 시작 번호 S061의 단 1개 컷입니다. S062를 대체하지 않습니다.\n"
+            "- 마지막 묶음이 5개뿐이면 그 5개만 검수하고, 다음 번호를 이어 쓰지 마세요.\n"
+            "- 문제가 있는 번호만 다시 출력하라는 지시가 있더라도, 범위 밖 번호는 출력하지 마세요.\n\n"
+            "[이번 묶음 장면]\n"
+            f"{scene_chunk}\n\n"
+            "[현재 기계 검수 오류]\n"
+            f"{error_block}\n\n"
+            "[현재 저장 후보]\n"
+            f"{current_text.strip()}\n"
+        )
 
     def build_repair_prompt(self, micro_scenes: Sequence[Scene], broken_text: str, errors: Sequence[str]) -> str:
         scene_chunk = self._render_scene_chunk(micro_scenes)
@@ -693,7 +716,7 @@ class PromptValidator:
                 continue
             body = block.body or ""
             if re.search(r"@S[78]\d{2}", body, re.IGNORECASE):
-                optional_numbers.update(block.numbers or [block.start_number])
+                optional_numbers.add(block.start_number)
         return optional_numbers
 
     def validate(self, text: str, expected_scenes: Sequence[Scene]) -> ValidationResult:
@@ -703,22 +726,31 @@ class PromptValidator:
             return ValidationResult(ok=False, errors=["프롬프트 블록을 하나도 찾지 못했습니다."], blocks=[])
 
         expected_numbers = [scene.number for scene in expected_scenes]
-        grouped: Dict[Tuple[Tuple[int, ...], str], PromptBlock] = {}
-        duplicate_keys: List[Tuple[Tuple[int, ...], str]] = []
-        for block in blocks:
+        allowed_numbers = set(expected_numbers)
+        in_scope_blocks = [
+            block
+            for block in blocks
+            if block.start_number in allowed_numbers
+        ]
+        if not in_scope_blocks:
+            errors.append("현재 묶음에 해당하는 프롬프트 블록이 없습니다.")
+
+        grouped: Dict[Tuple[int, str], PromptBlock] = {}
+        duplicate_keys: List[Tuple[int, str]] = []
+        for block in in_scope_blocks:
             if block.key in grouped:
                 duplicate_keys.append(block.key)
             grouped[block.key] = block
 
         for key in duplicate_keys:
-            numbers, prompt_type = key
-            head = ">".join(f"S{number:03d}" for number in numbers)
+            number, prompt_type = key
+            head = f"S{number:03d}"
             errors.append(f"{head} {prompt_type} 프롬프트가 중복되었습니다.")
 
         coverage: Dict[str, set[int]] = {"image": set(), "video": set()}
-        for block in blocks:
-            coverage.setdefault(block.prompt_type, set()).update(block.numbers or [block.start_number])
-        optional_video_numbers = self._video_optional_numbers(blocks)
+        for block in in_scope_blocks:
+            coverage.setdefault(block.prompt_type, set()).add(block.start_number)
+        optional_video_numbers = self._video_optional_numbers(in_scope_blocks)
 
         for number in expected_numbers:
             if number not in coverage.get("image", set()):
@@ -726,17 +758,12 @@ class PromptValidator:
             if number not in coverage.get("video", set()) and number not in optional_video_numbers:
                 errors.append(f"S{number:03d} 비디오 프롬프트가 없습니다.")
 
-        allowed_numbers = set(expected_numbers)
-        for block in blocks:
-            if not set(block.numbers or [block.start_number]).issubset(allowed_numbers):
-                errors.append(f"{block.header} 는 현재 묶음 범위를 벗어났습니다.")
-
-        for block in blocks:
+        for block in in_scope_blocks:
             rendered = block.render()
             if "|||" not in rendered:
                 errors.append(f"{block.header} 종료 구분자 `|||` 가 없습니다.")
 
-        return ValidationResult(ok=not errors, errors=errors, blocks=blocks)
+        return ValidationResult(ok=not errors, errors=errors, blocks=in_scope_blocks)
 
     def missing_items_from_errors(self, errors: Sequence[str]) -> List[tuple[int, str]]:
         items: List[tuple[int, str]] = []
@@ -793,6 +820,68 @@ class StoryPipeline:
     def _check_stop(self) -> None:
         if self.stop_event.is_set():
             raise RuntimeError("사용자 중지 요청")
+
+    def _wait_before_retry(self, seconds: float, step_label: str, attempt: int) -> None:
+        wait_seconds = max(1.0, float(seconds))
+        self._status(
+            status="자동 재시도 대기",
+            detail=f"{step_label} 실패 후 같은 자리에서 {attempt}회차 재시도 준비",
+            current_step="자동 재시도",
+            countdown_label="재시도까지",
+            countdown_remaining_seconds=wait_seconds,
+        )
+        end_at = time.time() + wait_seconds
+        while time.time() < end_at:
+            self._check_stop()
+            time.sleep(0.2)
+
+    def _should_reset_browser_after_send_failure(self, exc: Exception, attempt: int) -> bool:
+        text = str(exc or "")
+        lowered = text.lower()
+        if attempt < 2:
+            return False
+        pointer_blocked = "intercepts pointer events" in lowered
+        offscreen = "outside of the viewport" in lowered
+        click_timeout = "locator.click: timeout" in lowered
+        input_focus_fail = "입력창 포커스 실패" in text
+        return pointer_blocked or offscreen or click_timeout or input_focus_fail
+
+    def _recover_browser_for_send_retry(self, step_label: str, attempt: int) -> None:
+        self.log(
+            f"🧭 {step_label} 입력 복구 | 같은 클릭 실패가 이어져 저장된 URL로 다시 들어갑니다. "
+            f"(재시도 {attempt}회차)"
+        )
+        self._status(
+            status="브라우저 복구 중",
+            detail=f"{step_label} 저장된 URL 재진입 후 입력창 재정렬",
+            current_step="브라우저 복구",
+        )
+        self.runner.reset_conversation()
+
+    def _send_prompt_resilient(self, prompt: str, step_label: str) -> str:
+        attempt = 1
+        while True:
+            self._check_stop()
+            label = step_label if attempt == 1 else f"{step_label}_auto_retry{attempt - 1}"
+            try:
+                return self.runner.send_prompt(prompt, step_label=label)
+            except Exception as exc:
+                if self.stop_event.is_set():
+                    raise
+                self.log(
+                    f"⚠️ {step_label} 전송/응답 확인 실패 | 같은 자리에서 자동 재시도 {attempt}회차 | {exc}"
+                )
+                if self._should_reset_browser_after_send_failure(exc, attempt):
+                    try:
+                        self._recover_browser_for_send_retry(step_label, attempt)
+                    except Exception as recovery_exc:
+                        self.log(f"⚠️ 저장된 URL 복구도 실패했습니다 | {step_label} | {recovery_exc}")
+                self._wait_before_retry(
+                    max(5.0, float(getattr(self.cfg, "poll_interval_seconds", 5.0) or 5.0)),
+                    step_label,
+                    attempt,
+                )
+                attempt += 1
 
     def _open_live_file_if_needed(self, path: Path) -> None:
         if not self.cfg.open_notepad_live:
@@ -856,10 +945,11 @@ class StoryPipeline:
             pass
 
     def run(self) -> SessionPaths:
+        effective_batch_size = self.cfg.micro_batch_size if self.cfg.pipeline_mode == "manual_style" else self.cfg.batch_size
         windows = self.source.build_windows(
             start_num=self.cfg.start_scene,
             end_num=self.cfg.end_scene,
-            batch_size=self.cfg.batch_size,
+            batch_size=effective_batch_size,
             micro_batch_size=self.cfg.micro_batch_size,
         )
         if not windows:
@@ -950,7 +1040,7 @@ class StoryPipeline:
                     scene_done=completed_scenes,
                     scene_total=total_scenes,
                 )
-                step5_text = self.runner.send_prompt(step5_prompt, step_label=f"{batch.label}_step5")
+                step5_text = self._send_prompt_resilient(step5_prompt, step_label=f"{batch.label}_step5")
                 writer.write_raw(f"{batch.label}_step5.txt", step5_text)
                 writer.append_manifest_step(
                     {"batch": batch.label, "step": 5, "raw_file": f"{batch.label}_step5.txt"}
@@ -979,7 +1069,7 @@ class StoryPipeline:
                     step6_prompt = self.composer.build_manual_style_step6_prompt(micro_scenes)
                 else:
                     step6_prompt = self.composer.build_step6_prompt(batch, micro_scenes, step5_text)
-                step6_text = self.runner.send_prompt(step6_prompt, step_label=f"{micro_label}_step6")
+                step6_text = self._send_prompt_resilient(step6_prompt, step_label=f"{micro_label}_step6")
                 writer.write_raw(f"{micro_label}_step6_draft.txt", step6_text)
 
                 draft_validation = self.validator.validate(step6_text, micro_scenes)
@@ -1003,7 +1093,7 @@ class StoryPipeline:
                             scene_done=completed_scenes,
                             scene_total=total_scenes,
                         )
-                        step6_text = self.runner.send_prompt(step6_prompt, step_label=f"{micro_label}_step6_retry{retry_index}")
+                        step6_text = self._send_prompt_resilient(step6_prompt, step_label=f"{micro_label}_step6_retry{retry_index}")
                         writer.write_raw(f"{micro_label}_step6_retry{retry_index}.txt", step6_text)
                         draft_validation = self.validator.validate(step6_text, micro_scenes)
                         if draft_validation.blocks:
@@ -1040,10 +1130,14 @@ class StoryPipeline:
                     scene_total=total_scenes,
                 )
                 if self.cfg.pipeline_mode == "manual_style":
-                    step7_prompt = self.composer.build_manual_style_step7_prompt()
+                    step7_prompt = self.composer.build_manual_style_step7_prompt(
+                        micro_scenes,
+                        current_text=step6_text,
+                        validation_errors=draft_validation.errors,
+                    )
                 else:
                     step7_prompt = self.composer.build_step7_prompt(micro_scenes, step6_text, draft_validation.errors)
-                step7_text = self.runner.send_prompt(step7_prompt, step_label=f"{micro_label}_step7")
+                step7_text = self._send_prompt_resilient(step7_prompt, step_label=f"{micro_label}_step7")
                 writer.write_raw(f"{micro_label}_step7_review.txt", step7_text)
 
                 final_candidate = self.validator.extract_final_prompt_text(step7_text)
@@ -1073,8 +1167,12 @@ class StoryPipeline:
                                 scene_done=completed_scenes,
                                 scene_total=total_scenes,
                             )
-                            retry_prompt = self.composer.build_manual_style_step7_prompt()
-                            retry_text = self.runner.send_prompt(retry_prompt, step_label=f"{micro_label}_step7_retry{retry_index}")
+                            retry_prompt = self.composer.build_manual_style_step7_prompt(
+                                micro_scenes,
+                                current_text=final_candidate,
+                                validation_errors=final_validation.errors,
+                            )
+                            retry_text = self._send_prompt_resilient(retry_prompt, step_label=f"{micro_label}_step7_retry{retry_index}")
                             writer.write_raw(f"{micro_label}_step7_retry{retry_index}.txt", retry_text)
                             if self.validator.is_no_change_response(retry_text):
                                 self.log(f"✅ Step7 재검수 응답: 추가 수정 없음 | {micro_label}")
@@ -1113,7 +1211,7 @@ class StoryPipeline:
                             scene_total=total_scenes,
                         )
                         repair_prompt = self.composer.build_repair_prompt(micro_scenes, step7_text, final_validation.errors)
-                        repair_text = self.runner.send_prompt(repair_prompt, step_label=f"{micro_label}_repair")
+                        repair_text = self._send_prompt_resilient(repair_prompt, step_label=f"{micro_label}_repair")
                         writer.write_raw(f"{micro_label}_repair.txt", repair_text)
                         repaired_candidate = self.validator.extract_final_prompt_text(repair_text)
                         repaired_validation = self.validator.validate(repaired_candidate, micro_scenes)
@@ -1145,7 +1243,7 @@ class StoryPipeline:
                                 final_candidate,
                                 missing_items,
                             )
-                            refill_text = self.runner.send_prompt(refill_prompt, step_label=f"{micro_label}_missing_refill{refill_index}")
+                            refill_text = self._send_prompt_resilient(refill_prompt, step_label=f"{micro_label}_missing_refill{refill_index}")
                             writer.write_raw(f"{micro_label}_missing_refill{refill_index}.txt", refill_text)
                             refill_candidate = self.validator.extract_final_prompt_text(refill_text)
                             refill_validation = self.validator.validate(refill_candidate, micro_scenes)
