@@ -39,7 +39,7 @@ def resolve_local_path(raw: str | Path) -> Path:
 
 
 PROMPT_BLOCK_RE = re.compile(
-    r"^([SV]\d{3}(?:>[SV]\d{3})*)\s+(?:(Video)\s+)?Prompt\s*:\s*(.*?)\s*\|\|\|\s*$",
+    r"^([SV]\d{3}(?:\(Ext\))?(?:>[SV]\d{3}(?:\(Ext\))?)*)\s+(?:(Video)\s+)?Prompt\s*:\s*(.*?)\s*\|\|\|\s*$",
     re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
 SCENE_LINE_RE = re.compile(
@@ -88,6 +88,8 @@ class PipelineConfig:
     poll_interval_seconds: float = 5.0
     stable_rounds_required: int = 2
     max_wait_seconds: float = 300.0
+    step6_max_wait_seconds: float = 0.0
+    step7_max_wait_seconds: float = 0.0
     rest_every_micro_batches: int = 0
     rest_seconds: float = 0.0
     human_typing_enabled: bool = False
@@ -104,6 +106,7 @@ class PromptBlock:
     start_number: int
     numbers: List[int]
     prompt_type: str
+    is_ext: bool = False
 
     @property
     def key(self) -> Tuple[int, str]:
@@ -168,16 +171,19 @@ class LiveOutputWriter:
         self.resumed = resume_candidate is not None
         self.resumed_from_scene = resume_candidate.last_complete_scene if resume_candidate else None
         safe_name = re.sub(r'[\\/:*?"<>|]+', "_", str(display_name or "").strip())
+        self._safe_name = safe_name
         manifest_data = dict(resume_candidate.manifest) if resume_candidate else {}
         effective_range_label = resume_candidate.scene_range_label if resume_candidate else scene_range_label
+        self.scene_range_label = effective_range_label
         pretty_range = effective_range_label.replace("_", "~")
+        self.pretty_range = pretty_range
+        self._range_start, self._range_end = self._parse_scene_range_label(effective_range_label) or (0, 0)
+        self._pretty_stamp = datetime.now().strftime("%Y-%m-%d_%H시%M분%S초")
+        self._renaming_enabled = not bool(resume_candidate)
         if resume_candidate:
             self.session_root = resume_candidate.session_root
         else:
-            pretty_stamp = datetime.now().strftime("%Y-%m-%d_%H시%M분%S초")
-            folder_name = f"{pretty_stamp}_장면_{pretty_range}"
-            if safe_name:
-                folder_name = f"{pretty_stamp}_{safe_name}_장면_{pretty_range}"
+            folder_name = self._compose_session_folder_name("진행중_000완료")
             self.session_root = self.output_root / folder_name
         self.raw_dir = self.session_root / "원본응답"
         self.reports_dir = self.session_root / "검수리포트"
@@ -208,6 +214,7 @@ class LiveOutputWriter:
         }
         self._manifest["scene_range"] = effective_range_label
         self._manifest["display_name"] = str(display_name or "").strip()
+        self._manifest["folder_status"] = "이어저장" if self.resumed else "진행중_000완료"
         self._manifest["final_live_txt"] = str(self.final_live_txt)
         self._manifest["final_image_txt"] = str(self.final_image_txt)
         self._manifest["final_video_txt"] = str(self.final_video_txt)
@@ -222,6 +229,12 @@ class LiveOutputWriter:
             )
             self._manifest["resumed_runs"] = resumed_log
         self._flush_manifest()
+
+    def _compose_session_folder_name(self, status_label: str) -> str:
+        prefix = self._pretty_stamp
+        if self._safe_name:
+            prefix = f"{prefix}_{self._safe_name}"
+        return f"{prefix}_{status_label}_장면_{self.pretty_range}"
 
     def _flush_manifest(self) -> None:
         self.manifest_json.write_text(
@@ -278,6 +291,8 @@ class LiveOutputWriter:
                     image_numbers.update(numbers)
                 else:
                     video_numbers.update(numbers)
+                    if block.is_ext:
+                        image_numbers.update(numbers)
         return image_numbers, video_numbers
 
     @classmethod
@@ -335,6 +350,56 @@ class LiveOutputWriter:
         steps = list(self._manifest.get("steps", []))
         steps.append(item)
         self._manifest["steps"] = steps
+        self._flush_manifest()
+
+    def mark_progress(self, completed_until: int) -> None:
+        start = self._range_start or int(completed_until)
+        end = max(start, int(completed_until))
+        status = f"진행중_S{start:03d}~S{end:03d}완료"
+        self._manifest["folder_status"] = status
+        self._flush_manifest()
+        self._rename_session_folder(status)
+
+    def mark_completed(self) -> None:
+        status = f"완료_S{self._range_start:03d}~S{self._range_end:03d}" if self._range_start and self._range_end else "완료"
+        self._manifest["folder_status"] = status
+        self._flush_manifest()
+        self._rename_session_folder(status)
+
+    def mark_failed(self) -> None:
+        status = str(self._manifest.get("folder_status") or "실패")
+        if not status.startswith("실패_"):
+            status = f"실패_{status}"
+        self._manifest["folder_status"] = status
+        self._flush_manifest()
+        self._rename_session_folder(status)
+
+    def _rename_session_folder(self, status_label: str) -> None:
+        if not self._renaming_enabled:
+            return
+        target = self.output_root / self._compose_session_folder_name(status_label)
+        if target == self.session_root:
+            return
+        if target.exists():
+            idx = 2
+            base_name = target.name
+            while target.exists() and target != self.session_root:
+                target = self.output_root / f"{base_name}_{idx}"
+                idx += 1
+        try:
+            self.session_root.rename(target)
+        except Exception:
+            return
+        self.session_root = target
+        self.raw_dir = self.session_root / "원본응답"
+        self.reports_dir = self.session_root / "검수리포트"
+        self.final_live_txt = self.session_root / self.final_live_txt.name
+        self.final_image_txt = self.session_root / self.final_image_txt.name
+        self.final_video_txt = self.session_root / self.final_video_txt.name
+        self.manifest_json = self.session_root / "세션기록.json"
+        self._manifest["final_live_txt"] = str(self.final_live_txt)
+        self._manifest["final_image_txt"] = str(self.final_image_txt)
+        self._manifest["final_video_txt"] = str(self.final_video_txt)
         self._flush_manifest()
 
     def write_raw(self, name: str, content: str) -> Path:
@@ -461,6 +526,26 @@ class PromptComposer:
     def _render_scene_chunk(scenes: Sequence[Scene]) -> str:
         return "\n".join(f"[{scene.label}] {scene.text}" for scene in scenes)
 
+    @staticmethod
+    def _hard_validation_rules_block() -> str:
+        return (
+            "[자동화 기계검수 필수 규칙]\n"
+            "- 이 규칙은 Grok Worker 전용 이미지/비디오 프롬프트 규칙입니다. FlowWorker/Veo 프롬프트 규칙과 혼용하지 마세요.\n"
+            "- 아래 규칙은 매뉴얼보다 우선합니다. 위반하면 자동화가 즉시 실패합니다.\n"
+            "- `V###(Ext) Prompt`는 이전 일반 V컷을 연장하는 프롬프트입니다.\n"
+            "- `V###(Ext) Prompt` 본문에는 공통 스타일 태그(`3D rendered Pixar...`, `8k render`)를 다시 쓰지 말고, 곧바로 카메라/행동 연장 묘사로 시작하세요.\n"
+            "- `V###(Ext) Prompt` 본문에는 `3D text`, `3D text (Korean)`, `labeled`, `speaking(Korean)`, `@S800` 계열 데이터 보존 구문을 절대 넣지 마세요.\n"
+            "- 어떤 번호가 Ext로 이어질 가능성이 있으면, 그 직전 시작점 이미지 `S### Prompt`에도 `3D text`, `3D text (Korean)`, `absolutely preserve 3D text`, `ZERO text distortion on the 3D text`를 절대 넣지 마세요.\n"
+            "- 예: `S023` 뒤에 `V024(Ext)`가 나오면 `S023 Prompt`에는 3D text 오브젝트가 있으면 안 됩니다.\n"
+            "- Ext 시작점 S컷은 글자/텍스트 오브젝트 대신 물리적 상징물, 구조물, 빛, 기계 장치, 인물 행동으로 의미를 표현하세요.\n"
+            "- Ext 번호의 `S### Prompt`는 아예 출력하지 마세요. `S024 Prompt : 스킵... |||` 같은 스킵 안내문도 출력 금지입니다.\n"
+            "- 1 프롬프트 1 태그 원칙: `@S901`, `@S902`, `@S903` 뒤에 의상, 실명, 직업, 역할, 외형 설명을 덧붙이지 마세요. 캐릭터 외형은 태그가 이미 고정합니다.\n"
+            "- `@S800`대 고증 자료는 `displays @S8##`, `shows @S8##`, `projects @S8##`처럼 태그 단독 호출만 사용하세요. Q1 2026 financial results 같은 문서 부연 설명을 태그 앞뒤에 붙이지 마세요.\n"
+            "- `Static camera`는 금지입니다. 정적인 장면도 slow push-in, slow dolly-in, controlled lateral move처럼 미세한 카메라 무빙으로 쓰세요.\n"
+            "- 프롬프트 본문은 필요한 한국어 3D text 문자열을 제외하고 영어로만 작성하세요. `매머드-scale`, `시안 블루` 같은 한영 혼합어를 쓰지 마세요.\n"
+            "- 출력 형식은 `S### Prompt : ... |||`, `V### Prompt : ... |||`, `V###(Ext) Prompt : ... |||`만 사용하세요.\n"
+        )
+
     def _manual_sync_block(self) -> str:
         if self.source.cfg.manual_is_baked_into_gem:
             return (
@@ -497,7 +582,7 @@ class PromptComposer:
         scene_chunk = self._render_scene_chunk(micro_scenes)
         return (
             f"{section.strip()}\n\n"
-            "[장면 묶음]\n"
+            f"{self._hard_validation_rules_block()}\n"
             f"{scene_chunk}\n"
         )
 
@@ -517,6 +602,7 @@ class PromptComposer:
             f"{step5_plan.strip()}\n\n"
             "[Step 6 원문]\n"
             f"{section}\n\n"
+            f"{self._hard_validation_rules_block()}\n"
             f"[이번 마이크로배치 범위]\n{micro_scenes[0].label} ~ {micro_scenes[-1].label}\n\n"
             "[장면 대본]\n"
             f"{scene_chunk}\n\n"
@@ -545,6 +631,7 @@ class PromptComposer:
             "[끝]\n\n"
             "[Step 7 원문]\n"
             f"{section}\n\n"
+            f"{self._hard_validation_rules_block()}\n"
             "[이번 묶음 장면]\n"
             f"{scene_chunk}\n\n"
             "[코드 1차 검수 결과]\n"
@@ -561,20 +648,15 @@ class PromptComposer:
     ) -> str:
         section = self.source.step_sections[7]["body"]
         scene_chunk = self._render_scene_chunk(micro_scenes)
-        error_block = "\n".join(f"- {item}" for item in validation_errors) if validation_errors else "- 없음"
+        error_block = "\n".join(f"- {item}" for item in validation_errors) if validation_errors else "- 코드 검수 1차 통과"
         return (
             f"{section.strip()}\n\n"
-            "[자동화 범위 고정]\n"
-            f"- 이번 검수 범위는 {micro_scenes[0].label} ~ {micro_scenes[-1].label} 입니다.\n"
-            "- 이 범위 밖 번호는 절대로 새로 쓰지 마세요.\n"
-            "- `S061>S062` 같은 연결 라벨은 왼쪽 시작 번호 S061의 단 1개 컷입니다. S062를 대체하지 않습니다.\n"
-            "- 마지막 묶음이 5개뿐이면 그 5개만 검수하고, 다음 번호를 이어 쓰지 마세요.\n"
-            "- 문제가 있는 번호만 다시 출력하라는 지시가 있더라도, 범위 밖 번호는 출력하지 마세요.\n\n"
+            f"{self._hard_validation_rules_block()}\n"
             "[이번 묶음 장면]\n"
             f"{scene_chunk}\n\n"
-            "[현재 기계 검수 오류]\n"
+            "[현재 코드 검수 오류]\n"
             f"{error_block}\n\n"
-            "[현재 저장 후보]\n"
+            "[현재 후보 프롬프트]\n"
             f"{current_text.strip()}\n"
         )
 
@@ -590,7 +672,9 @@ class PromptComposer:
             "[최종프롬프트]\n"
             "S### Prompt : ... |||\n"
             "V### Prompt : ... |||\n"
+            "V###(Ext) Prompt : ... |||  # 롱테이크 연장 씬일 때만 사용\n"
             "[끝]\n\n"
+            f"{self._hard_validation_rules_block()}\n"
             "[이번 묶음 장면]\n"
             f"{scene_chunk}\n\n"
             "[현재 오류]\n"
@@ -618,13 +702,33 @@ class PromptComposer:
             "- 아래 현재 최종본에서 빠진 프롬프트만 다시 써 주세요.\n"
             "- 이미 있는 번호는 다시 쓰지 말고, 빠진 번호만 출력하세요.\n"
             "- 이번 자동화에서는 비디오 생략 금지입니다. 빠진 비디오가 있으면 반드시 작성하세요.\n"
+            "- 롱테이크 연장 씬은 `V###(Ext) Prompt : ... |||` 형식을 사용할 수 있고, 해당 번호의 S컷은 생략됩니다.\n"
             "- 설명, 브리핑, 머리말 없이 프롬프트 줄만 출력하세요.\n"
-            "- 이미지면 `S### Prompt : ... |||`, 비디오면 `V### Prompt : ... |||` 형식만 사용하세요.\n\n"
+            "- 이미지면 `S### Prompt : ... |||`, 일반 비디오면 `V### Prompt : ... |||`, 연장 비디오면 `V###(Ext) Prompt : ... |||` 형식만 사용하세요.\n\n"
+            f"{self._hard_validation_rules_block()}\n"
             "[이번 묶음 장면]\n"
             f"{scene_chunk}\n\n"
             "[현재까지 저장 후보]\n"
             f"{current_text.strip()}\n\n"
             "[꼭 다시 써야 하는 누락 번호]\n"
+            f"{request_block}\n"
+        )
+
+    def build_manual_style_missing_blocks_prompt(
+        self,
+        missing_items: Sequence[tuple[int, str]],
+    ) -> str:
+        request_lines = []
+        for number, prompt_type in missing_items:
+            if prompt_type == "image":
+                request_lines.append(f"- S{number:03d} 이미지 프롬프트 1개")
+            else:
+                request_lines.append(f"- V{number:03d} 비디오 프롬프트 1개")
+        request_block = "\n".join(request_lines) if request_lines else "- 없음"
+        return (
+            "아까 답변에서 아래 프롬프트가 빠진 것 같습니다.\n"
+            "빠진 번호만 이어서 작성해주세요.\n\n"
+            f"{self._hard_validation_rules_block()}\n"
             f"{request_block}\n"
         )
 
@@ -664,6 +768,7 @@ class PromptValidator:
             is_video_header = bool((match.group(2) or "").strip())
             body = match.group(3).strip()
             number_matches = [int(item[1:]) for item in re.findall(r"[SV]\d{3}", header, re.IGNORECASE)]
+            is_ext = bool(re.search(r"\(Ext\)", header, re.IGNORECASE))
             prompt_type = "video" if is_video_header or header.upper().startswith("V") else self._classify_block(body)
             blocks.append(
                 PromptBlock(
@@ -672,6 +777,7 @@ class PromptValidator:
                     start_number=number_matches[0],
                     numbers=number_matches,
                     prompt_type=prompt_type,
+                    is_ext=is_ext,
                 )
             )
         return blocks
@@ -719,6 +825,99 @@ class PromptValidator:
                 optional_numbers.add(block.start_number)
         return optional_numbers
 
+    def _strip_3d_text_directives(self, body: str) -> str:
+        cleaned = str(body or "")
+        # Remove explicit rendered text objects such as:
+        # Floating in the abyss, 3D text (Korean) "통합" made of heavy iron...
+        cleaned = re.sub(
+            r"(?is)(?:^|(?<=[.!?]))\s*[^.!?]*?\b3d\s+text\b\s*(?:\([^)]*\))?\s*[\"“][^\"”]+[\"”][^.!?]*[.!?]\s*",
+            " ",
+            cleaned,
+        )
+        # Remove standalone preservation clauses that only make sense when a 3D text object exists.
+        cleaned = re.sub(
+            r"(?is)\([^)]*\b3d\s+text\b[^)]*\)\.?\s*",
+            " ",
+            cleaned,
+        )
+        cleaned = re.sub(
+            r"(?is)\babsolutely\s+preserve\b[^.!?]*\b3d\s+text\b[^.!?]*[.!?]?\s*",
+            " ",
+            cleaned,
+        )
+        cleaned = re.sub(
+            r"(?is)\bzero\s+text\s+distortion\b(?:\s+on\s+the\s+3d\s+text)?[,.;]?\s*",
+            " ",
+            cleaned,
+        )
+        cleaned = re.sub(r"\s{2,}", " ", cleaned)
+        cleaned = re.sub(r"\s+([,.])", r"\1", cleaned)
+        return cleaned.strip()
+
+    def _strip_ext_style_prefix(self, body: str) -> str:
+        cleaned = str(body or "").strip()
+        cleaned = re.sub(
+            r"(?is)^\s*3d\s+rendered\s+pixar\s+studio\s+style,\s*"
+            r"\(3d\s+animation\s+masterpiece,\s*soul\s+or\s+up\s+style\),\s*"
+            r"8k\s+render\.\s*",
+            "",
+            cleaned,
+        )
+        return cleaned.strip()
+
+    def _sanitize_common_video_terms(self, body: str) -> str:
+        cleaned = str(body or "")
+        cleaned = re.sub(r"(?i)\bstatic\s+camera\b", "Slow controlled camera move", cleaned)
+        return cleaned.strip()
+
+    def _sanitize_ext_anchor_text_blocks(
+        self,
+        blocks: Sequence[PromptBlock],
+        expected_numbers: Sequence[int],
+    ) -> None:
+        coverage: Dict[str, set[int]] = {"image": set(), "video": set()}
+        for block in blocks:
+            coverage.setdefault(block.prompt_type, set()).add(block.start_number)
+        ext_video_numbers = {
+            block.start_number
+            for block in blocks
+            if block.prompt_type == "video" and block.is_ext
+        }
+        image_by_number = {
+            block.start_number: block
+            for block in blocks
+            if block.prompt_type == "image"
+        }
+        video_by_number = {
+            block.start_number: block
+            for block in blocks
+            if block.prompt_type == "video"
+        }
+
+        ext_anchor_numbers: set[int] = set()
+        current_anchor: int | None = None
+        for number in expected_numbers:
+            if number in ext_video_numbers:
+                if current_anchor is not None:
+                    ext_anchor_numbers.add(current_anchor)
+                continue
+            if number in coverage.get("video", set()):
+                current_anchor = number
+
+        for number in sorted(ext_anchor_numbers):
+            image_block = image_by_number.get(number)
+            if image_block and "3d text" in image_block.body.lower():
+                image_block.body = self._strip_3d_text_directives(image_block.body)
+            video_block = video_by_number.get(number)
+            if video_block and "3d text" in video_block.body.lower():
+                video_block.body = self._strip_3d_text_directives(video_block.body)
+
+        for block in blocks:
+            if block.prompt_type == "video":
+                block.body = self._sanitize_common_video_terms(block.body)
+            if block.prompt_type == "video" and block.is_ext:
+                block.body = self._strip_ext_style_prefix(block.body)
+
     def validate(self, text: str, expected_scenes: Sequence[Scene]) -> ValidationResult:
         errors: List[str] = []
         blocks = self.parse_blocks(text)
@@ -732,6 +931,7 @@ class PromptValidator:
             for block in blocks
             if block.start_number in allowed_numbers
         ]
+        self._sanitize_ext_anchor_text_blocks(in_scope_blocks, expected_numbers)
         if not in_scope_blocks:
             errors.append("현재 묶음에 해당하는 프롬프트 블록이 없습니다.")
 
@@ -751,9 +951,14 @@ class PromptValidator:
         for block in in_scope_blocks:
             coverage.setdefault(block.prompt_type, set()).add(block.start_number)
         optional_video_numbers = self._video_optional_numbers(in_scope_blocks)
+        ext_video_numbers = {
+            block.start_number
+            for block in in_scope_blocks
+            if block.prompt_type == "video" and block.is_ext
+        }
 
         for number in expected_numbers:
-            if number not in coverage.get("image", set()):
+            if number not in coverage.get("image", set()) and number not in ext_video_numbers:
                 errors.append(f"S{number:03d} 이미지 프롬프트가 없습니다.")
             if number not in coverage.get("video", set()) and number not in optional_video_numbers:
                 errors.append(f"S{number:03d} 비디오 프롬프트가 없습니다.")
@@ -762,6 +967,41 @@ class PromptValidator:
             rendered = block.render()
             if "|||" not in rendered:
                 errors.append(f"{block.header} 종료 구분자 `|||` 가 없습니다.")
+            if block.is_ext and block.prompt_type != "video":
+                errors.append(f"{block.header} Ext 표기는 비디오 프롬프트에서만 사용할 수 있습니다.")
+            if block.is_ext:
+                lowered_body = block.body.lower()
+                if re.search(r"speaking\s*\(\s*korean\s*\)", lowered_body, re.IGNORECASE):
+                    errors.append(f"{block.header} Ext 프롬프트에는 speaking(Korean) 구문을 넣을 수 없습니다.")
+                if "3d text" in lowered_body:
+                    errors.append(f"{block.header} Ext 프롬프트에는 3D text 구문을 넣을 수 없습니다.")
+                if "labeled" in lowered_body or "@s800" in lowered_body:
+                    errors.append(f"{block.header} Ext 프롬프트에는 데이터/Labeled/@S800 보존 씬을 넣을 수 없습니다.")
+
+        image_by_number = {
+            block.start_number: block
+            for block in in_scope_blocks
+            if block.prompt_type == "image"
+        }
+        for number in sorted(ext_video_numbers):
+            if number in image_by_number:
+                errors.append(f"S{number:03d} Ext 번호는 이미지 프롬프트를 출력하면 안 됩니다.")
+
+        ext_anchor_numbers: set[int] = set()
+        current_anchor: int | None = None
+        for number in expected_numbers:
+            if number in ext_video_numbers:
+                if current_anchor is None:
+                    errors.append(f"V{number:03d}(Ext) 앞에 기준이 되는 일반 V컷이 없습니다.")
+                else:
+                    ext_anchor_numbers.add(current_anchor)
+                continue
+            if number in coverage.get("video", set()):
+                current_anchor = number
+        for number in sorted(ext_anchor_numbers):
+            image_block = image_by_number.get(number)
+            if image_block and "3d text" in image_block.body.lower():
+                errors.append(f"S{number:03d} Ext 시작점 이미지는 3D text 구문을 선제적으로 삭제해야 합니다.")
 
         return ValidationResult(ok=not errors, errors=errors, blocks=in_scope_blocks)
 
@@ -779,7 +1019,7 @@ class PromptValidator:
         order = {scene.number: idx for idx, scene in enumerate(expected_scenes)}
         normalized = sorted(
             list(blocks),
-            key=lambda item: (order.get(item.start_number, 9999), 0 if item.prompt_type == "image" else 1),
+            key=lambda item: (0 if item.prompt_type == "image" else 1, order.get(item.start_number, 9999), item.header),
         )
         return "\n\n".join(block.render() for block in normalized)
 
@@ -787,6 +1027,13 @@ class PromptValidator:
         merged: Dict[Tuple[int, str], PromptBlock] = {block.key: block for block in draft.blocks}
         for block in reviewed.blocks:
             merged[block.key] = block
+        ext_numbers = {
+            block.start_number
+            for block in merged.values()
+            if block.prompt_type == "video" and block.is_ext
+        }
+        for number in ext_numbers:
+            merged.pop((number, "image"), None)
         return self.normalize_text(list(merged.values()), expected_scenes)
 
 
@@ -808,6 +1055,7 @@ class StoryPipeline:
         self.composer = PromptComposer(self.source)
         self.validator = PromptValidator()
         self.live_file_opened = False
+        self.active_writer: LiveOutputWriter | None = None
 
     def _status(self, **payload) -> None:
         if self.status_callback is None:
@@ -860,6 +1108,7 @@ class StoryPipeline:
 
     def _send_prompt_resilient(self, prompt: str, step_label: str) -> str:
         attempt = 1
+        max_attempts = 4
         while True:
             self._check_stop()
             label = step_label if attempt == 1 else f"{step_label}_auto_retry{attempt - 1}"
@@ -871,6 +1120,8 @@ class StoryPipeline:
                 self.log(
                     f"⚠️ {step_label} 전송/응답 확인 실패 | 같은 자리에서 자동 재시도 {attempt}회차 | {exc}"
                 )
+                if attempt >= max_attempts:
+                    raise RuntimeError(f"{step_label} 전송/응답 확인이 {attempt}회 연속 실패했습니다: {exc}") from exc
                 if self._should_reset_browser_after_send_failure(exc, attempt):
                     try:
                         self._recover_browser_for_send_retry(step_label, attempt)
@@ -973,6 +1224,7 @@ class StoryPipeline:
             self.cfg.display_name,
             resume_candidate=resume_candidate,
         )
+        self.active_writer = writer
         self.runner.open_browser()
         if resume_candidate:
             self.log(
@@ -1114,6 +1366,60 @@ class StoryPipeline:
                     self.log(f"✅ Step6 1차 형식 검수 통과 | {micro_label}")
                 else:
                     self.log(f"⚠️ Step6 1차 형식 이슈 {len(draft_validation.errors)}개 | {micro_label}")
+                    missing_items = self.validator.missing_items_from_errors(draft_validation.errors)
+                    if missing_items:
+                        for refill_index in range(1, 3):
+                            self.log(f"🧩 Step6 누락 프롬프트 선보완 {refill_index}회차 | {micro_label}")
+                            self._status(
+                                status="Step6 누락 보완",
+                                detail=f"{micro_label} Step6 빠진 블록 보완 {refill_index}회차",
+                                current_step="Step6 누락 보완",
+                                scene_range=micro_label.replace("_", " ~ "),
+                                batch_index=batch.batch_index,
+                                batch_total=total_batches,
+                                micro_index=completed_micro_batches + 1,
+                                micro_total=total_micro_batches,
+                                batch_micro_index=micro_index,
+                                batch_micro_total=len(batch.micro_batches),
+                                scene_done=completed_scenes,
+                                scene_total=total_scenes,
+                            )
+                            if self.cfg.pipeline_mode == "manual_style":
+                                refill_prompt = self.composer.build_manual_style_missing_blocks_prompt(missing_items)
+                            else:
+                                refill_prompt = self.composer.build_missing_blocks_prompt(
+                                    micro_scenes,
+                                    step6_text,
+                                    missing_items,
+                                )
+                            refill_text = self._send_prompt_resilient(
+                                refill_prompt,
+                                step_label=f"{micro_label}_step6_missing_refill{refill_index}",
+                            )
+                            writer.write_raw(f"{micro_label}_step6_missing_refill{refill_index}.txt", refill_text)
+                            refill_candidate = self.validator.extract_final_prompt_text(refill_text)
+                            refill_validation = self.validator.validate(refill_candidate, micro_scenes)
+                            if refill_validation.blocks:
+                                merged_candidate = self.validator.merge_partial_with_draft(
+                                    refill_validation,
+                                    draft_validation,
+                                    micro_scenes,
+                                )
+                                merged_validation = self.validator.validate(merged_candidate, micro_scenes)
+                                if merged_validation.ok or len(merged_validation.errors) < len(draft_validation.errors):
+                                    step6_text = merged_candidate
+                                    draft_validation = merged_validation
+                                    writer.write_raw(f"{micro_label}_step6_after_missing_refill.txt", step6_text)
+                                    writer.write_report(
+                                        f"{micro_label}_step6_validation.json",
+                                        {"ok": draft_validation.ok, "errors": draft_validation.errors},
+                                    )
+                            if draft_validation.ok:
+                                self.log(f"✅ Step6 누락 선보완 통과 | {micro_label}")
+                                break
+                            missing_items = self.validator.missing_items_from_errors(draft_validation.errors)
+                            if not missing_items:
+                                break
 
                 self._status(
                     status="Step7 검수",
@@ -1238,11 +1544,14 @@ class StoryPipeline:
                                 scene_done=completed_scenes,
                                 scene_total=total_scenes,
                             )
-                            refill_prompt = self.composer.build_missing_blocks_prompt(
-                                micro_scenes,
-                                final_candidate,
-                                missing_items,
-                            )
+                            if self.cfg.pipeline_mode == "manual_style":
+                                refill_prompt = self.composer.build_manual_style_missing_blocks_prompt(missing_items)
+                            else:
+                                refill_prompt = self.composer.build_missing_blocks_prompt(
+                                    micro_scenes,
+                                    final_candidate,
+                                    missing_items,
+                                )
                             refill_text = self._send_prompt_resilient(refill_prompt, step_label=f"{micro_label}_missing_refill{refill_index}")
                             writer.write_raw(f"{micro_label}_missing_refill{refill_index}.txt", refill_text)
                             refill_candidate = self.validator.extract_final_prompt_text(refill_text)
@@ -1270,6 +1579,7 @@ class StoryPipeline:
 
                 normalized_final = self.validator.normalize_text(final_validation.blocks, micro_scenes)
                 writer.append_validated_prompts(micro_label, normalized_final)
+                writer.mark_progress(micro_scenes[-1].number)
                 if not self.live_file_opened:
                     self._open_live_file_if_needed(writer.final_live_txt)
                     self.live_file_opened = True
@@ -1319,6 +1629,7 @@ class StoryPipeline:
                 )
 
         self.log("🏁 전체 자동화 흐름 완료")
+        writer.mark_completed()
         self._status(
             status="전체 완료",
             detail=f"{scene_range_label} 처리 완료",
